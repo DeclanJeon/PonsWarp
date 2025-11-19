@@ -333,7 +333,12 @@ class EnhancedWebRTCService {
     // Peer 생성 전에 TURN 서버 설정 확인
     if (this.iceServers.length === 0) {
       logWarn('[WebRTC]', 'No ICE servers configured, using fallback');
-      this.iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+      this.iceServers = [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' }
+      ];
     }
 
     const peer = new SimplePeer({
