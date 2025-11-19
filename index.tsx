@@ -8,12 +8,8 @@ if (!rootElement) {
 }
 
 const root = ReactDOM.createRoot(rootElement);
-// ✅ 개발 중에는 StrictMode 제거
-root.render(<App />);
-
-// 프로덕션에서는 StrictMode 사용
-// root.render(
-//   <React.StrictMode>
-//     <App />
-//   </React.StrictMode>
-// );
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
