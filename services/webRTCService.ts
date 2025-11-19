@@ -2,14 +2,25 @@ import SimplePeer from 'simple-peer';
 import { signalingService } from './signaling';
 import { getSenderWorkerV1, getReceiverWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types';
+import { errorHandler, ErrorType, ErrorSeverity } from './errorHandling';
+import { logInfo, logWarn, logError, logCritical } from '../utils/logger';
 
 type EventHandler = (data: any) => void;
+
+interface ICEServers {
+  urls: string[];
+  username?: string;
+  credential?: string;
+}
 
 class EnhancedWebRTCService {
   private peer: SimplePeer.Instance | null = null;
   private worker: Worker | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
   private roomId: string | null = null;
+  private iceServers: RTCIceServer[] = [];
+  private turnCredentials: any = null;
+  private turnRefreshInterval: NodeJS.Timeout | null = null;
   
   // Backpressure Control Variables
   private readonly MAX_BUFFERED_AMOUNT = 256 * 1024; // 256KB Limit (안전 제일)
@@ -25,10 +36,91 @@ class EnhancedWebRTCService {
     signalingService.on('answer', this.handleAnswer.bind(this));
     signalingService.on('ice-candidate', this.handleIceCandidate.bind(this));
     signalingService.on('peer-joined', this.handlePeerJoined.bind(this));
+    
+    // TURN 자동 새로고침 설정 (5분마다)
+    this.startTurnRefreshInterval();
   }
 
   public async connectSignaling() {
     await signalingService.connect();
+    // 시그널링 연결 후 TURN 설정 가져오기
+    await this.initializeTurnServers();
+  }
+
+  // TURN 서버 초기화
+  private async initializeTurnServers(): Promise<{ stun: boolean; turn: boolean; error?: string }> {
+    try {
+      const result = await errorHandler.executeWithRetry(
+        async () => {
+          logInfo('[WebRTC]', 'Initializing TURN servers...');
+          
+          // roomId가 없으면 현재 roomId 사용 또는 기본값 사용
+          const roomId = this.roomId || 'default-room';
+          const turnConfig = await signalingService.requestTurnConfig(roomId);
+          
+          if (turnConfig.success && turnConfig.data && turnConfig.data.iceServers) {
+            this.iceServers = turnConfig.data.iceServers;
+            this.turnCredentials = turnConfig.data;
+            logInfo('[WebRTC]', 'TURN servers configured successfully', {
+              servers: this.iceServers.length,
+              hasTurn: this.iceServers.some(server => Array.isArray(server.urls) && server.urls.some(url => url.includes('turn')))
+            });
+            return { stun: true, turn: true };
+          } else {
+            throw new Error('Failed to get TURN configuration');
+          }
+        },
+        ErrorType.TURN_CONNECTION_FAILED,
+        { operation: 'initializeTurnServers' }
+      );
+
+      if (result.success && result.result) {
+        return result.result;
+      } else {
+        return {
+          stun: false,
+          turn: false,
+          error: result.error?.message || 'Failed to initialize TURN servers'
+        };
+      }
+    } catch (error) {
+      return {
+        stun: false,
+        turn: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  // TURN 자동 새로고침
+  private startTurnRefreshInterval() {
+    // 5분마다 TURN 자격 증명 새로고침
+    this.turnRefreshInterval = setInterval(async () => {
+      if (this.turnCredentials && this.turnCredentials.ttl) {
+        const now = Date.now();
+        const expiryTime = this.turnCredentials.ttl * 1000; // TTL을 밀리초로 변환
+        
+        // 만료 1분 전에 새로고침
+        if (now + 60000 >= expiryTime) {
+          logInfo('[WebRTC]', 'Refreshing TURN credentials...');
+          
+          const result = await this.initializeTurnServers();
+          
+          if (!result.stun && !result.turn) {
+            logError('[WebRTC]', 'Failed to refresh TURN credentials', { error: result.error });
+            // 에러 콜백 등록
+            errorHandler.onError(ErrorType.TURN_CREDENTIALS_EXPIRED, (errorInfo) => {
+              logInfo('[WebRTC]', 'TURN refresh failed, suggestions', errorHandler.suggestFallback(errorInfo));
+            });
+          }
+        }
+      }
+    }, 60000); // 1분마다 체크
+  }
+
+  // TURN 수동 새로고침
+  public async refreshTurnServers(): Promise<{ stun: boolean; turn: boolean; error?: string }> {
+    return await this.initializeTurnServers();
   }
 
   public generateRoomId(): string {
@@ -47,7 +139,7 @@ class EnhancedWebRTCService {
   // ======================= SENDER LOGIC =======================
 
   public async initSender(manifest: TransferManifest, files: File[], roomId: string) {
-    console.log('[Sender] Initializing with Serialized Queue Logic');
+    logInfo('[Sender]', 'Initializing with Serialized Queue Logic');
     this.cleanup();
 
     this.roomId = roomId;
@@ -73,7 +165,7 @@ class EnhancedWebRTCService {
             try {
                 await this.sendChunkWithBackpressure(payload.chunk, payload.progressData);
             } catch (err) {
-                console.error('Chunk send error:', err);
+                logError('[Sender]', 'Chunk send error', { error: err });
                 // 에러가 나도 체인이 끊기지 않게 처리
             }
         });
@@ -81,19 +173,25 @@ class EnhancedWebRTCService {
       else if (type === 'complete') {
         // 🚨 [핵심 수정] 모든 청크 전송이 끝난 뒤에 EOF 전송
         this.sendQueue = this.sendQueue.then(async () => {
-            console.log('[Sender] Data sent. Flushing buffer...');
+            logInfo('[Sender]', 'All chunks queued. Waiting for buffer drain...');
+            
+            // 1. 버퍼가 0이 될 때까지 대기
             await this.waitForBufferZero();
 
-            // 🚨 [핵심 수정] JSON 대신 "바이너리 EOS 패킷" 전송
-            // 6바이트 헤더: [Index=65535 (2byte)] [Size=0 (4byte)]
+            // 🚨 [핵심 추가] 네트워크 안정화를 위한 1초 강제 대기 (Safety Delay)
+            logInfo('[Sender]', 'Buffer drained. Waiting 1s for network stability...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            // 2. 이제 진짜 EOS(End of Stream) 전송
             const eosPacket = new ArrayBuffer(6);
             const view = new DataView(eosPacket);
             view.setUint16(0, 0xFFFF, true); // Magic Number for EOF
             view.setUint32(2, 0, true);      // Payload Size 0
 
-            console.log('[Sender] Sending Binary EOS packet.');
+            logInfo('[Sender]', 'Sending Binary EOS packet.');
             this.peer?.send(eosPacket);
             
+            // 3. 완료 처리
             this.emit('complete', true);
             this.isTransferring = false;
         });
@@ -116,7 +214,7 @@ class EnhancedWebRTCService {
   private startTransferSequence() {
     if (!this.peer || !this.pendingManifest) return;
 
-    console.log('[Sender] Sending Manifest...');
+    logInfo('[Sender]', 'Sending Manifest...');
     const manifestStr = JSON.stringify({
       type: 'MANIFEST',
       manifest: this.pendingManifest
@@ -125,7 +223,7 @@ class EnhancedWebRTCService {
 
     // 잠시 대기 후 바이너리 스트림 시작 (수신측 준비 시간 고려)
     setTimeout(() => {
-      console.log('[Sender] Starting Binary Stream...');
+      logInfo('[Sender]', 'Starting Binary Stream...');
       this.isTransferring = true;
       this.worker?.postMessage({ type: 'start' });
       this.emit('status', 'TRANSFERRING');
@@ -141,7 +239,7 @@ class EnhancedWebRTCService {
     
     // 1. 안전장치: 채널이 닫혀있으면 중단
     if (channel.readyState !== 'open') {
-        console.warn('Channel not open, skipping chunk');
+        logWarn('[Sender]', 'Channel not open, skipping chunk');
         return;
     }
 
@@ -164,12 +262,12 @@ class EnhancedWebRTCService {
     } catch (err: any) {
       // 🚨 Queue Full 에러 발생 시 재시도 로직
       if (err.name === 'OperationError' || err.message.includes('queue is full')) {
-        console.warn('⚠️ Queue full detected, retrying in 50ms...');
+        logWarn('[Sender]', '⚠️ Queue full detected, retrying in 50ms...');
         await new Promise(resolve => setTimeout(resolve, 50));
         // 재귀 호출로 다시 시도
         return this.sendChunkWithBackpressure(chunk, progressData);
       } else {
-        console.error('🔥 Fatal Send Error:', err);
+        logError('[Sender]', '🔥 Fatal Send Error', { error: err.message });
         this.emit('error', 'Transfer failed: ' + err.message);
       }
     }
@@ -202,7 +300,7 @@ class EnhancedWebRTCService {
   // ======================= RECEIVER LOGIC =======================
 
   public async initReceiver(roomId: string) {
-    console.log('[Receiver] Initializing...');
+    logInfo('[Receiver]', 'Initializing...');
     this.cleanup();
 
     this.roomId = roomId;
@@ -231,14 +329,30 @@ class EnhancedWebRTCService {
   // ======================= PEER HANDLING =======================
 
   private async createPeer(initiator: boolean) {
+    // Peer 생성 전에 TURN 서버 설정 확인
+    if (this.iceServers.length === 0) {
+      logWarn('[WebRTC]', 'No ICE servers configured, using fallback');
+      this.iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+    }
+
     const peer = new SimplePeer({
       initiator,
       trickle: true,
-      config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+      config: {
+        iceServers: this.iceServers,
+        // ICE 연결 타임아웃 설정
+        iceCandidatePoolSize: 0, // TURN 사용 시 0으로 설정
+        iceTransportPolicy: 'all' // 모든 타입의 ICE 후보 사용
+      },
       channelConfig: {
         ordered: true // 순서 보장 (필수)
-        // 🚨 [삭제] maxRetransmits: 30  <-- 이 줄을 지워야 TCP처럼 100% 신뢰성 전송이 됨
       }
+    });
+
+    logInfo('[WebRTC]', 'Creating peer with ICE servers', {
+      initiator,
+      iceServerCount: this.iceServers.length,
+      hasTurn: this.iceServers.some(server => Array.isArray(server.urls) && server.urls.some(url => url.includes('turn')))
     });
 
     peer.on('signal', (data) => {
@@ -248,7 +362,7 @@ class EnhancedWebRTCService {
     });
 
     peer.on('connect', () => {
-      console.log(`[${initiator ? 'Sender' : 'Receiver'}] Connected!`);
+      logInfo(`[${initiator ? 'Sender' : 'Receiver'}]`, 'Connected!');
       this.emit('connected', true);
       if (initiator) {
         this.startTransferSequence();
@@ -270,7 +384,7 @@ class EnhancedWebRTCService {
         if (text.indexOf('MANIFEST') > 0) {
             const msg = JSON.parse(text);
             if (msg.type === 'MANIFEST') {
-              console.log('[Receiver] 📜 Manifest Received:', msg.manifest);
+              logInfo('[Receiver]', '📜 Manifest Received', msg.manifest);
               this.emit('metadata', msg.manifest);
               this.worker?.postMessage({
                 type: 'init-manifest',
@@ -331,6 +445,137 @@ class EnhancedWebRTCService {
     this.isPaused = false;
     this.isTransferring = false;
     this.pendingManifest = null;
+    
+    // TURN 새로고침 인터벌 정리
+    if (this.turnRefreshInterval) {
+      clearInterval(this.turnRefreshInterval);
+      this.turnRefreshInterval = null;
+    }
+  }
+
+  // TURN 연결 상태 확인
+  public getTurnStatus() {
+    return {
+      hasTurnServers: this.iceServers.some(server => Array.isArray(server.urls) && server.urls.some(url => url.includes('turn'))),
+      iceServerCount: this.iceServers.length,
+      turnCredentials: this.turnCredentials ? {
+        hasCredentials: !!(this.turnCredentials.username && this.turnCredentials.credential),
+        ttl: this.turnCredentials.ttl,
+        expiresAt: this.turnCredentials.ttl ? new Date(this.turnCredentials.ttl * 1000).toISOString() : null
+      } : null
+    };
+  }
+
+  // P2P 연결 실패 핸들링
+  private async handlePeerConnectionFailure(errorInfo: any): Promise<void> {
+    logError('[WebRTC]', 'Handling peer connection failure', { error: errorInfo });
+    
+    // 네트워크 상태 확인
+    const networkStatus = await errorHandler.checkNetworkConnectivity();
+    logInfo('[WebRTC]', 'Network status', networkStatus);
+    
+    // TURN 서버 상태 확인
+    const turnStatus = this.getTurnStatus();
+    logInfo('[WebRTC]', 'TURN status', turnStatus);
+    
+    // 폴백 제안 생성
+    const suggestions = errorHandler.suggestFallback(errorInfo);
+    logInfo('[WebRTC]', 'Fallback suggestions', suggestions);
+    
+    // TURN 서버 재설정 시도
+    if (!networkStatus.turnReachable && turnStatus.hasTurnServers) {
+      logInfo('[WebRTC]', 'Attempting to refresh TURN servers...');
+      await this.refreshTurnServers();
+    }
+    
+    // 에러 이벤트 발생
+    this.emit('connection-failed', {
+      error: errorInfo,
+      networkStatus,
+      turnStatus,
+      suggestions
+    });
+  }
+
+  // ICE 연결 품질 테스트
+  public async testIceConnectivity(): Promise<{
+    stun: boolean;
+    turn: boolean;
+    error?: string;
+  }> {
+    try {
+      const result = await errorHandler.executeWithRetry(
+        async () => {
+          const testPeer = new SimplePeer({
+            initiator: true,
+            config: { iceServers: this.iceServers },
+            trickle: false
+          });
+
+          return new Promise<{ stun: boolean; turn: boolean }>((resolve, reject) => {
+            let stunConnected = false;
+            let turnConnected = false;
+
+            const timeout = setTimeout(() => {
+              testPeer.destroy();
+              reject(new Error('Connection test timeout'));
+            }, 10000); // 10초 타임아웃
+
+            testPeer.on('iceStateChange', (state) => {
+              logInfo('[WebRTC]', 'ICE state', { state });
+              
+              if (state === 'connected' || state === 'completed') {
+                clearTimeout(timeout);
+                
+                // ICE 후보 분석으로 STUN/TURN 연결 확인
+                testPeer.on('iceCandidate', (candidate) => {
+                  if (candidate) {
+                    const candidateStr = candidate.candidate;
+                    if (candidateStr.includes('typ relay')) {
+                      turnConnected = true;
+                    } else if (candidateStr.includes('typ srflx') || candidateStr.includes('typ prflx')) {
+                      stunConnected = true;
+                    }
+                  }
+                });
+
+                setTimeout(() => {
+                  testPeer.destroy();
+                  resolve({ stun: stunConnected, turn: turnConnected });
+                }, 2000);
+              }
+            });
+
+            testPeer.on('error', (error) => {
+              clearTimeout(timeout);
+              testPeer.destroy();
+              reject(error);
+            });
+
+            // 더미 offer 생성으로 ICE 연결 시작
+            testPeer.createOffer();
+          });
+        },
+        ErrorType.STUN_CONNECTION_FAILED,
+        { operation: 'testIceConnectivity', iceServerCount: this.iceServers.length }
+      );
+
+      if (result.success && result.result) {
+        return result.result;
+      } else {
+        return {
+          stun: false,
+          turn: false,
+          error: result.error?.message || 'Unknown error'
+        };
+      }
+    } catch (error) {
+      return {
+        stun: false,
+        turn: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
   }
 }
 

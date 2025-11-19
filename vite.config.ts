@@ -8,8 +8,8 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        port: 3000,
-        host: '0.0.0.0',
+        port: 3500,
+        host: '127.0.0.1',
       },
       plugins: [
         react()
@@ -20,6 +20,9 @@ export default defineConfig(({ mode }) => {
         // ✅ process 및 global 정의
         'process.env': {},
         'global': 'globalThis',
+        // ✅ Vite 환경 변수 정의
+        'import.meta.env.DEV': mode === 'development',
+        'import.meta.env.PROD': mode === 'production',
       },
       resolve: {
         alias: {

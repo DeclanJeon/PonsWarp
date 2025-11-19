@@ -3,6 +3,42 @@ import { SIGNALING_SERVER_URL } from '../constants';
 
 type SignalHandler = (data: any) => void;
 
+// TURN 설정 관련 타입 정의
+export interface TurnCredentials {
+  iceServers: RTCIceServer[];
+  turnServerStatus: {
+    primary: {
+      connected: boolean;
+      url: string;
+      error: string | null;
+      responseTime: number;
+    };
+    fallback: Array<{
+      url: string;
+      connected: boolean;
+      error: string | null;
+      responseTime: number;
+    }>;
+  };
+  ttl: number;
+  timestamp: number;
+  roomId: string;
+  message?: string; // 추가된 속성
+}
+
+export interface TurnConfigRequest {
+  roomId: string;
+  forceRefresh?: boolean;
+}
+
+export interface TurnConfigResponse {
+  success: boolean;
+  data?: TurnCredentials;
+  error?: string;
+  message?: string;
+  retryAfter?: number;
+}
+
 class SignalingService {
   private socket: Socket | null = null;
   private handlers: Record<string, SignalHandler[]> = {};
@@ -205,6 +241,230 @@ class SignalingService {
 
   public isConnected(): boolean {
     return this.socket?.connected ?? false;
+  }
+
+  // TURN 설정 관련 메서드 추가
+  public async requestTurnConfig(roomId: string, forceRefresh = false): Promise<TurnConfigResponse> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        const error: TurnConfigResponse = {
+          success: false,
+          error: 'NOT_CONNECTED',
+          message: '시그널링 서버에 연결되지 않았습니다.'
+        };
+        reject(error);
+        return;
+      }
+
+      console.log('[Signaling] 🔄 Requesting TURN config for room:', roomId, { forceRefresh });
+
+      // Socket.IO 이벤트로 TURN 설정 요청
+      this.socket.emit('request-turn-config', { roomId, forceRefresh }, (response: TurnConfigResponse) => {
+        if (response.success && response.data) {
+          console.log('[Signaling] ✅ TURN config received:', {
+            roomId,
+            iceServerCount: response.data.iceServers.length,
+            ttl: response.data.ttl,
+            turnServerConnected: response.data.turnServerStatus.primary.connected
+          });
+          resolve(response);
+        } else {
+          console.error('[Signaling] ❌ TURN config request failed:', response);
+          reject(response);
+        }
+      });
+    });
+  }
+
+  public async refreshTurnCredentials(roomId: string, currentUsername: string): Promise<TurnConfigResponse> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        const error: TurnConfigResponse = {
+          success: false,
+          error: 'NOT_CONNECTED',
+          message: '시그널링 서버에 연결되지 않았습니다.'
+        };
+        reject(error);
+        return;
+      }
+
+      console.log('[Signaling] 🔄 Refreshing TURN credentials for room:', roomId);
+
+      this.socket.emit('refresh-turn-credentials', { roomId, currentUsername }, (response: TurnConfigResponse) => {
+        if (response.success) {
+          console.log('[Signaling] ✅ TURN credentials refreshed:', {
+            roomId,
+            oldUsername: currentUsername,
+            message: response.data?.message
+          });
+          resolve(response);
+        } else {
+          console.error('[Signaling] ❌ TURN credentials refresh failed:', response);
+          reject(response);
+        }
+      });
+    });
+  }
+
+  public async checkTurnServerStatus(): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject({
+          success: false,
+          error: 'NOT_CONNECTED',
+          message: '시그널링 서버에 연결되지 않았습니다.'
+        });
+        return;
+      }
+
+      console.log('[Signaling] 🔄 Checking TURN server status');
+
+      this.socket.emit('check-turn-server-status', {}, (response: any) => {
+        if (response.success) {
+          console.log('[Signaling] ✅ TURN server status received:', response.data);
+          resolve(response);
+        } else {
+          console.error('[Signaling] ❌ TURN server status check failed:', response);
+          reject(response);
+        }
+      });
+    });
+  }
+
+  public async testTurnConnection(roomId = 'test-room'): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket?.connected) {
+        reject({
+          success: false,
+          error: 'NOT_CONNECTED',
+          message: '시그널링 서버에 연결되지 않았습니다.'
+        });
+        return;
+      }
+
+      console.log('[Signaling] 🧪 Testing TURN connection for room:', roomId);
+
+      this.socket.emit('test-turn-connection', { testRoomId: roomId }, (response: any) => {
+        if (response.success) {
+          console.log('[Signaling] ✅ TURN connection test initiated:', response.data);
+          resolve(response);
+        } else {
+          console.error('[Signaling] ❌ TURN connection test failed:', response);
+          reject(response);
+        }
+      });
+    });
+  }
+
+  // TURN 연결 테스트 결과 전송
+  public sendTurnConnectionTestResult(roomId: string, result: any): void {
+    if (!this.socket?.connected) {
+      console.error('[Signaling] Cannot send TURN test result: Not connected');
+      return;
+    }
+
+    console.log('[Signaling] 📤 Sending TURN connection test result:', { roomId, result });
+
+    this.socket.emit('turn-connection-test-result', {
+      testRoomId: roomId,
+      result: {
+        success: result.success,
+        error: result.error,
+        connectionTime: result.connectionTime,
+        timestamp: Date.now(),
+        userAgent: navigator.userAgent
+      }
+    });
+  }
+
+  // TURN 관련 이벤트 리스너 등록
+  public onTurnServerStatusUpdate(callback: (data: any) => void): void {
+    this.on('turn-server-status-update', callback);
+  }
+
+  public onTurnTestResult(callback: (data: any) => void): void {
+    this.on('turn-test-result', callback);
+  }
+
+  // REST API를 통한 TURN 설정 요청 (폴백용)
+  public async requestTurnConfigViaHttp(roomId: string): Promise<TurnConfigResponse> {
+    try {
+      console.log('[Signaling] 🔄 Requesting TURN config via HTTP for room:', roomId);
+
+      const response = await fetch(`${SIGNALING_SERVER_URL}/api/turn-config?roomId=${encodeURIComponent(roomId)}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': navigator.userAgent
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data: TurnConfigResponse = await response.json();
+
+      if (data.success && data.data) {
+        console.log('[Signaling] ✅ TURN config received via HTTP:', {
+          roomId,
+          iceServerCount: data.data.iceServers.length,
+          ttl: data.data.ttl
+        });
+      }
+
+      return data;
+    } catch (error) {
+      console.error('[Signaling] ❌ TURN config request via HTTP failed:', error);
+      return {
+        success: false,
+        error: 'HTTP_REQUEST_FAILED',
+        message: `HTTP 요청 실패: ${error.message}`
+      };
+    }
+  }
+
+  // REST API를 통한 TURN 자격 증명 갱신
+  public async refreshTurnCredentialsViaHttp(roomId: string, currentUsername: string): Promise<TurnConfigResponse> {
+    try {
+      console.log('[Signaling] 🔄 Refreshing TURN credentials via HTTP for room:', roomId);
+
+      const response = await fetch(`${SIGNALING_SERVER_URL}/api/turn-refresh`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': navigator.userAgent
+        },
+        body: JSON.stringify({
+          roomId,
+          currentUsername,
+          force: false
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data: TurnConfigResponse = await response.json();
+
+      if (data.success) {
+        console.log('[Signaling] ✅ TURN credentials refreshed via HTTP:', {
+          roomId,
+          oldUsername: currentUsername,
+          message: data.data?.message
+        });
+      }
+
+      return data;
+    } catch (error) {
+      console.error('[Signaling] ❌ TURN credentials refresh via HTTP failed:', error);
+      return {
+        success: false,
+        error: 'HTTP_REQUEST_FAILED',
+        message: `HTTP 요청 실패: ${error.message}`
+      };
+    }
   }
 }
 
