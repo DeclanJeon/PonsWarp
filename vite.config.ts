@@ -6,6 +6,8 @@ import { NodeModulesPolyfillPlugin } from '@esbuild-plugins/node-modules-polyfil
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
+    const isProduction = mode === 'production';
+    
     return {
       server: {
         port: 3500,
@@ -16,17 +18,17 @@ export default defineConfig(({ mode }) => {
       ],
       define: {
         'process.env.SIGNALING_SERVER_URL': JSON.stringify(env.SIGNALING_SERVER_URL),
-        // ✅ process 및 global 정의
         'process.env': {},
         'global': 'globalThis',
-        // ✅ Vite 환경 변수 정의
         'import.meta.env.DEV': mode === 'development',
-        'import.meta.env.PROD': mode === 'production',
+        'import.meta.env.PROD': isProduction,
+      },
+      esbuild: {
+        drop: isProduction ? ['console', 'debugger'] : [],
       },
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
-          // ✅ Node.js 모듈 polyfill
           'stream': 'stream-browserify',
           'buffer': 'buffer',
           'util': 'util',
@@ -38,7 +40,6 @@ export default defineConfig(({ mode }) => {
       },
       optimizeDeps: {
         esbuildOptions: {
-          // ✅ Node.js global polyfill
           define: {
             global: 'globalThis'
           },
