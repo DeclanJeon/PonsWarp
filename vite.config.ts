@@ -15,8 +15,7 @@ export default defineConfig(({ mode }) => {
         react()
       ],
       define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        'process.env.SIGNALING_SERVER_URL': JSON.stringify(env.SIGNALING_SERVER_URL),
         // ✅ process 및 global 정의
         'process.env': {},
         'global': 'globalThis',

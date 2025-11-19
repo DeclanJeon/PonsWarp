@@ -1,4 +1,5 @@
-import SimplePeer from 'simple-peer';
+// import SimplePeer from 'simple-peer';
+import SimplePeer from 'simple-peer/simplepeer.min.js';
 import { signalingService } from './signaling';
 import { getSenderWorkerV1, getReceiverWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types';
