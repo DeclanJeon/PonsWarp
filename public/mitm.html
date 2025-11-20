@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StreamSaver MITM</title>
+</head>
+<body>
+<script>
+  // This will prevent the "You didn't send a messageChannel" error
+  // by ignoring messages that don't look like StreamSaver handshakes.
+  window.onmessage = event => {
+    const { data, ports } = event
+
+    // 🚨 [핵심 패치] 포트가 없거나 데이터가 없으면 조용히 무시 (확장 프로그램 간섭 방지)
+    if (!ports || !ports.length || !data) {
+      return; 
+    }
+
+    // StreamSaver handshake check
+    if (data !== 'StreamSaver::Handshake') {
+        return;
+    }
+
+    // 기존 로직 실행
+    const transferable = [ports[0]]
+    if (!(event.source instanceof ServiceWorker)) {
+        // Chrome throws errors if you try to transfer a port to a ServiceWorker
+        // But we want to transfer it if it's a window/iframe
+        // transferable.push(ports[0]) 
+        // (StreamSaver keeps port in transferable array implicitly)
+    }
+
+    const port = ports[0]
+    port.onmessage = event => {
+        const { data, ports } = event
+        if (data.download) {
+            const { link, filename } = data.download
+            const a = document.createElement('a')
+            a.href = link
+            a.download = filename
+            // Firefox requires link to be in body
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            return
+        }
+        
+        if (data.stream) {
+            const { stream, pathname } = data.stream
+            const writable = stream.getWriter()
+            const channel = new MessageChannel()
+            const port1 = channel.port1
+            
+            // Post readable stream to the service worker
+            navigator.serviceWorker.controller.postMessage({
+                stream,
+                pathname
+            }, [channel.port2])
+
+            // Pipe data from the iframe port to the service worker
+            port.onmessage = event => {
+                const { data } = event
+                if (data === 'end') {
+                    writable.close()
+                    return
+                }
+                if (data === 'abort') {
+                    writable.abort()
+                    return
+                }
+                writable.write(data)
+            }
+        }
+    }
+  }
+</script>
+</body>
+</html>

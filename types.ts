@@ -8,12 +8,18 @@ export enum AppMode {
   ERROR = 'ERROR'
 }
 
+// SenderView 상태 타입
+export type SenderStatus = 'IDLE' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'DONE';
+
+// ReceiverView 상태 타입
+export type ReceiverStatus = 'SCANNING' | 'CONNECTING' | 'RECEIVING' | 'DONE' | 'PROCESSING' | 'SAVED' | 'ERROR';
+
 export interface FileNode {
-  id: number;       // 전송 시 식별할 index (0부터 시작)
-  name: string;     // 파일명
-  path: string;     // 상대 경로 (폴더 구조 포함)
-  size: number;     // 바이트 크기
-  type: string;     // MIME type
+  id: number;
+  name: string;
+  path: string;
+  size: number;
+  type: string;
   lastModified: number;
 }
 
@@ -21,7 +27,7 @@ export interface TransferManifest {
   transferId: string;
   totalSize: number;
   totalFiles: number;
-  rootName: string; // 최상위 폴더명 또는 대표 파일명
+  rootName: string;
   files: FileNode[];
   isFolder: boolean;
 }
@@ -35,16 +41,15 @@ export interface FileMeta {
 export interface TransferProgress {
   bytesTransferred: number;
   totalBytes: number;
-  speed: number; // bytes per second
-  timeLeft: number; // seconds
-  currentFileIndex: number; // 현재 전송 중인 파일 인덱스
+  speed: number;
+  timeLeft: number;
+  currentFileIndex: number;
 }
 
-// 🚀 [추가] 네트워크 상태 관련 타입
 export interface NetworkStatus {
   bufferedAmount: number;
   maxBufferedAmount: number;
-  averageSpeed: number; // bytes per second
+  averageSpeed: number;
 }
 
 export interface WorkerMessage {

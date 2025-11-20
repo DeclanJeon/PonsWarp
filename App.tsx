@@ -14,12 +14,13 @@ const App: React.FC = () => {
   // URL 파라미터 체크 (앱 로드 시)
   useEffect(() => {
     const path = window.location.pathname;
-    const match = path.match(/^\/receive\/([A-Z0-9]{6})$/);
     
-    if (match) {
-      const roomId = match[1];
-      setAutoRoomId(roomId);
+    // P2P 접속 (/receive/ROOMID)
+    const p2pMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/);
+    if (p2pMatch) {
+      setAutoRoomId(p2pMatch[1]);
       setMode(AppMode.RECEIVER);
+      return;
     }
   }, []);
 
@@ -59,7 +60,7 @@ const App: React.FC = () => {
   }, []);
 
   // Determine intensity based on mode
-  const intensity = (mode === AppMode.TRANSFERRING) ? 'hyper' : 'low';
+  const intensity = (mode === AppMode.SENDER || mode === AppMode.RECEIVER) ? 'hyper' : 'low';
 
   return (
     <div className="relative w-screen h-screen overflow-hidden text-white bg-black">
@@ -153,10 +154,13 @@ const App: React.FC = () => {
           {mode === AppMode.RECEIVER && (
             <motion.div key="receiver" className="w-full h-full flex items-center justify-center">
               <ReceiverView autoRoomId={autoRoomId} />
+              
               <button
                 onClick={() => {
                   setMode(AppMode.SELECTION);
                   setAutoRoomId(null);
+                  // URL 정리 (선택 사항)
+                  window.history.pushState({}, '', '/');
                 }}
                 className="absolute bottom-8 text-gray-500 hover:text-white"
               >
