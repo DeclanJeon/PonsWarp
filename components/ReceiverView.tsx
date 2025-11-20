@@ -156,6 +156,37 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     return await currentDir.getFileHandle(fileName);
   };
 
+  // StreamSaver 로직 분리 (재사용성 및 가독성 향상)
+  const downloadWithStreamSaver = async (file: File, fileName: string, size: number) => {
+    try {
+        const fileStream = streamSaver.createWriteStream(fileName, { size: size });
+        const reader = file.stream().getReader();
+        const writer = fileStream.getWriter();
+
+        let writtenTotal = 0;
+        const total = size;
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await writer.write(value);
+            writtenTotal += value.byteLength;
+            
+            // UI 업데이트 (부하를 줄이기 위해 50MB마다 업데이트)
+            if (writtenTotal % (50 * 1024 * 1024) === 0) {
+                  const pct = Math.round((writtenTotal / total) * 100);
+                  setProcessMsg(`Saving large file... ${pct}%`);
+            }
+        }
+        
+        await writer.close();
+        console.log('[Download] StreamSaver completed');
+    } catch (streamError) {
+        console.error('[Download] StreamSaver failed:', streamError);
+        throw new Error('Download failed. Please try using a different browser.');
+    }
+  };
+
   const handleDownload = async () => {
     if (!manifest) return;
     setStatus('PROCESSING');
@@ -176,52 +207,29 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         const fileHandle = await getFileHandleFromPath(transferDir, fileNode.path);
         const file = await fileHandle.getFile();
         
-        // 🚨 [수정] StreamSaver 대신 기본 다운로드 방식 사용
-        // MessageChannel 오류를 완전히 회피
-        try {
-          // URL.createObjectURL을 사용한 다운로드
-          const url = URL.createObjectURL(file);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = fileNode.name;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          
-          console.log('[Download] File downloaded successfully');
-        } catch (error) {
-          console.error('[Download] Basic download failed:', error);
-          
-          // 🚨 [대안] StreamSaver를 최후의 수단으로만 사용
-          try {
-            console.log('[Download] Falling back to StreamSaver...');
-            const fileStream = streamSaver.createWriteStream(fileNode.name, { size: finalSize });
-            const reader = file.stream().getReader();
-            const writer = fileStream.getWriter();
+        // 🚨 [최종 최적화] 2GB 이상은 무조건 StreamSaver 사용 (메모리 폭발 방지)
+        const LARGE_FILE_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2GB
 
-            let writtenTotal = 0;
-            const total = finalSize;
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                await writer.write(value);
-                writtenTotal += value.byteLength;
-                
-                // 대용량 파일 처리 시 UI 업데이트 (10MB 단위로)
-                if (writtenTotal % (10 * 1024 * 1024) === 0) {
-                     const pct = Math.round((writtenTotal / total) * 100);
-                     setProcessMsg(`Saving to Downloads... ${pct}%`);
-                }
+        if (file.size < LARGE_FILE_THRESHOLD) {
+            // 🟢 2GB 미만: 기존 방식 (가장 빠름)
+            try {
+              const url = URL.createObjectURL(file);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = fileNode.name;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              console.log('[Download] Basic download successful');
+            } catch (error) {
+              console.warn('[Download] Basic download failed, switching to StreamSaver');
+              await downloadWithStreamSaver(file, fileNode.name, finalSize);
             }
-            
-            await writer.close();
-            console.log('[Download] StreamSaver fallback completed');
-          } catch (streamError) {
-            console.error('[Download] StreamSaver fallback also failed:', streamError);
-            throw new Error('All download methods failed');
-          }
+        } else {
+            // 🟠 2GB 이상: StreamSaver 강제 사용 (안전함)
+            console.log('[Download] Large file detected. Using StreamSaver to prevent memory crash.');
+            await downloadWithStreamSaver(file, fileNode.name, finalSize);
         }
       }
       // 2️⃣ ZIP 다운로드 (다중 파일)

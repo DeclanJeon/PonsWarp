@@ -109,8 +109,10 @@ interface FileHandleWrapper {
 
       const payloadSize = view.getUint32(2, true);
       
-      // 헤더(6 bytes) 제외
-      const data = new Uint8Array(packet, 6, payloadSize);
+      // 🚨 [필수 확인] 여기서 반드시 6바이트 이후부터 잘라내야 합니다.
+      // Zero-Copy 뷰만 쓰면 나중에 합칠 때 헤더가 포함될 위험이 있음.
+      // 안전하게 물리적 복사(.slice) 사용
+      const data = new Uint8Array(packet).slice(6, 6 + payloadSize);
 
       const wrapper = this.fileHandles.get(fileIndex);
       

@@ -35,9 +35,6 @@ class EnhancedWebRTCService {
   // 🚀 [추가] 네트워크 모니터링 관련 변수
   private networkMonitorInterval: NodeJS.Timeout | null = null;
   
-  // 🚨 [추가] 처리 중인(전송 시도 중인) 청크 개수 추적
-  private pendingChunksCount = 0;
-  
   // 🚨 [추가] 전송 큐 시스템
   private chunkQueue: Array<{chunk: ArrayBuffer, progressData: any}> = [];
   private isProcessingQueue = false;
@@ -183,8 +180,6 @@ class EnhancedWebRTCService {
           }
         });
         
-        // 🚨 [추가] 초기화 시 카운터 리셋
-        this.pendingChunksCount = 0;
       }
       else if (type === 'chunk-ready') {
         // 🚨 [핵심 변경] 즉시 전송하지 않고 큐에 넣음
@@ -272,7 +267,8 @@ class EnhancedWebRTCService {
             // 🚀 [최적화 2 대응] Backpressure 로직 수정
             // 큐가 비어갈 때 '한 번' 요청하면 워커가 '5개(Batch)'를 보내줍니다.
             // 따라서 너무 자주 요청하지 않도록 임계값을 낮춥니다.
-            if (this.chunkQueue.length < 10) {
+            // 🚨 [수정] 레이스 컨디션 방지를 위해 더 보수적인 임계값 사용
+            if (this.chunkQueue.length < 5) {
                 this.worker?.postMessage({ type: 'pull' });
             }
 
@@ -648,9 +644,6 @@ class EnhancedWebRTCService {
       clearInterval(this.networkMonitorInterval);
       this.networkMonitorInterval = null;
     }
-    
-    // 🚨 [추가] pendingChunksCount 초기화
-    this.pendingChunksCount = 0;
     
     // 🚨 [추가] 큐 시스템 초기화
     this.chunkQueue = [];

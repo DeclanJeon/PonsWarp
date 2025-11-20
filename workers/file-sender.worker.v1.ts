@@ -22,6 +22,11 @@ interface SenderState {
     private chunkSequence: number = 0;
     // 🚀 [최적화 2] 배치 사이즈 상수 (constants와 맞춤)
     private readonly BATCH_SIZE = 5;
+    
+    // 🚨 [핵심 수정] 중복 실행 방지를 위한 플래그
+    private isReading = false;
+    // 🚨 [핵심 수정] 작업 중 들어온 요청을 기억하는 카운터
+    private pendingPulls = 0;
 
     constructor() {
       self.onmessage = this.handleMessage.bind(this);
@@ -38,8 +43,8 @@ interface SenderState {
           break;
         case 'start':
         case 'pull':
-          // 🚀 [최적화 2] 배치 단위로 읽기 수행
-          this.processBatch();
+          // 🚨 [핵심 수정] 즉시 실행하지 않고 스케줄링 요청
+          this.scheduleBatch();
           break;
         // 🚀 [핵심] 네트워크 상태 피드백 수신
         case 'network-update':
@@ -63,7 +68,43 @@ interface SenderState {
         minChunkSize: 16 * 1024,
         maxChunkSize: maxSize // 🚨 안전한 최대값 적용 (128KB)
       };
+      
+      // 초기화 시 플래그 리셋
+      this.isReading = false;
+      this.pendingPulls = 0;
+      
       console.log(`[Worker] Init: ChunkSize=${startSize}, Max=${maxSize}, Batch=${this.BATCH_SIZE}`);
+    }
+
+    // 🚨 [신규] 읽기 작업 스케줄러 (Lock 시스템)
+    private async scheduleBatch() {
+        // 요청 카운트 증가
+        this.pendingPulls++;
+        
+        // 이미 읽고 있다면 대기 (중복 실행 방지)
+        if (this.isReading) return;
+        
+        this.isReading = true;
+        
+        // 대기 중인 요청이 없을 때까지 계속 처리
+        while (this.pendingPulls > 0) {
+            // 요청 하나 소모 (한 번의 pull = 한 번의 batch)
+            // *중요: Batch 처리가 너무 빠르면 큐가 쌓일 수 있으므로
+            // 여기서 pendingPulls를 0으로 초기화하지 않고 1씩 줄이거나,
+            // 혹은 한 번의 루프로 여러 pull을 퉁칠 수도 있음.
+            // 여기서는 안전하게 1 감소.
+            this.pendingPulls--;
+            
+            await this.processBatch();
+            
+            // 파일 전송이 끝났으면 루프 탈출 및 카운터 초기화
+            if (this.state && this.state.currentFileIndex >= this.state.files.length) {
+                this.pendingPulls = 0;
+                break;
+            }
+        }
+        
+        this.isReading = false;
     }
 
     private adjustChunkSize(bufferedAmount: number, maxBufferedAmount: number) {
@@ -139,9 +180,12 @@ interface SenderState {
 
       const elapsed = (Date.now() - this.state.startTime) / 1000;
       const speed = elapsed > 0 ? this.state.totalBytesSent / elapsed : 0;
-      const progress = this.state.manifest.totalSize > 0
+      
+      // 🚨 [안전장치] 진행률이 100%를 넘지 않도록 시각적 보정
+      let progress = this.state.manifest.totalSize > 0
         ? (this.state.totalBytesSent / this.state.manifest.totalSize) * 100
         : 0;
+      if (progress > 100) progress = 100;
 
       self.postMessage({
         type: 'chunk-ready',
