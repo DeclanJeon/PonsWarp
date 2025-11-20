@@ -1,28 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
-import streamSaver from 'streamsaver';
 import * as fflate from 'fflate';
 import { ReceiverStatus } from '../types';
-
-// StreamSaver 초기화 (MessageChannel 오류 해결)
-try {
-  if ('serviceWorker' in navigator && 'MessageChannel' in window) {
-    streamSaver.mitm = 'https://jimmywarting.github.io/StreamSaver.js/mitm.html?version=2.0.0';
-    const originalCreateWriteStream = streamSaver.createWriteStream.bind(streamSaver);
-    (streamSaver as any).createWriteStream = function(filename: string, options?: any) {
-      const channel = new MessageChannel();
-      const enhancedOptions = { ...options, channel: channel };
-      try {
-        return originalCreateWriteStream(filename, enhancedOptions);
-      } catch (error) {
-        return originalCreateWriteStream(filename, options);
-      }
-    };
-  }
-} catch (error) {
-  console.error('[StreamSaver] Initialization error:', error);
-}
+import { initStreamSaver, createSafeWriteStream } from '../utils/streamSaverInit';
 
 interface ReceiverViewProps {
   autoRoomId?: string | null;
@@ -93,8 +74,16 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
 
   const downloadWithStreamSaver = async (file: File, fileName: string, size: number) => {
     try {
-        // 로컬 mitm.html을 사용하므로 기본 createWriteStream으로 충분합니다.
-        const fileStream = streamSaver.createWriteStream(fileName, { size: size });
+        // 안전한 StreamSaver 초기화
+        initStreamSaver();
+        
+        // 안전한 스트림 생성
+        const fileStream = createSafeWriteStream(fileName, size);
+        
+        if (!fileStream) {
+            throw new Error('Failed to create write stream. Browser extension might be interfering.');
+        }
+        
         const reader = file.stream().getReader();
         const writer = fileStream.getWriter();
         
@@ -117,6 +106,14 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         console.log('[Download] StreamSaver completed');
     } catch (streamError) {
         console.error('[Download] StreamSaver failed:', streamError);
+        
+        // 확장 프로그램 충돌 감지 시 사용자에게 안내
+        if (streamError instanceof Error && streamError.message.includes('extension')) {
+            setErrorMsg('브라우저 확장 프로그램이 다운로드를 차단하고 있습니다. 확장 프로그램을 비활성화하거나 시크릿 모드를 사용해주세요.');
+            setStatus('ERROR');
+            return;
+        }
+        
         // 폴백: 에러 발생 시 일반 다운로드 시도 (메모리 부족 위험 있음)
         throw new Error('StreamSaver failed. Browser extension might be interfering.');
     }
