@@ -28,10 +28,10 @@ interface FileHandleWrapper {
     // 🚨 [추가] 청크 시퀀스 추적
     private chunkSequence: number = 0;
     
-    // 🚀 [최적화] 쓰기 버퍼링
-    private writeBuffer: Map<number, Uint8Array[]> = new Map(); // FileID -> Chunks
-    private bufferSize: Map<number, number> = new Map();        // FileID -> TotalBytesInBuffer
-    private readonly MAX_BUFFER_SIZE = 1024 * 1024; // 1MB 버퍼 (파일당)
+    // 🚀 [최적화] 버퍼 타입 변경: Uint8Array View를 저장
+    private writeBuffer: Map<number, Uint8Array[]> = new Map();
+    private bufferSize: Map<number, number> = new Map();
+    private readonly MAX_BUFFER_SIZE = 2 * 1024 * 1024; // 쓰기 버퍼도 2MB로 상향
 
     constructor() {
       self.onmessage = this.handleMessage.bind(this);
@@ -134,54 +134,53 @@ interface FileHandleWrapper {
       }
     }
 
-    // 🚀 [최적화] 버퍼에 데이터 추가
+    // 🚀 [최적화 1] Zero-Copy 버퍼링
     private addToBuffer(fileId: number, data: Uint8Array) {
       const currentBuffer = this.writeBuffer.get(fileId) || [];
       const currentSize = this.bufferSize.get(fileId) || 0;
       
-      // 데이터 복사하여 저장 (packet은 메인스레드에서 해제될 수 있으므로)
-      // 성능을 위해 여기서는 Uint8Array.slice() 사용
-      currentBuffer.push(data.slice());
+      // 🚨 중요: data는 packet(ArrayBuffer)의 View입니다.
+      // writeBuffer에 이 View를 그대로 저장합니다.
+      // (ArrayBuffer가 전송되어 왔으므로, 워커가 소유권을 가지며 GC되지 않음)
+      currentBuffer.push(data);
       
       const newSize = currentSize + data.byteLength;
       this.writeBuffer.set(fileId, currentBuffer);
       this.bufferSize.set(fileId, newSize);
 
-      // 버퍼가 꽉 찼으면 플러시
       if (newSize >= this.MAX_BUFFER_SIZE) {
         this.flushBuffer(fileId);
       }
       
-      // 진행률 보고 (I/O와 별개로 계산)
       this.totalBytesWritten += data.byteLength;
       this.checkProgress();
     }
 
-    // 🚀 [최적화] 버퍼 플러시
+    // 🚀 [최적화] 버퍼 플러시 (병합 시에만 1회 복사 발생)
     private flushBuffer(fileId: number) {
       const wrapper = this.fileHandles.get(fileId);
       const chunks = this.writeBuffer.get(fileId);
       if (!wrapper || !chunks || chunks.length === 0) return;
 
-      // 여러 청크를 하나의 큰 버퍼로 병합
       const totalBytes = this.bufferSize.get(fileId) || 0;
+      
+      // 디스크 쓰기를 위해 하나의 연속된 버퍼가 필요하므로 여기서 1회 복사는 불가피함
+      // 하지만 이전처럼 slice() + 병합으로 2회 복사하던 것을 1회로 줄임
       const mergedBuffer = new Uint8Array(totalBytes);
       let offset = 0;
       for (const chunk of chunks) {
+        // chunk는 View이므로 set 메서드가 알아서 오프셋 맞춰서 복사함
         mergedBuffer.set(chunk, offset);
         offset += chunk.length;
       }
 
-      // OPFS에 한 번에 쓰기
       try {
         wrapper.handle.write(mergedBuffer, { at: wrapper.written });
         wrapper.written += totalBytes;
-        console.log(`[Worker] Flushed ${totalBytes} bytes to file ${fileId}`);
       } catch (e) {
         console.error('Write failed', e);
       }
 
-      // 버퍼 초기화
       this.writeBuffer.set(fileId, []);
       this.bufferSize.set(fileId, 0);
     }

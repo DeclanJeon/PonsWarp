@@ -6,7 +6,7 @@ import { TransferManifest } from '../types';
 import { errorHandler, ErrorType, ErrorSeverity } from './errorHandling';
 import { logInfo, logWarn, logError, logCritical } from '../utils/logger';
 // 상수로 관리되는 설정 import
-import { CHUNK_SIZE_INITIAL, CHUNK_SIZE_MAX, MAX_BUFFERED_AMOUNT, LOW_WATER_MARK } from '../constants';
+import { CHUNK_SIZE_INITIAL, CHUNK_SIZE_MAX, MAX_BUFFERED_AMOUNT, LOW_WATER_MARK, SENDER_BATCH_SIZE } from '../constants';
 
 type EventHandler = (data: any) => void;
 
@@ -240,7 +240,7 @@ class EnhancedWebRTCService {
     }, 500);
   }
 
-  // 🔥 [신규] 큐 처리기 (순차 전송 보장)
+  // 🔥 [최적화 3] 큐 처리기 가속
   private async processChunkQueue() {
     if (this.isProcessingQueue || !this.peer) return;
     this.isProcessingQueue = true;
@@ -254,39 +254,38 @@ class EnhancedWebRTCService {
             return;
         }
 
-        // 1. 버퍼 체크 (엄격함)
-        // 버퍼가 꽉 차면 여기서 대기 (Loop)
+        // 1. 버퍼 체크 (가속화)
         if (channel.bufferedAmount > this.MAX_BUFFERED_AMOUNT) {
-            // 잠시 대기 후 재검사
-            await new Promise(resolve => setTimeout(resolve, 10));
+            // 🚀 [최적화] 10ms -> 1ms (브라우저 최소 틱) 또는 requestAnimationFrame
+            // 버퍼가 찰 때만 잠시 쉼.
+            await new Promise(resolve => setTimeout(resolve, 1));
             continue;
         }
 
-        // 2. 큐에서 하나 꺼냄
         const item = this.chunkQueue.shift();
         if (!item) break;
 
         try {
-            // 3. 전송
             this.peer.send(item.chunk);
             this.emit('progress', item.progressData);
             
-            // 4. 워커에게 더 달라고 요청 (Backpressure)
-            if (this.chunkQueue.length < 50) { // 큐가 너무 커지지 않게 관리
+            // 🚀 [최적화 2 대응] Backpressure 로직 수정
+            // 큐가 비어갈 때 '한 번' 요청하면 워커가 '5개(Batch)'를 보내줍니다.
+            // 따라서 너무 자주 요청하지 않도록 임계값을 낮춥니다.
+            if (this.chunkQueue.length < 10) {
                 this.worker?.postMessage({ type: 'pull' });
             }
 
         } catch (e) {
-            // 전송 실패 시 큐의 맨 앞에 다시 넣음 (순서 보장)
-            logWarn('[Sender]', 'Send failed, retrying...', e);
+            logWarn('[Sender]', 'Send retry...', e);
             this.chunkQueue.unshift(item);
-            await new Promise(resolve => setTimeout(resolve, 50));
+            // 에러 시에는 조금 더 쉬어줌
+            await new Promise(resolve => setTimeout(resolve, 20));
         }
     }
 
     this.isProcessingQueue = false;
 
-    // 큐가 비었고, 워커도 일을 다 했으면 완료 처리
     if (this.isTransferCompleted && this.chunkQueue.length === 0) {
         this.finishTransfer();
     }
