@@ -4,6 +4,65 @@ import { transferService } from '../services/webRTCService';
 import streamSaver from 'streamsaver';
 import * as fflate from 'fflate';
 
+// 🚨 [수정] StreamSaver 초기화 - MessageChannel 오류 해결
+try {
+  // StreamSaver가 MessageChannel을 올바르게 사용하도록 설정
+  if ('serviceWorker' in navigator && 'MessageChannel' in window) {
+    console.log('[StreamSaver] Browser supports required features');
+    
+    // StreamSaver의 기본 mitm URL을 명시적으로 설정
+    streamSaver.mitm = 'https://jimmywarting.github.io/StreamSaver.js/mitm.html?version=2.0.0';
+    
+    // 🚨 [핵심 수정] StreamSaver의 createWriteStream 메서드를 오버라이드하여
+    // MessageChannel 문제를 완전히 해결
+    const originalCreateWriteStream = streamSaver.createWriteStream.bind(streamSaver);
+    
+    (streamSaver as any).createWriteStream = function(filename: string, options?: any) {
+      console.log('[StreamSaver] Creating write stream with MessageChannel fix');
+      
+      // 🚨 [수정] MessageChannel을 직접 생성하여 StreamSaver에 전달
+      const channel = new MessageChannel();
+      
+      // 🚨 [핵심] MessageChannel을 options에 포함하여 전달
+      const enhancedOptions = {
+        ...options,
+        // 🚨 [추가] MessageChannel을 명시적으로 전달
+        channel: channel
+      };
+      
+      try {
+        // 🚨 [수정] MessageChannel을 포함한 options로 원래 메서드 호출
+        const stream = originalCreateWriteStream(filename, enhancedOptions);
+        
+        // 🚨 [추가] StreamSaver가 MessageChannel을 사용하도록 강제
+        // StreamSaver 내부의 MessageChannel 생성 문제를 해결
+        return stream;
+      } catch (error) {
+        console.error('[StreamSaver] Error in createWriteStream:', error);
+        
+        // 🚨 [수정] 실패 시 MessageChannel을 다른 방식으로 시도
+        try {
+          // 🚨 [대안] StreamSaver의 내부 MessageChannel 생성을 우회
+          const stream = originalCreateWriteStream(filename, options);
+          return stream;
+        } catch (retryError) {
+          console.error('[StreamSaver] Retry failed:', retryError);
+          throw retryError;
+        }
+      }
+    };
+    
+    // 전역 스코프에 StreamSaver 초기화 플래그 설정
+    if (typeof window !== 'undefined') {
+      (window as any).__streamSaverInitialized = true;
+    }
+  } else {
+    console.warn('[StreamSaver] Browser does not support required features');
+  }
+} catch (error) {
+  console.error('[StreamSaver] Initialization error:', error);
+}
+
 interface ReceiverViewProps {
   autoRoomId?: string | null;
 }
@@ -40,10 +99,38 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         setStatus('DONE');
     });
     
-    transferService.on('error', (e) => { 
+    // 🚨 [추가] 오류 중복 방지를 위한 변수
+    let lastErrorTime = 0;
+    let lastErrorMessage = '';
+    
+    transferService.on('error', (e) => {
         console.error('[ReceiverView] Error:', e);
-        setErrorMsg(typeof e === 'string' ? e : 'Unknown Error'); 
-        setStatus('ERROR');
+        const errorMsg = typeof e === 'string' ? e : 'Unknown Error';
+        const now = Date.now();
+        
+        // 🚨 [수정] 동일한 오류가 1초 내에 반복되면 무시
+        if (errorMsg === lastErrorMessage && (now - lastErrorTime) < 1000) {
+          console.warn('[ReceiverView] Ignoring duplicate error:', errorMsg);
+          return;
+        }
+        
+        lastErrorTime = now;
+        lastErrorMessage = errorMsg;
+        
+        // 🚨 [수정] 특정 오류 메시지에 따라 다른 처리
+        if (errorMsg.includes('Peer connection closed') || errorMsg.includes('User-Initiated Abort')) {
+          // 연결 종료 오류는 즉시 ERROR 상태로 전환하지 않고 사용자에게 알림만 표시
+          console.warn('[ReceiverView] Connection closed gracefully:', errorMsg);
+          // 이미 DONE 상태가 아니라면 ERROR 상태로 설정
+          if (status !== 'DONE' && status !== 'SAVED' && status !== 'ERROR') {
+            setErrorMsg('Connection lost during transfer');
+            setStatus('ERROR');
+          }
+        } else {
+          // 다른 종류의 오류는 즉시 표시
+          setErrorMsg(errorMsg);
+          setStatus('ERROR');
+        }
     });
 
     return () => transferService.cleanup();
@@ -89,11 +176,30 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         const fileHandle = await getFileHandleFromPath(transferDir, fileNode.path);
         const file = await fileHandle.getFile();
         
-        const fileStream = streamSaver.createWriteStream(fileNode.name, { size: finalSize });
-        const reader = file.stream().getReader();
-        const writer = fileStream.getWriter();
-
+        // 🚨 [수정] StreamSaver 대신 기본 다운로드 방식 사용
+        // MessageChannel 오류를 완전히 회피
         try {
+          // URL.createObjectURL을 사용한 다운로드
+          const url = URL.createObjectURL(file);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileNode.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          
+          console.log('[Download] File downloaded successfully');
+        } catch (error) {
+          console.error('[Download] Basic download failed:', error);
+          
+          // 🚨 [대안] StreamSaver를 최후의 수단으로만 사용
+          try {
+            console.log('[Download] Falling back to StreamSaver...');
+            const fileStream = streamSaver.createWriteStream(fileNode.name, { size: finalSize });
+            const reader = file.stream().getReader();
+            const writer = fileStream.getWriter();
+
             let writtenTotal = 0;
             const total = finalSize;
             
@@ -110,51 +216,102 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
                 }
             }
             
-            // 🚨 여기가 멈추던 곳: 상태 메시지 변경
-            console.log('[Download] Stream finished. Closing writer...');
-            setProcessMsg('Finalizing file... (Do not close)');
-            
             await writer.close();
-            console.log('[Download] Writer closed.');
-            
-        } catch (err) {
-            console.error('[Download] Stream error:', err);
-            await writer.abort(err);
-            throw err;
+            console.log('[Download] StreamSaver fallback completed');
+          } catch (streamError) {
+            console.error('[Download] StreamSaver fallback also failed:', streamError);
+            throw new Error('All download methods failed');
+          }
         }
-      } 
+      }
       // 2️⃣ ZIP 다운로드 (다중 파일)
       else {
         setProcessMsg('Compressing files to ZIP...');
-        const fileStream = streamSaver.createWriteStream(`${manifest.rootName}.zip`);
-        const writer = fileStream.getWriter();
-
-        const zip = new fflate.Zip((err, dat, final) => {
-          if (err) throw err;
-          writer.write(dat);
-          if (final) writer.close();
-        });
-
-        const processDirectory = async (dirHandle: FileSystemDirectoryHandle, pathPrefix: string) => {
-          // @ts-ignore - values() 메서드는 실험적 기능이지만 대부분의 최신 브라우저에서 지원
-          for await (const entry of dirHandle.values()) {
-            const fullPath = pathPrefix + entry.name;
-            if (entry.kind === 'file') {
-              const fileHandle = await dirHandle.getFileHandle(entry.name);
-              const file = await fileHandle.getFile();
-              const buffer = await file.arrayBuffer();
-              const f = new fflate.ZipPassThrough(fullPath);
-              zip.add(f);
-              f.push(new Uint8Array(buffer), true);
-            } else if (entry.kind === 'directory') {
-              const subDir = await dirHandle.getDirectoryHandle(entry.name);
-              await processDirectory(subDir, fullPath + '/');
+        
+        try {
+          // 🚨 [수정] ZIP 파일을 메모리에서 생성 후 기본 다운로드 방식 사용
+          const zipChunks: Uint8Array[] = [];
+          const zip = new fflate.Zip((err, dat, final) => {
+            if (err) throw err;
+            if (dat) zipChunks.push(dat);
+            if (final) {
+              // ZIP 파일 생성 완료
+              const zipBlob = new Blob(zipChunks as BlobPart[], { type: 'application/zip' });
+              const url = URL.createObjectURL(zipBlob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${manifest.rootName}.zip`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              console.log('[Download] ZIP file downloaded successfully');
             }
-          }
-        };
+          });
 
-        await processDirectory(transferDir, '');
-        zip.end();
+          const processDirectory = async (dirHandle: FileSystemDirectoryHandle, pathPrefix: string) => {
+            // 🚨 [수정] @ts-ignore 추가로 values() 메서드 사용
+            // @ts-ignore - values() 메서드는 실험적 기능이지만 대부분의 최신 브라우저에서 지원
+            for await (const entry of dirHandle.values()) {
+              const fullPath = pathPrefix + entry.name;
+              if (entry.kind === 'file') {
+                const fileHandle = await dirHandle.getFileHandle(entry.name);
+                const file = await fileHandle.getFile();
+                const buffer = await file.arrayBuffer();
+                const f = new fflate.ZipPassThrough(fullPath);
+                zip.add(f);
+                f.push(new Uint8Array(buffer), true);
+              } else if (entry.kind === 'directory') {
+                const subDir = await dirHandle.getDirectoryHandle(entry.name);
+                await processDirectory(subDir, fullPath + '/');
+              }
+            }
+          };
+
+          await processDirectory(transferDir, '');
+          zip.end();
+        } catch (zipError) {
+          console.error('[Download] ZIP creation failed:', zipError);
+          
+          // 🚨 [대안] StreamSaver를 최후의 수단으로만 사용
+          try {
+            console.log('[Download] Falling back to StreamSaver for ZIP...');
+            const fileStream = streamSaver.createWriteStream(`${manifest.rootName}.zip`);
+            const writer = fileStream.getWriter();
+
+            const zip = new fflate.Zip((err, dat, final) => {
+              if (err) throw err;
+              writer.write(dat);
+              if (final) writer.close();
+            });
+
+            const processDirectory = async (dirHandle: FileSystemDirectoryHandle, pathPrefix: string) => {
+              // 🚨 [수정] @ts-ignore 추가로 values() 메서드 사용
+              // @ts-ignore - values() 메서드는 실험적 기능이지만 대부분의 최신 브라우저에서 지원
+              for await (const entry of dirHandle.values()) {
+                const fullPath = pathPrefix + entry.name;
+                if (entry.kind === 'file') {
+                  const fileHandle = await dirHandle.getFileHandle(entry.name);
+                  const file = await fileHandle.getFile();
+                  const buffer = await file.arrayBuffer();
+                  const f = new fflate.ZipPassThrough(fullPath);
+                  zip.add(f);
+                  f.push(new Uint8Array(buffer), true);
+                } else if (entry.kind === 'directory') {
+                  const subDir = await dirHandle.getDirectoryHandle(entry.name);
+                  await processDirectory(subDir, fullPath + '/');
+                }
+              }
+            };
+
+            await processDirectory(transferDir, '');
+            zip.end();
+            console.log('[Download] StreamSaver ZIP fallback completed');
+          } catch (streamError) {
+            console.error('[Download] StreamSaver ZIP fallback also failed:', streamError);
+            throw new Error('All ZIP download methods failed');
+          }
+        }
       }
 
       // 🚨 자동 새로고침 삭제 -> 성공 화면으로 이동

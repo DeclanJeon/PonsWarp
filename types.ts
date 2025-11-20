@@ -40,8 +40,15 @@ export interface TransferProgress {
   currentFileIndex: number; // 현재 전송 중인 파일 인덱스
 }
 
+// 🚀 [추가] 네트워크 상태 관련 타입
+export interface NetworkStatus {
+  bufferedAmount: number;
+  maxBufferedAmount: number;
+  averageSpeed: number; // bytes per second
+}
+
 export interface WorkerMessage {
-  type: 'CHUNK' | 'COMPLETE' | 'ERROR' | 'INIT_OPFS' | 'MANIFEST';
+  type: 'CHUNK' | 'COMPLETE' | 'ERROR' | 'INIT_OPFS' | 'MANIFEST' | 'UPDATE_NETWORK' | 'NETWORK_UPDATE';
   payload?: any;
 }
 

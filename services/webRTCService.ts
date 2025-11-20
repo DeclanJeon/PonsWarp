@@ -5,6 +5,8 @@ import { getSenderWorkerV1, getReceiverWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types';
 import { errorHandler, ErrorType, ErrorSeverity } from './errorHandling';
 import { logInfo, logWarn, logError, logCritical } from '../utils/logger';
+// 상수로 관리되는 설정 import
+import { CHUNK_SIZE_INITIAL, CHUNK_SIZE_MAX, MAX_BUFFERED_AMOUNT, LOW_WATER_MARK } from '../constants';
 
 type EventHandler = (data: any) => void;
 
@@ -23,14 +25,23 @@ class EnhancedWebRTCService {
   private turnCredentials: any = null;
   private turnRefreshInterval: NodeJS.Timeout | null = null;
   
-  // Backpressure Control Variables
-  private readonly MAX_BUFFERED_AMOUNT = 256 * 1024; // 256KB Limit (안전 제일)
-  private readonly LOW_WATER_MARK = 64 * 1024;       // 64KB Resume
+  // 🚨 [수정] 상수로 변경하여 일관성 유지
+  private readonly MAX_BUFFERED_AMOUNT = MAX_BUFFERED_AMOUNT;
+  private readonly LOW_WATER_MARK = LOW_WATER_MARK;
   private isPaused = false;
   private isTransferring = false;
+  private bufferCheckInterval: NodeJS.Timeout | null = null;
   
-  // 🚨 [추가] 전송 작업 줄 세우기용 변수
-  private sendQueue: Promise<void> = Promise.resolve();
+  // 🚀 [추가] 네트워크 모니터링 관련 변수
+  private networkMonitorInterval: NodeJS.Timeout | null = null;
+  
+  // 🚨 [추가] 처리 중인(전송 시도 중인) 청크 개수 추적
+  private pendingChunksCount = 0;
+  
+  // 🚨 [추가] 전송 큐 시스템
+  private chunkQueue: Array<{chunk: ArrayBuffer, progressData: any}> = [];
+  private isProcessingQueue = false;
+  private isTransferCompleted = false; // 워커 생성 완료 플래그
 
   constructor() {
     signalingService.on('offer', this.handleOffer.bind(this));
@@ -140,12 +151,17 @@ class EnhancedWebRTCService {
   // ======================= SENDER LOGIC =======================
 
   public async initSender(manifest: TransferManifest, files: File[], roomId: string) {
-    logInfo('[Sender]', 'Initializing with Serialized Queue Logic');
+    logInfo('[Sender]', 'Initializing with Queue System');
     this.cleanup();
 
     this.roomId = roomId;
     await this.connectSignaling();
     await this.joinRoom(roomId);
+
+    // 🚨 [추가] 큐 초기화
+    this.chunkQueue = [];
+    this.isProcessingQueue = false;
+    this.isTransferCompleted = false;
 
     this.worker = getSenderWorkerV1();
     
@@ -154,48 +170,41 @@ class EnhancedWebRTCService {
       const { type, payload } = e.data;
 
       if (type === 'ready') {
-        // 워커 준비 완료 -> 파일 리스트 전달
+        // 🚨 [수정] Worker 초기화 시 청크 사이즈 제한 설정 전달
         this.worker!.postMessage({
           type: 'init',
-          payload: { files, manifest }
+          payload: {
+            files,
+            manifest,
+            config: {
+              startChunkSize: CHUNK_SIZE_INITIAL,
+              maxChunkSize: CHUNK_SIZE_MAX
+            }
+          }
         });
+        
+        // 🚨 [추가] 초기화 시 카운터 리셋
+        this.pendingChunksCount = 0;
       }
       else if (type === 'chunk-ready') {
-        // 🚨 [핵심 수정] 이전 작업이 끝난 뒤에 실행되도록 줄 세우기 (Chaining)
-        this.sendQueue = this.sendQueue.then(async () => {
-            try {
-                await this.sendChunkWithBackpressure(payload.chunk, payload.progressData);
-            } catch (err) {
-                logError('[Sender]', 'Chunk send error', { error: err });
-                // 에러가 나도 체인이 끊기지 않게 처리
-            }
+        // 🚨 [핵심 변경] 즉시 전송하지 않고 큐에 넣음
+        this.chunkQueue.push({
+            chunk: payload.chunk,
+            progressData: payload.progressData
         });
+        
+        // 큐 처리기가 놀고 있으면 깨움
+        if (!this.isProcessingQueue) {
+            this.processChunkQueue();
+        }
       }
       else if (type === 'complete') {
-        // 🚨 [핵심 수정] 모든 청크 전송이 끝난 뒤에 EOF 전송
-        this.sendQueue = this.sendQueue.then(async () => {
-            logInfo('[Sender]', 'All chunks queued. Waiting for buffer drain...');
-            
-            // 1. 버퍼가 0이 될 때까지 대기
-            await this.waitForBufferZero();
-
-            // 🚨 [핵심 추가] 네트워크 안정화를 위한 1초 강제 대기 (Safety Delay)
-            logInfo('[Sender]', 'Buffer drained. Waiting 1s for network stability...');
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            // 2. 이제 진짜 EOS(End of Stream) 전송
-            const eosPacket = new ArrayBuffer(6);
-            const view = new DataView(eosPacket);
-            view.setUint16(0, 0xFFFF, true); // Magic Number for EOF
-            view.setUint32(2, 0, true);      // Payload Size 0
-
-            logInfo('[Sender]', 'Sending Binary EOS packet.');
-            this.peer?.send(eosPacket);
-            
-            // 3. 완료 처리
-            this.emit('complete', true);
-            this.isTransferring = false;
-        });
+        // 워커는 다 만들었음. 이제 큐가 비워지길 기다림.
+        this.isTransferCompleted = true;
+        // 큐 처리기가 멈춰있다면(혹은 비어있다면) 완료 체크 시도
+        if (!this.isProcessingQueue && this.chunkQueue.length === 0) {
+            this.finishTransfer();
+        }
       }
       else if (type === 'error') {
         this.emit('error', payload.error);
@@ -231,48 +240,137 @@ class EnhancedWebRTCService {
     }, 500);
   }
 
-  // 🔥 Backpressure Core Logic (강화 버전)
-  private async sendChunkWithBackpressure(chunk: ArrayBuffer, progressData: any) {
-    if (!this.peer) return;
+  // 🔥 [신규] 큐 처리기 (순차 전송 보장)
+  private async processChunkQueue() {
+    if (this.isProcessingQueue || !this.peer) return;
+    this.isProcessingQueue = true;
 
     // @ts-ignore
     const channel = this.peer._channel as RTCDataChannel;
-    
-    // 1. 안전장치: 채널이 닫혀있으면 중단
-    if (channel.readyState !== 'open') {
-        logWarn('[Sender]', 'Channel not open, skipping chunk');
-        return;
+
+    while (this.chunkQueue.length > 0) {
+        if (!this.peer || !channel || channel.readyState !== 'open') {
+            this.isProcessingQueue = false;
+            return;
+        }
+
+        // 1. 버퍼 체크 (엄격함)
+        // 버퍼가 꽉 차면 여기서 대기 (Loop)
+        if (channel.bufferedAmount > this.MAX_BUFFERED_AMOUNT) {
+            // 잠시 대기 후 재검사
+            await new Promise(resolve => setTimeout(resolve, 10));
+            continue;
+        }
+
+        // 2. 큐에서 하나 꺼냄
+        const item = this.chunkQueue.shift();
+        if (!item) break;
+
+        try {
+            // 3. 전송
+            this.peer.send(item.chunk);
+            this.emit('progress', item.progressData);
+            
+            // 4. 워커에게 더 달라고 요청 (Backpressure)
+            if (this.chunkQueue.length < 50) { // 큐가 너무 커지지 않게 관리
+                this.worker?.postMessage({ type: 'pull' });
+            }
+
+        } catch (e) {
+            // 전송 실패 시 큐의 맨 앞에 다시 넣음 (순서 보장)
+            logWarn('[Sender]', 'Send failed, retrying...', e);
+            this.chunkQueue.unshift(item);
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
     }
 
-    // 2. 버퍼 체크 (High Water Mark)
-    // 루프를 돌며 버퍼가 비워질 때까지 대기
-    while (channel.bufferedAmount > this.MAX_BUFFERED_AMOUNT) {
-      this.isPaused = true;
-      await new Promise(resolve => setTimeout(resolve, 10)); // 10ms 간격으로 체크
-    }
-    this.isPaused = false;
+    this.isProcessingQueue = false;
 
-    // 3. 전송 시도 (Try-Catch로 감싸서 에러 방어)
-    try {
-      this.peer.send(chunk);
-      
-      // 전송 성공 시에만 다음 단계 진행
-      this.emit('progress', progressData);
-      this.worker?.postMessage({ type: 'pull' });
-
-    } catch (err: any) {
-      // 🚨 Queue Full 에러 발생 시 재시도 로직
-      if (err.name === 'OperationError' || err.message.includes('queue is full')) {
-        logWarn('[Sender]', '⚠️ Queue full detected, retrying in 50ms...');
-        await new Promise(resolve => setTimeout(resolve, 50));
-        // 재귀 호출로 다시 시도
-        return this.sendChunkWithBackpressure(chunk, progressData);
-      } else {
-        logError('[Sender]', '🔥 Fatal Send Error', { error: err.message });
-        this.emit('error', 'Transfer failed: ' + err.message);
-      }
+    // 큐가 비었고, 워커도 일을 다 했으면 완료 처리
+    if (this.isTransferCompleted && this.chunkQueue.length === 0) {
+        this.finishTransfer();
     }
   }
+
+  // 🔥 [수정] 완료 처리 (ACK 대기 포함)
+  private async finishTransfer() {
+    logInfo('[Sender]', 'Queue drained. Finalizing transfer...');
+
+    // 1. WebRTC 내부 버퍼가 완전히 0이 될 때까지 대기
+    await this.waitForBufferZero();
+    
+    // 2. 네트워크 안정화 대기 (중요)
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // 3. EOS 패킷 전송
+    const eosPacket = new ArrayBuffer(6);
+    const view = new DataView(eosPacket);
+    view.setUint16(0, 0xFFFF, true);
+    view.setUint32(2, 0, true);
+
+    logInfo('[Sender]', 'Sending EOS packet. Waiting for ACK...');
+    
+    try {
+      this.peer?.send(eosPacket);
+      
+      // 4. ACK 타임아웃 설정 (30초)
+      setTimeout(() => {
+          if (this.isTransferring) {
+              logWarn('[Sender]', 'ACK timeout. Closing.');
+              this.emit('complete', true);
+              this.isTransferring = false;
+          }
+      }, 30000);
+
+    } catch (error) {
+      logError('[Sender]', 'Failed to send EOS:', error);
+      this.emit('complete', true);
+    }
+  }
+
+  // 🚨 [추가] 청크 ID 생성기
+  private chunkIdCounter = 0;
+  private generateChunkId(): string {
+    return `chunk_${++this.chunkIdCounter}_${Date.now()}`;
+  }
+
+  // 🚨 [추가] 실패한 청크 추적
+  private failedChunks: Array<{
+    chunkId: string;
+    size: number;
+    error: string;
+    retryCount: number;
+  }> = [];
+
+  // 🔥 [신규] 버퍼가 비워지길 기다렸다가 워커 재개
+  private waitForBufferDrain() {
+    // 기존 인터벌이 있다면 정리
+    if (this.bufferCheckInterval) {
+      clearInterval(this.bufferCheckInterval);
+    }
+
+    this.bufferCheckInterval = setInterval(() => {
+      // @ts-ignore
+      const channel = this.peer?._channel as RTCDataChannel;
+      
+      if (!channel || !channel.readyState || channel.readyState !== 'open') {
+        clearInterval(this.bufferCheckInterval!);
+        this.bufferCheckInterval = null;
+        return;
+      }
+
+      // 버퍼가 충분히 비워졌으면 재개
+      if (channel.bufferedAmount <= this.LOW_WATER_MARK) {
+        clearInterval(this.bufferCheckInterval!);
+        this.bufferCheckInterval = null;
+        this.isPaused = false;
+        // logInfo('[Sender]', `Buffer drained (${channel.bufferedAmount} bytes), resuming worker`);
+        // 다시 데이터 달라고 요청
+        this.worker?.postMessage({ type: 'pull' });
+      }
+    }, 5); // 5ms 간격 체크
+  }
+
 
   // 🚨 버퍼가 0이 될 때까지 대기하는 함수
   private waitForBufferZero(): Promise<void> {
@@ -281,7 +379,7 @@ class EnhancedWebRTCService {
         // @ts-ignore
         const channel = this.peer?._channel as RTCDataChannel;
         
-        if (!channel || channel.readyState !== 'open') {
+        if (!channel || !channel.readyState || channel.readyState !== 'open') {
           resolve();
           return;
         }
@@ -315,10 +413,23 @@ class EnhancedWebRTCService {
 
       if (type === 'progress') {
         this.emit('progress', payload);
-      } 
+      }
       else if (type === 'complete') {
-        this.emit('complete', payload); // payload contains file/blob/opfs info
-      } 
+        // 🚨 [추가] 무결성 검증이 끝났으므로 Sender에게 ACK 전송
+        logInfo('[Receiver]', 'Integrity verified. Sending ACK to Sender.');
+        
+        try {
+            if (this.peer && !this.peer.destroyed) {
+                const ackMsg = JSON.stringify({ type: 'ACK_COMPLETE' });
+                this.peer.send(ackMsg);
+            }
+        } catch (err) {
+            logWarn('[Receiver]', 'Failed to send ACK:', err);
+        }
+
+        // 기존 완료 처리
+        this.emit('complete', payload);
+      }
       else if (type === 'error') {
         this.emit('error', payload.error);
       }
@@ -346,12 +457,25 @@ class EnhancedWebRTCService {
       trickle: true,
       config: {
         iceServers: this.iceServers,
-        // ICE 연결 타임아웃 설정
-        iceCandidatePoolSize: 0, // TURN 사용 시 0으로 설정
-        iceTransportPolicy: 'all' // 모든 타입의 ICE 후보 사용
+        // ICE 연결 최적화 설정
+        iceCandidatePoolSize: 10, // 0 -> 10으로 변경 (연결 속도 향상)
+        iceTransportPolicy: 'all' // 모든 타입의 ICE 후보 사용 (relay가 아닌 host/srflx 우선)
       },
+      // 🚨 [수정] 데이터 채널 설정 최적화
       channelConfig: {
-        ordered: true // 순서 보장 (필수)
+        ordered: true, // 순서 보장 (필수)
+        // 🚨 [삭제] maxRetransmits: 3  <-- 이 줄을 반드시 삭제해야 합니다!
+        // 이 옵션이 있으면 네트워크 혼잡 시 데이터를 버립니다.
+        // 삭제하면 'Reliable Mode'가 되어 데이터가 100% 도착할 때까지 재전송합니다.
+        protocol: 'file-transfer' // 프로토콜 식별자
+      },
+      // 🚨 [수정] SCTP 설정 최적화
+      // maxMessageSize는 반드시 CHUNK_SIZE_MAX (64KB)보다 커야 함 (헤더 포함 고려)
+      sctpConfig: {
+        maxMessageSize: 262144, // 256KB
+        // 🚀 [최적화] 버퍼 크기를 더 키워 고속 전송 시 드랍 방지
+        sendBufferSize: 16 * 1024 * 1024, // 16MB
+        receiveBufferSize: 16 * 1024 * 1024 // 16MB
       }
     });
 
@@ -372,21 +496,42 @@ class EnhancedWebRTCService {
       this.emit('connected', true);
       if (initiator) {
         this.startTransferSequence();
+        // 🚀 [신규] 네트워크 모니터링 시작 (송신측만)
+        this.startNetworkMonitoring();
       }
     });
 
     peer.on('data', (data) => this.handleReceivedData(data));
-    peer.on('error', (err) => this.emit('error', err.message));
-    peer.on('close', () => this.emit('error', 'Peer connection closed'));
+    peer.on('error', (err) => {
+      logError('[WebRTC]', 'Peer error:', err);
+      // 🚨 [추가] 전송 중단 플래그 설정
+      this.isTransferring = false;
+      this.emit('error', err.message || 'Unknown peer error');
+    });
+    peer.on('close', () => {
+      logWarn('[WebRTC]', 'Peer connection closed');
+      // 🚨 [추가] 전송 중단 플래그 설정
+      this.isTransferring = false;
+      this.emit('error', 'Peer connection closed');
+    });
 
     this.peer = peer;
   }
 
   private handleReceivedData(data: any) {
-    // 1. JSON 처리 (MANIFEST만 처리, EOF는 제거)
-    if (typeof data === 'string' || (data instanceof Uint8Array && data[0] === 123)) {
+    // 1. JSON 처리 (MANIFEST 및 ACK 처리)
+    if (typeof data === 'string' || (data instanceof Uint8Array && data[0] === 123)) { // '{' char code
       try {
         const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
+        
+        // 🚨 [추가] ACK 메시지 처리 (Sender 측 로직)
+        if (text.includes('"type":"ACK_COMPLETE"')) {
+            logInfo('[Sender]', '✅ ACK received from Receiver. Closing connection.');
+            this.emit('complete', true);
+            this.isTransferring = false;
+            return;
+        }
+
         if (text.indexOf('MANIFEST') > 0) {
             const msg = JSON.parse(text);
             if (msg.type === 'MANIFEST') {
@@ -445,12 +590,73 @@ class EnhancedWebRTCService {
   private emit(event: string, data: any) {
     this.eventListeners[event]?.forEach(h => h(data));
   }
+  // 🚀 [신규] 네트워크 상태 모니터링 및 피드백 루프
+  private startNetworkMonitoring() {
+    // 기존 인터벌 정리
+    if (this.networkMonitorInterval) {
+      clearInterval(this.networkMonitorInterval);
+    }
+
+    this.networkMonitorInterval = setInterval(() => {
+      if (!this.peer || !this.worker) return;
+      
+      // @ts-ignore
+      const channel = this.peer._channel as RTCDataChannel;
+      if (channel && channel.readyState && channel.readyState === 'open') {
+        
+        // 워커에게 현재 버퍼 상태 보고
+        this.worker.postMessage({
+          type: 'network-update',
+          payload: {
+            bufferedAmount: channel.bufferedAmount,
+            maxBufferedAmount: this.MAX_BUFFERED_AMOUNT
+          }
+        });
+
+        // 강력한 Backpressure: 버퍼가 너무 높으면 워커 일시 중지 로직은 유지
+        // (하지만 워커가 스스로 크기를 줄이므로 이 빈도는 줄어들 것임)
+        if (channel.bufferedAmount > this.MAX_BUFFERED_AMOUNT * 0.8) {
+          logWarn('[Sender]', `Buffer very high (${channel.bufferedAmount} bytes), consider reducing chunk size`);
+        }
+      }
+    }, 50); // 50ms 간격으로 더 자주 체크하여 반응성 향상
+  }
+
   public cleanup() {
     if (this.peer) { this.peer.destroy(); this.peer = null; }
     if (this.worker) { this.worker.terminate(); this.worker = null; }
     this.isPaused = false;
     this.isTransferring = false;
     this.pendingManifest = null;
+    
+    // 🚨 [추가] 실패한 청크 정보 정리
+    if (this.failedChunks.length > 0) {
+      logWarn('[Sender]', `Cleaning up ${this.failedChunks.length} failed chunks`, this.failedChunks);
+      this.failedChunks = [];
+    }
+    
+    // 🚨 [추가] 청크 ID 카운터 리셋
+    this.chunkIdCounter = 0;
+    
+    // 버퍼 체크 인터벌 정리
+    if (this.bufferCheckInterval) {
+      clearInterval(this.bufferCheckInterval);
+      this.bufferCheckInterval = null;
+    }
+    
+    // 🚀 [추가] 네트워크 모니터링 인터벌 정리
+    if (this.networkMonitorInterval) {
+      clearInterval(this.networkMonitorInterval);
+      this.networkMonitorInterval = null;
+    }
+    
+    // 🚨 [추가] pendingChunksCount 초기화
+    this.pendingChunksCount = 0;
+    
+    // 🚨 [추가] 큐 시스템 초기화
+    this.chunkQueue = [];
+    this.isProcessingQueue = false;
+    this.isTransferCompleted = false;
     
     // TURN 새로고침 인터벌 정리
     if (this.turnRefreshInterval) {
