@@ -134,14 +134,12 @@ interface FileHandleWrapper {
       }
     }
 
-    // 🚀 [최적화 1] Zero-Copy 버퍼링
+    // 🚀 [수정] addToBuffer 메서드 (Slice된 데이터를 받도록 변경)
     private addToBuffer(fileId: number, data: Uint8Array) {
       const currentBuffer = this.writeBuffer.get(fileId) || [];
       const currentSize = this.bufferSize.get(fileId) || 0;
       
-      // 🚨 중요: data는 packet(ArrayBuffer)의 View입니다.
-      // writeBuffer에 이 View를 그대로 저장합니다.
-      // (ArrayBuffer가 전송되어 왔으므로, 워커가 소유권을 가지며 GC되지 않음)
+      // data는 이미 slice() 되어 넘어온 순수 payload입니다.
       currentBuffer.push(data);
       
       const newSize = currentSize + data.byteLength;
