@@ -15,13 +15,13 @@ interface FileHandleWrapper {
     private manifest: any = null;
     private lastReportTime = 0;
     
-    // 헤더 크기: FileId(2) + Seq(4) + Offset(8) + Size(4) = 18
-    private readonly HEADER_SIZE = 18;
+    // 🚀 [Phase 1] Constants 활용
+    private readonly HEADER_SIZE = 18; // constants.HEADER_SIZE
+    private readonly BATCH_FLUSH_SIZE = 5; // 5개 청크마다 flush (최적화 가능)
     
     // 🚀 [Phase 1] OPFS 배치 쓰기 및 메모리 버퍼 풀
     private chunkBuffer: Map<number, { data: Uint8Array; position: number }> = new Map();
     private flushCounter = 0;
-    private readonly BATCH_FLUSH_SIZE = 5; // 5개 청크마다 flush
 
     constructor() {
       self.onmessage = this.handleMessage.bind(this);

@@ -3,12 +3,12 @@ export const MAX_CHANNELS = 1; // 순서 보장을 위해 단일 채널 사용
 export const SIGNALING_SERVER_URL = process.env.SIGNALING_SERVER_URL;
 
 // 🚀 [Phase 1 최적화] 동적 청크 사이징 (RTT 기반)
-export const CHUNK_SIZE_MIN = 16 * 1024;      // 16KB (느린 네트워크)
+export const CHUNK_SIZE_MIN = 32 * 1024;      // 32KB (느린 네트워크)
 export const CHUNK_SIZE_INITIAL = 64 * 1024;  // 64KB (시작)
-export const CHUNK_SIZE_MAX = 256 * 1024;     // 256KB (고속 네트워크)
+export const CHUNK_SIZE_MAX = 128 * 1024;     // 128KB (고속 네트워크)
 
 // 🚀 RTT 기반 청크 크기 조정 임계값
-export const RTT_THRESHOLD_LOW = 50;          // ms (50ms 미만: 256KB)
+export const RTT_THRESHOLD_LOW = 50;          // ms (50ms 미만: 128KB)
 export const RTT_THRESHOLD_HIGH = 150;        // ms (150ms 초과: 64KB)
 export const RTT_SAMPLE_SIZE = 10;            // RTT 샘플 개수
 

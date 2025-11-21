@@ -24,7 +24,13 @@ interface PendingChunk {
     private startTime = 0;
     private isPaused = false;
     
-    private currentChunkSize = 64 * 1024;
+    // 🚀 [Phase 1] constants 활용
+    private currentChunkSize = 64 * 1024; // CHUNK_SIZE_INITIAL
+    private readonly CHUNK_SIZE_MIN = 32 * 1024;      // constants.CHUNK_SIZE_MIN
+    private readonly CHUNK_SIZE_MAX = 128 * 1024;     // constants.CHUNK_SIZE_MAX
+    private readonly RTT_THRESHOLD_LOW = 50;          // constants.RTT_THRESHOLD_LOW
+    private readonly RTT_THRESHOLD_HIGH = 150;        // constants.RTT_THRESHOLD_HIGH
+    private readonly RTT_SAMPLE_SIZE = 10;            // constants.RTT_SAMPLE_SIZE
     
     private congestion: CongestionState = {
       windowSize: 8,
@@ -40,7 +46,6 @@ interface PendingChunk {
     // 🚀 [Phase 1] RTT 측정 및 동적 청크 크기 조정
     private rttSamples: number[] = [];
     private averageRTT = 100;
-    private readAheadQueue: Promise<any>[] = [];
 
     constructor() {
       self.onmessage = this.handleMessage.bind(this);
@@ -82,8 +87,10 @@ interface PendingChunk {
       this.currentFileOffset = 0;
       this.chunkSequence = 0;
       this.totalBytesSent = 0;
-      this.currentChunkSize = 64 * 1024;
+      this.currentChunkSize = 64 * 1024; // CHUNK_SIZE_INITIAL
       this.pendingChunks.clear();
+      this.rttSamples = [];
+      this.averageRTT = 100;
       
       // console.log(`[Sender] Init: ${files.length} files, ${manifest.totalSize} bytes`);
       // 🚨 [수정] ready를 다시 보내지 않음 - 무한 루프 방지
@@ -123,18 +130,18 @@ interface PendingChunk {
       const file = this.files[this.currentFileIndex];
       if (!file) return null;
 
-      // 🚀 [Phase 1] RTT 기반 동적 청크 크기 조정
-      if (this.averageRTT < 50) {
-        this.currentChunkSize = 256 * 1024; // 고속 네트워크 (RTT < 50ms)
-      } else if (this.averageRTT < 150) {
-        this.currentChunkSize = 128 * 1024; // 일반 네트워크 (50-150ms)
+      // 🚀 [Phase 1] RTT 기반 동적 청크 크기 조정 (constants 활용)
+      if (this.averageRTT < this.RTT_THRESHOLD_LOW) {
+        this.currentChunkSize = this.CHUNK_SIZE_MAX; // 고속 네트워크
+      } else if (this.averageRTT < this.RTT_THRESHOLD_HIGH) {
+        this.currentChunkSize = 64 * 1024; // 일반 네트워크
       } else {
-        this.currentChunkSize = 64 * 1024; // 느린 네트워크 (RTT > 150ms)
+        this.currentChunkSize = this.CHUNK_SIZE_MIN; // 느린 네트워크
       }
       
       // 혼잡 제어에 따른 추가 조정
       if (this.congestion.windowSize < 4) {
-        this.currentChunkSize = Math.max(16 * 1024, this.currentChunkSize / 2);
+        this.currentChunkSize = Math.max(this.CHUNK_SIZE_MIN, this.currentChunkSize / 2);
       }
 
       const start = this.currentFileOffset;
@@ -241,8 +248,8 @@ interface PendingChunk {
         const rtt = Date.now() - pending.sentAt;
         this.rttSamples.push(rtt);
         
-        // 최근 10개 샘플만 유지
-        if (this.rttSamples.length > 10) {
+        // 🚀 [Phase 1] constants 활용: RTT 샘플 크기 제한
+        if (this.rttSamples.length > this.RTT_SAMPLE_SIZE) {
           this.rttSamples.shift();
         }
         
@@ -273,7 +280,7 @@ interface PendingChunk {
       this.congestion.threshold = Math.max(this.congestion.windowSize / 2, 2);
       this.congestion.windowSize = this.congestion.threshold;
       this.congestion.inSlowStart = false;
-      this.currentChunkSize = 16 * 1024; // 청크 사이즈 축소
+      this.currentChunkSize = this.CHUNK_SIZE_MIN; // 청크 사이즈 축소 (constants 활용)
       
       setTimeout(() => this.sendLoop(), 200);
     }
