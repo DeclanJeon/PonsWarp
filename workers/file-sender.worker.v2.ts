@@ -33,9 +33,14 @@ interface PendingChunk {
       timeout: 3000
     };
 
-    private pendingChunks = new Map<number, PendingChunk>(); 
-    private chunkSequence = 0; 
+    private pendingChunks = new Map<number, PendingChunk>();
+    private chunkSequence = 0;
     private isLoopRunning = false;
+    
+    // 🚀 [Phase 1] RTT 측정 및 동적 청크 크기 조정
+    private rttSamples: number[] = [];
+    private averageRTT = 100;
+    private readAheadQueue: Promise<any>[] = [];
 
     constructor() {
       self.onmessage = this.handleMessage.bind(this);
@@ -118,11 +123,19 @@ interface PendingChunk {
       const file = this.files[this.currentFileIndex];
       if (!file) return null;
 
-      // 🚨 [핵심 수정] 청크 크기를 WebRTC 메시지 크기 제한 내로 제한
-      // 대부분의 WebRTC 구현에서 안전한 최대 크기는 64KB
-      if (this.congestion.windowSize > 32) this.currentChunkSize = 64 * 1024; // 64KB (안전)
-      else if (this.congestion.windowSize > 16) this.currentChunkSize = 32 * 1024; // 32KB
-      else this.currentChunkSize = 16 * 1024; // 16KB
+      // 🚀 [Phase 1] RTT 기반 동적 청크 크기 조정
+      if (this.averageRTT < 50) {
+        this.currentChunkSize = 256 * 1024; // 고속 네트워크 (RTT < 50ms)
+      } else if (this.averageRTT < 150) {
+        this.currentChunkSize = 128 * 1024; // 일반 네트워크 (50-150ms)
+      } else {
+        this.currentChunkSize = 64 * 1024; // 느린 네트워크 (RTT > 150ms)
+      }
+      
+      // 혼잡 제어에 따른 추가 조정
+      if (this.congestion.windowSize < 4) {
+        this.currentChunkSize = Math.max(16 * 1024, this.currentChunkSize / 2);
+      }
 
       const start = this.currentFileOffset;
       const end = Math.min(start + this.currentChunkSize, file.size);
@@ -222,6 +235,22 @@ interface PendingChunk {
 
     private handleAck(seq: number) {
       if (this.pendingChunks.has(seq)) {
+        const pending = this.pendingChunks.get(seq)!;
+        
+        // 🚀 [Phase 1] RTT 측정
+        const rtt = Date.now() - pending.sentAt;
+        this.rttSamples.push(rtt);
+        
+        // 최근 10개 샘플만 유지
+        if (this.rttSamples.length > 10) {
+          this.rttSamples.shift();
+        }
+        
+        // 평균 RTT 계산
+        this.averageRTT = Math.round(
+          this.rttSamples.reduce((a, b) => a + b, 0) / this.rttSamples.length
+        );
+        
         this.pendingChunks.delete(seq);
         
         // Congestion Control: Window Increase

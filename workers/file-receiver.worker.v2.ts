@@ -16,7 +16,12 @@ interface FileHandleWrapper {
     private lastReportTime = 0;
     
     // 헤더 크기: FileId(2) + Seq(4) + Offset(8) + Size(4) = 18
-    private readonly HEADER_SIZE = 18; 
+    private readonly HEADER_SIZE = 18;
+    
+    // 🚀 [Phase 1] OPFS 배치 쓰기 및 메모리 버퍼 풀
+    private chunkBuffer: Map<number, { data: Uint8Array; position: number }> = new Map();
+    private flushCounter = 0;
+    private readonly BATCH_FLUSH_SIZE = 5; // 5개 청크마다 flush
 
     constructor() {
       self.onmessage = this.handleMessage.bind(this);
@@ -132,13 +137,22 @@ interface FileHandleWrapper {
           //   totalWritten: wrapper.written
           // });
 
-          // OPFS에 쓰기
-          wrapper.handle.write(dataView, { at: writePosition });
+          // 🚀 [Phase 1] 청크를 버퍼에 저장
+          this.chunkBuffer.set(seq, {
+            data: dataView,
+            position: writePosition
+          });
+          
+          this.flushCounter++;
+          
+          // 배치 쓰기: 5개 청크마다 플러시
+          if (this.flushCounter >= this.BATCH_FLUSH_SIZE) {
+            this.flushBuffer(wrapper);
+            this.flushCounter = 0;
+          }
           
           wrapper.written += size;
           this.totalBytesWritten += size;
-
-          // console.log('[ReceiverWorker] ✅ Write successful. Total written:', this.totalBytesWritten);
 
           // ACK 전송
           self.postMessage({ type: 'ack', payload: { seq: seq } });
@@ -156,23 +170,42 @@ interface FileHandleWrapper {
       }
     }
 
+    private flushBuffer(wrapper: FileHandleWrapper) {
+      // 🚀 [Phase 1] 버퍼에 저장된 청크들을 일괄 쓰기
+      for (const [seq, chunk] of this.chunkBuffer) {
+        try {
+          wrapper.handle.write(chunk.data, { at: chunk.position });
+        } catch (e) {
+          // 쓰기 오류 무시하고 계속 진행
+        }
+      }
+      
+      // 버퍼 비우기
+      this.chunkBuffer.clear();
+    }
+
     private async finalize() {
       let actualSize = 0;
-      // 모든 핸들 강제 플러시 (디스크 기록 보장) 및 닫기
+      
+      // 🚀 [Phase 1] 남은 버퍼 플러시
       for (const w of this.fileHandles.values()) {
         try {
-            w.handle.flush();
-            w.handle.close();
-            actualSize += w.written;
+          // 남은 청크 플러시
+          this.flushBuffer(w);
+          
+          // 최종 플러시 및 닫기
+          w.handle.flush();
+          w.handle.close();
+          actualSize += w.written;
         } catch (e) {
             // console.error('[ReceiverWorker] Error closing handle:', e);
         }
       }
 
       // console.log('[ReceiverWorker] Transfer finalized. Total written:', actualSize);
-      self.postMessage({ 
-        type: 'complete', 
-        payload: { actualSize: actualSize } 
+      self.postMessage({
+        type: 'complete',
+        payload: { actualSize: actualSize }
       });
     }
   }
