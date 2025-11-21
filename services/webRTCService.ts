@@ -98,11 +98,14 @@ class EnhancedWebRTCService {
     // EOS 패킷 전송 (헤더 구조에 맞춰 10바이트)
     // [FileIndex: 0xFFFF] [Seq: 0] [Len: 0]
     const eosPacket = new ArrayBuffer(10);
-    new DataView(eosPacket).setUint16(0, 0xFFFF, true); 
+    new DataView(eosPacket).setUint16(0, 0xFFFF, true);
     this.peer?.send(eosPacket);
     
-    logInfo('[Sender]', 'Transfer Complete');
-    this.emit('complete', true);
+    logInfo('[Sender]', 'All chunks sent. Waiting for receiver confirmation.');
+    
+    // 🚨 중요: 여기서 바로 'complete'를 emit하지 않고 'remote-processing'을 emit합니다.
+    this.emit('remote-processing', true);
+    // this.emit('complete', true); // <--- 삭제됨
     this.isTransferring = false;
   }
 
@@ -191,6 +194,13 @@ class EnhancedWebRTCService {
           this.worker?.postMessage({ type: 'init-manifest', payload: msg.manifest });
           return;
         }
+
+        // 🚨 [추가] 수신자가 다운로드를 완료했다는 신호를 받으면 그때 Sender 완료 처리
+        if (msg.type === 'DOWNLOAD_COMPLETE') {
+          logInfo('[Sender]', 'Receiver confirmed download. Finishing session.');
+          this.emit('complete', true);
+          return;
+        }
       } catch (e) {}
     }
 
@@ -220,6 +230,15 @@ class EnhancedWebRTCService {
   private handleOffer = async (d: any) => { if (!this.peer) await this.createPeer(false); this.peer!.signal(d.offer); };
   private handleAnswer = async (d: any) => { this.peer?.signal(d.answer); };
   private handleIceCandidate = (d: any) => { this.peer?.signal(d.candidate); };
+
+  // 1. [추가] 수신자가 다운로드 완료 신호를 보낼 메서드
+  public notifyDownloadComplete() {
+    if (this.peer && !this.peer.destroyed) {
+      console.log('[Receiver] Sending DOWNLOAD_COMPLETE signal to sender');
+      const msg = JSON.stringify({ type: 'DOWNLOAD_COMPLETE' });
+      this.peer.send(msg);
+    }
+  }
 
   public cleanup() {
     this.peer?.destroy();

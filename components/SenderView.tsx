@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus } from 'lucide-react';
+import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus, AlertTriangle } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { motion } from 'framer-motion';
@@ -14,7 +14,7 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [status, setStatus] = useState<'IDLE' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'DONE'>('IDLE');
+  const [status, setStatus] = useState<'IDLE' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'DONE'>('IDLE');
   const [progressData, setProgressData] = useState({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
   
   // 🎯 Input Refs 분리
@@ -28,6 +28,13 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
     });
 
     transferService.on('progress', (data: any) => setProgressData(data));
+    
+    // 🚨 [추가] 데이터 전송은 끝났으나 수신자가 저장 중일 때
+    transferService.on('remote-processing', () => {
+        setStatus('REMOTE_PROCESSING');
+    });
+
+    // 최종 완료 (수신자가 저장까지 마쳤을 때)
     transferService.on('complete', () => setStatus('DONE'));
   }, []);
 
@@ -208,12 +215,39 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
         </div>
       )}
 
+      {/* 🚨 [추가] 수신자 저장 대기 화면 */}
+      {status === 'REMOTE_PROCESSING' && (
+        <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-center p-8 bg-yellow-900/20 rounded-3xl border border-yellow-500/30 max-w-lg w-full"
+        >
+            <div className="relative w-20 h-20 mx-auto mb-6">
+                <Loader2 className="w-full h-full text-yellow-500 animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-xs font-bold text-white">WAIT</span>
+                </div>
+            </div>
+            
+            <h2 className="text-2xl font-bold text-white mb-2">Sending Completed...</h2>
+            <h3 className="text-xl text-yellow-400 font-bold mb-6 animate-pulse">Waiting for Receiver to Save</h3>
+            
+            <div className="bg-black/40 p-4 rounded-xl text-left flex gap-3 border border-yellow-500/20">
+                <AlertTriangle className="w-6 h-6 text-yellow-500 flex-shrink-0" />
+                <div className="text-sm text-gray-300">
+                    <p className="font-bold text-white mb-1">Do NOT close this window.</p>
+                    <p>The receiver is currently saving the files. The connection must remain open until they finish downloading.</p>
+                </div>
+            </div>
+        </motion.div>
+      )}
+
       {status === 'DONE' && (
         <div className="text-center">
           <CheckCircle className="w-24 h-24 text-green-500 mx-auto mb-6" />
-          <h2 className="text-3xl font-bold mb-2">Warp Complete</h2>
-          <p className="text-gray-400 mb-8">All files transferred successfully.</p>
-          <button 
+          <h2 className="text-3xl font-bold mb-2">Transfer Successful!</h2>
+          <p className="text-gray-400 mb-8">The receiver has successfully saved the files.</p>
+          <button
             onClick={() => window.location.reload()}
             className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-cyan-50 transition-colors"
           >

@@ -322,6 +322,11 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         }
       }
 
+      // 🚨 [핵심 변경 사항]
+      // 파일 저장이 성공적으로 호출된 후, 송신자에게 "완료되었음"을 알림
+      console.log('[Receiver] File saved successfully, notifying sender...');
+      transferService.notifyDownloadComplete();
+
       // 🚨 자동 새로고침 삭제 -> 성공 화면으로 이동
       setStatus('SAVED');
 
