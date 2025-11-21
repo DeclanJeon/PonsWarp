@@ -15,6 +15,7 @@ export interface FileNode {
   size: number;     // 바이트 크기
   type: string;     // MIME type
   lastModified: number;
+  checksum?: string; // 💡 [패치] SHA-256 Checksum 추가
 }
 
 export interface TransferManifest {

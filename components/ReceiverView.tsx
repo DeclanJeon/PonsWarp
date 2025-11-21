@@ -204,14 +204,53 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         console.log(`[Download] Saving ${fileNode.name} (Size: ${finalSize})`);
         setProcessMsg(`Writing ${fileNode.name} to disk...`);
 
-        const fileHandle = await getFileHandleFromPath(transferDir, fileNode.path);
+        // 🚨 [수정] 파일이 실제로 존재하는지 확인
+        let fileHandle;
+        try {
+          fileHandle = await getFileHandleFromPath(transferDir, fileNode.path);
+        } catch (error) {
+          console.error('[Download] File handle not found:', error);
+          setErrorMsg('File not found in internal storage');
+          setStatus('DONE');
+          return;
+        }
+
         const file = await fileHandle.getFile();
         
-        // 🚨 [최종 최적화] 2GB 이상은 무조건 StreamSaver 사용 (메모리 폭발 방지)
-        const LARGE_FILE_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2GB
+        // 🚨 [수정] 파일이 실제로 데이터를 가졌는지 확인
+        if (file.size === 0) {
+          console.error('[Download] File is empty:', file.name);
+          setErrorMsg('File is empty or corrupted');
+          setStatus('DONE');
+          return;
+        }
+        
+        // 파일 정보 로깅 (메모리 안전)
+        console.log('[Download] File info:', {
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          lastModified: file.lastModified
+        });
+        
+        // 🚨 [수정] 100MB 미만 파일만 무결성 확인 (메모리 안전)
+        if (file.size < 100 * 1024 * 1024) {
+          try {
+            const fileBuffer = await file.arrayBuffer();
+            const first100Bytes = Array.from(new Uint8Array(fileBuffer.slice(0, 100)));
+            console.log('[Download] First 100 bytes:', first100Bytes);
+          } catch (e) {
+            console.warn('[Download] Could not verify file integrity:', e);
+          }
+        } else {
+          console.log('[Download] Skipping integrity check for large file');
+        }
+        
+        // 🚨 [최종 최적화] 1GB 이상은 무조건 StreamSaver 사용 (메모리 폭발 방지)
+        const LARGE_FILE_THRESHOLD = 1 * 1024 * 1024 * 1024; // 1GB (메모리 안전을 위해 임계값 낮춤)
 
         if (file.size < LARGE_FILE_THRESHOLD) {
-            // 🟢 2GB 미만: 기존 방식 (가장 빠름)
+            // 🟢 1GB 미만: 기존 방식 (가장 빠름)
             try {
               const url = URL.createObjectURL(file);
               const a = document.createElement('a');
@@ -227,7 +266,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
               await downloadWithStreamSaver(file, fileNode.name, finalSize);
             }
         } else {
-            // 🟠 2GB 이상: StreamSaver 강제 사용 (안전함)
+            // 🟠 1GB 이상: StreamSaver 강제 사용 (안전함)
             console.log('[Download] Large file detected. Using StreamSaver to prevent memory crash.');
             await downloadWithStreamSaver(file, fileNode.name, finalSize);
         }

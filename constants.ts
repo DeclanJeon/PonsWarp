@@ -12,8 +12,8 @@ export const CHUNK_SIZE_MAX = 256 * 1024;     // 256KB (고속 네트워크)
 export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024;
 export const LOW_WATER_MARK = 4 * 1024 * 1024; 
 
-// 프로토콜 헤더 사이즈 (FileIndex:2 + Seq:4 + DataLen:4 = 10 bytes)
-export const HEADER_SIZE = 10;
+// 🚨 [수정] 헤더 크기 증가: FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4) = 18 bytes
+export const HEADER_SIZE = 18;
 
 // ACK 타임아웃 (RTT 기반으로 자동 조절되지만, 안전장치)
 export const BASE_ACK_TIMEOUT = 5000; 

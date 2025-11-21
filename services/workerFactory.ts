@@ -447,11 +447,12 @@ export const getReceiverWorker = () => {
   return URL.createObjectURL(blob);
 };
 
-// v1 워커들 export (filetransfer.md v1 호환용)
+// v2 워커들 export (Cache Busting을 위해 v2로 변경)
 export const getSenderWorkerV1 = () => {
   // Vite의 워커 임포트 사용
   return new Worker(
-    new URL('../workers/file-sender.worker.v1.ts', import.meta.url),
+    // 🚨 [수정] v1 -> v2
+    new URL('../workers/file-sender.worker.v2.ts', import.meta.url),
     { type: 'module' }
   );
 };
@@ -459,7 +460,8 @@ export const getSenderWorkerV1 = () => {
 export const getReceiverWorkerV1 = () => {
   // Vite의 워커 임포트 사용
   return new Worker(
-    new URL('../workers/file-receiver.worker.v1.ts', import.meta.url),
+    // 🚨 [수정] v1 -> v2
+    new URL('../workers/file-receiver.worker.v2.ts', import.meta.url),
     { type: 'module' }
   );
 };
