@@ -1,18 +1,19 @@
 export const APP_NAME = "PonsWarp";
-export const MAX_CHANNELS = 4; // Number of WebRTC DataChannels to use simultaneously
+export const MAX_CHANNELS = 1; // 순서 보장을 위해 단일 채널 사용
 export const SIGNALING_SERVER_URL = process.env.SIGNALING_SERVER_URL;
 
-// 🚀 [최적화 1 & 4] 청크 사이즈 상향 조정
-// 64KB -> 128KB로 상향 (최신 브라우저의 SCTP 처리 능력 활용)
-export const CHUNK_SIZE_INITIAL = 64 * 1024;
-export const CHUNK_SIZE_MIN = 16 * 1024;
-export const CHUNK_SIZE_MAX = 128 * 1024; // 128KB로 상향 (배치 처리와 결합 시 효과 극대화)
+// 🚀 [최적화] 동적 청크 사이징 (네트워크 상태에 따라 변동)
+export const CHUNK_SIZE_MIN = 16 * 1024;      // 16KB (느린 네트워크)
+export const CHUNK_SIZE_INITIAL = 64 * 1024;  // 64KB (시작)
+export const CHUNK_SIZE_MAX = 256 * 1024;     // 256KB (고속 네트워크)
 
-// 🚀 [최적화] WebRTC 버퍼 한계점 상향
-// 4MB -> 8MB (Batch 전송을 받아낼 수 있도록 넉넉하게 확보)
-export const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;
-// Resume 기준점 (버퍼가 2MB 이하로 떨어지면 다시 펌핑)
-export const LOW_WATER_MARK = 2 * 1024 * 1024;
+// 🚀 [최적화] WebRTC 버퍼 한계점 상향 (16MB)
+// 브라우저 메모리가 허용하는 한 넉넉하게 잡아 전송이 멈추지 않게 함
+export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024;
+export const LOW_WATER_MARK = 4 * 1024 * 1024; 
 
-// 🚀 [신규] 배치 처리 설정
-export const SENDER_BATCH_SIZE = 5; // 한 번의 Pull 요청에 보낼 청크 개수
+// 프로토콜 헤더 사이즈 (FileIndex:2 + Seq:4 + DataLen:4 = 10 bytes)
+export const HEADER_SIZE = 10;
+
+// ACK 타임아웃 (RTT 기반으로 자동 조절되지만, 안전장치)
+export const BASE_ACK_TIMEOUT = 5000; 

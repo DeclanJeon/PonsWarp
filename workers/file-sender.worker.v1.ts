@@ -1,36 +1,49 @@
 /// <reference lib="webworker" />
 declare const self: DedicatedWorkerGlobalScope;
 
-interface SenderState {
-  files: File[];
-  manifest: any;
-  currentFileIndex: number;
-  currentFileOffset: number;
-  totalBytesSent: number;
-  startTime: number;
-  chunkSize: number;
-  // 🚀 [추가] 동적 사이징 설정
-  minChunkSize: number;
-  maxChunkSize: number;
+// 혼잡 제어 상태 관리
+interface CongestionState {
+  windowSize: number;       // 한 번에 보낼 청크 수
+  threshold: number;        // 임계값
+  inSlowStart: boolean;     // Slow Start 모드 여부
+  rtt: number;              // 왕복 시간 (ms)
+  rttVar: number;           // RTT 분산
+  timeout: number;          // 타임아웃 시간
+}
+
+interface PendingChunk {
+  sentAt: number;
+  retries: number;
+  data: ArrayBuffer; // 재전송을 위해 원본 데이터 보관
 }
 
 (() => {
-  class SenderWorker {
-    private state: SenderState | null = null;
+  class EnhancedSenderWorker {
+    private files: File[] = [];
+    private manifest: any = null;
+    private currentFileIndex = 0;
+    private currentFileOffset = 0;
     
-    // 🚨 [추가] 청크 시퀀스 추적
-    private chunkSequence: number = 0;
-    // 🚀 [최적화 2] 배치 사이즈 상수 (constants와 맞춤)
-    private readonly BATCH_SIZE = 5;
+    private totalBytesSent = 0;
+    private startTime = 0;
+    private isPaused = false;
     
-    // 🚨 [핵심 수정] 중복 실행 방지를 위한 플래그
-    private isReading = false;
-    // 🚨 [핵심 수정] 작업 중 들어온 요청을 기억하는 카운터
-    private pendingPulls = 0;
+    // 🚀 TCP Reno 스타일 혼잡 제어 변수
+    private congestion: CongestionState = {
+      windowSize: 8,        // 8개로 시작 (약 512KB)
+      threshold: 64,
+      inSlowStart: true,
+      rtt: 100,             // 초기 예상 RTT
+      rttVar: 50,
+      timeout: 3000
+    };
+
+    private pendingChunks = new Map<number, PendingChunk>(); 
+    private chunkSequence = 0; // 고유 시퀀스 번호
+    private isLoopRunning = false; // 중복 실행 방지
 
     constructor() {
       self.onmessage = this.handleMessage.bind(this);
-      self.postMessage({ type: 'ready' });
     }
 
     private handleMessage(e: MessageEvent) {
@@ -38,174 +51,198 @@ interface SenderState {
 
       switch (type) {
         case 'init':
-          // payload.config가 있으면 사용
-          this.init(payload.files, payload.manifest, payload.config);
+          this.init(payload.files, payload.manifest);
           break;
         case 'start':
-        case 'pull':
-          // 🚨 [핵심 수정] 즉시 실행하지 않고 스케줄링 요청
-          this.scheduleBatch();
+          if (!this.isLoopRunning) {
+            this.startTime = Date.now();
+            this.isPaused = false;
+            this.sendLoop(); // Push 시작
+          }
           break;
-        // 🚀 [핵심] 네트워크 상태 피드백 수신
-        case 'network-update':
-          this.adjustChunkSize(payload.bufferedAmount, payload.maxBufferedAmount);
+        case 'ack-received': 
+          this.handleAck(payload.chunkIndex);
+          break;
+        case 'network-congestion': // Main Thread가 버퍼 가득 참 알림
+          this.handleNetworkCongestion();
+          break;
+        case 'pause':
+          this.isPaused = true;
           break;
       }
     }
 
-    private init(files: File[], manifest: any, config?: any) {
-      const startSize = config?.startChunkSize || 64 * 1024;
-      const maxSize = config?.maxChunkSize || 128 * 1024;
-
-      this.state = {
-        files: files,
-        manifest: manifest,
-        currentFileIndex: 0,
-        currentFileOffset: 0,
-        totalBytesSent: 0,
-        startTime: Date.now(),
-        chunkSize: startSize,
-        minChunkSize: 16 * 1024,
-        maxChunkSize: maxSize // 🚨 안전한 최대값 적용 (128KB)
-      };
+    private init(files: File[], manifest: any) {
+      this.files = files;
+      this.manifest = manifest;
+      this.currentFileIndex = 0;
+      this.currentFileOffset = 0;
+      this.chunkSequence = 0;
+      this.totalBytesSent = 0;
+      this.pendingChunks.clear();
       
-      // 초기화 시 플래그 리셋
-      this.isReading = false;
-      this.pendingPulls = 0;
-      
-      console.log(`[Worker] Init: ChunkSize=${startSize}, Max=${maxSize}, Batch=${this.BATCH_SIZE}`);
+      // 초기화 로그
+      console.log(`[Sender] Init: ${files.length} files, ${manifest.totalSize} bytes`);
+      self.postMessage({ type: 'ready' });
     }
 
-    // 🚨 [신규] 읽기 작업 스케줄러 (Lock 시스템)
-    private async scheduleBatch() {
-        // 요청 카운트 증가
-        this.pendingPulls++;
-        
-        // 이미 읽고 있다면 대기 (중복 실행 방지)
-        if (this.isReading) return;
-        
-        this.isReading = true;
-        
-        // 대기 중인 요청이 없을 때까지 계속 처리
-        while (this.pendingPulls > 0) {
-            // 요청 하나 소모 (한 번의 pull = 한 번의 batch)
-            // *중요: Batch 처리가 너무 빠르면 큐가 쌓일 수 있으므로
-            // 여기서 pendingPulls를 0으로 초기화하지 않고 1씩 줄이거나,
-            // 혹은 한 번의 루프로 여러 pull을 퉁칠 수도 있음.
-            // 여기서는 안전하게 1 감소.
-            this.pendingPulls--;
-            
-            await this.processBatch();
-            
-            // 파일 전송이 끝났으면 루프 탈출 및 카운터 초기화
-            if (this.state && this.state.currentFileIndex >= this.state.files.length) {
-                this.pendingPulls = 0;
-                break;
+    // 🚀 [핵심] Push Loop: 윈도우가 찰 때까지 계속 보냄
+    private async sendLoop() {
+      if (this.isLoopRunning || this.isPaused) return;
+      this.isLoopRunning = true;
+
+      try {
+        while (
+          !this.isPaused && 
+          this.pendingChunks.size < this.congestion.windowSize &&
+          this.currentFileIndex < this.files.length
+        ) {
+          const chunkData = await this.readNextChunk();
+          
+          if (chunkData) {
+            this.sendChunk(chunkData);
+          } else {
+            // 파일 끝, 다음 파일로 넘어가거나 종료
+            if (this.currentFileIndex >= this.files.length) {
+              break;
             }
+          }
         }
-        
-        this.isReading = false;
-    }
-
-    private adjustChunkSize(bufferedAmount: number, maxBufferedAmount: number) {
-      if (!this.state) return;
-      // 🚀 [최적화 4] 로직 단순화: 버퍼가 여유로우면 Max까지 빠르게 증가
-      const usage = bufferedAmount / maxBufferedAmount;
-
-      if (usage < 0.2) {
-        // 버퍼 여유 -> 과감하게 증속
-        this.state.chunkSize = Math.min(this.state.chunkSize * 2, this.state.maxChunkSize);
-      } else if (usage > 0.8) {
-        // 버퍼 위험 -> 감속
-        this.state.chunkSize = Math.max(this.state.chunkSize * 0.7, this.state.minChunkSize);
-      }
-    }
-
-    // 🚀 [최적화 2] 배치 처리 루프
-    private async processBatch() {
-      if (!this.state) return;
-
-      for (let i = 0; i < this.BATCH_SIZE; i++) {
-        // 파일 끝 도달 시 루프 중단 및 완료 처리
-        if (this.state.currentFileIndex >= this.state.files.length) {
-           self.postMessage({ type: 'complete' });
-           return;
+      } catch (err) {
+        console.error('[Sender] Loop Error:', err);
+      } finally {
+        this.isLoopRunning = false;
+        // 모든 파일 읽음 + 모든 ACK 수신 = 완료
+        if (this.currentFileIndex >= this.files.length && this.pendingChunks.size === 0) {
+          self.postMessage({ type: 'complete' });
         }
-        
-        // 청크 하나 읽고 전송
-        const continued = await this.readNextChunk();
-        
-        // 읽기 중 문제 발생했거나 완료되었으면 중단
-        if (!continued) return;
       }
     }
 
-    // 단일 청크 읽기 (성공 여부 반환)
-    private async readNextChunk(): Promise<boolean> {
-      if (!this.state) return false;
+    private async readNextChunk(): Promise<ArrayBuffer | null> {
+      const file = this.files[this.currentFileIndex];
+      if (!file) return null;
 
-      const currentFile = this.state.files[this.state.currentFileIndex];
+      // 🚀 동적 청크 사이징 (RTT 기반)
+      let chunkSize = 64 * 1024; 
+      if (this.congestion.rtt < 50) chunkSize = 256 * 1024; // 아주 빠름
+      else if (this.congestion.rtt < 150) chunkSize = 128 * 1024; // 빠름
+      else if (this.congestion.rtt > 300) chunkSize = 16 * 1024; // 느림
+
+      const start = this.currentFileOffset;
+      const end = Math.min(start + chunkSize, file.size);
       
-      if (this.state.currentFileOffset >= currentFile.size) {
-        this.state.currentFileIndex++;
-        this.state.currentFileOffset = 0;
-        // 다음 파일로 넘어갈 때는 재귀 대신 true 반환하여 배치 루프에서 계속 처리
-        return true;
+      if (start >= file.size) {
+        this.currentFileIndex++;
+        this.currentFileOffset = 0;
+        return this.readNextChunk(); // 재귀 호출로 다음 파일
       }
 
-      let targetSize = Math.floor(this.state.chunkSize); // 정수 보장
-      const remainingBytes = currentFile.size - this.state.currentFileOffset;
-      const actualChunkSize = Math.min(targetSize, remainingBytes);
+      const blob = file.slice(start, end);
+      const buffer = await blob.arrayBuffer();
+      this.currentFileOffset = end;
+      return buffer;
+    }
+
+    private sendChunk(data: ArrayBuffer) {
+      const seq = this.chunkSequence++;
       
-      const start = this.state.currentFileOffset;
-      const blob = currentFile.slice(start, start + actualChunkSize);
-      const arrayBuffer = await blob.arrayBuffer();
+      // 🚀 헤더 작성 (10 Bytes)
+      // [FileIndex: 2] [Seq: 4] [DataLen: 4]
+      const header = new ArrayBuffer(10);
+      const view = new DataView(header);
+      view.setUint16(0, this.currentFileIndex, true);
+      view.setUint32(2, seq, true);
+      view.setUint32(6, data.byteLength, true);
 
-      if (arrayBuffer.byteLength === 0) {
-        this.state.currentFileOffset += actualChunkSize;
-        return true;
-      }
+      // 병합 (WebRTC 전송용)
+      const packet = new Uint8Array(10 + data.byteLength);
+      packet.set(new Uint8Array(header), 0);
+      packet.set(new Uint8Array(data), 10);
 
-      const headerSize = 6;
-      const packet = new ArrayBuffer(headerSize + arrayBuffer.byteLength);
-      const view = new DataView(packet);
-      
-      view.setUint16(0, this.state.currentFileIndex, true);
-      view.setUint32(2, arrayBuffer.byteLength, true);
-      new Uint8Array(packet, headerSize).set(new Uint8Array(arrayBuffer));
+      // ACK 대기열 등록
+      this.pendingChunks.set(seq, {
+        sentAt: Date.now(),
+        retries: 0,
+        data: data // 재전송을 위해 원본 보관
+      });
 
-      this.state.currentFileOffset += arrayBuffer.byteLength;
-      this.state.totalBytesSent += arrayBuffer.byteLength;
-      this.chunkSequence++;
-
-      const elapsed = (Date.now() - this.state.startTime) / 1000;
-      const speed = elapsed > 0 ? this.state.totalBytesSent / elapsed : 0;
-      
-      // 🚨 [안전장치] 진행률이 100%를 넘지 않도록 시각적 보정
-      let progress = this.state.manifest.totalSize > 0
-        ? (this.state.totalBytesSent / this.state.manifest.totalSize) * 100
-        : 0;
-      if (progress > 100) progress = 100;
-
+      // 메인 스레드로 전송
+      const progressData = this.calculateProgress(data.byteLength);
       self.postMessage({
         type: 'chunk-ready',
         payload: {
-          chunk: packet,
-          progressData: {
-            bytesTransferred: this.state.totalBytesSent,
-            totalBytes: this.state.manifest.totalSize,
-            speed,
-            progress,
-            currentFileIndex: this.state.currentFileIndex,
-            chunkSequence: this.chunkSequence
-          }
+          chunk: packet.buffer,
+          chunkSequence: seq,
+          progressData
         }
-      }, [packet]);
+      }, [packet.buffer]);
 
-      return true;
+      // 타임아웃 설정
+      setTimeout(() => this.checkTimeout(seq), this.congestion.timeout);
     }
 
+    private handleAck(seq: number) {
+      const pending = this.pendingChunks.get(seq);
+      if (!pending) return; // 이미 처리됨
+
+      // RTT 업데이트 (Jacobson's Algorithm)
+      const rttSample = Date.now() - pending.sentAt;
+      this.congestion.rtt = 0.875 * this.congestion.rtt + 0.125 * rttSample;
+      this.congestion.rttVar = 0.75 * this.congestion.rttVar + 0.25 * Math.abs(this.congestion.rtt - rttSample);
+      this.congestion.timeout = this.congestion.rtt + 4 * this.congestion.rttVar;
+
+      this.pendingChunks.delete(seq);
+      
+      // 🚀 AIMD: 윈도우 증가
+      if (this.congestion.inSlowStart) {
+        this.congestion.windowSize += 1;
+        if (this.congestion.windowSize >= this.congestion.threshold) {
+          this.congestion.inSlowStart = false;
+        }
+      } else {
+        // 혼잡 회피: 선형 증가 (대략적으로)
+        this.congestion.windowSize += 1 / this.congestion.windowSize;
+      }
+      
+      // 윈도우 상한선 (메모리 보호)
+      this.congestion.windowSize = Math.min(this.congestion.windowSize, 512);
+
+      // 자리가 났으니 즉시 다음 청크 전송 시도
+      this.sendLoop();
+    }
+
+    private handleNetworkCongestion() {
+      // 🚀 AIMD: 윈도우 감소 (Multiplicative Decrease)
+      this.congestion.threshold = Math.max(this.congestion.windowSize / 2, 2);
+      this.congestion.windowSize = this.congestion.threshold;
+      this.congestion.inSlowStart = false;
+      
+      // 잠시 후 재개
+      setTimeout(() => this.sendLoop(), 200);
+    }
+
+    private checkTimeout(seq: number) {
+      if (this.pendingChunks.has(seq)) {
+        // 타임아웃 발생 -> 혼잡으로 간주하고 윈도우 줄임
+        // 재전송은 SCTP(WebRTC)가 알아서 하므로 앱 레벨에선 윈도우만 조절
+        this.handleNetworkCongestion();
+      }
+    }
+
+    private calculateProgress(bytes: number) {
+      this.totalBytesSent += bytes;
+      const elapsed = (Date.now() - this.startTime) / 1000;
+      const speed = elapsed > 0 ? this.totalBytesSent / elapsed : 0;
+      
+      return {
+        bytesTransferred: this.totalBytesSent,
+        totalBytes: this.manifest.totalSize,
+        speed,
+        progress: (this.totalBytesSent / this.manifest.totalSize) * 100
+      };
+    }
   }
 
-  new SenderWorker();
+  new EnhancedSenderWorker();
 })();
