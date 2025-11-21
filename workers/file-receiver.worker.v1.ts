@@ -47,8 +47,9 @@ interface FileHandleWrapper {
     }
 
     private async processChunk(packet: ArrayBuffer) {
-      // 🚨 [추가] 최소 헤더 크기 검증 (10 bytes)
-      if (packet.byteLength < 10) {
+      // 🚨 [수정] 최소 헤더 크기 검증 (10 bytes)
+      const HEADER_SIZE = 10;
+      if (packet.byteLength < HEADER_SIZE) {
         console.warn('[ReceiverWorker] Packet too small, ignoring:', packet.byteLength);
         return;
       }
@@ -68,15 +69,17 @@ interface FileHandleWrapper {
       const seq = view.getUint32(2, true);
       const size = view.getUint32(6, true);
 
-      // 🚨 [추가] 데이터 무결성 검증
-      // 실제 패킷 크기가 헤더(10) + 데이터크기(size)와 일치하는지 확인
-      if (packet.byteLength < 10 + size) {
-        console.error(`[ReceiverWorker] Corrupted packet detected. Expected ${10 + size}, got ${packet.byteLength}. Dropping.`);
+      // 🚨 [핵심 수정] 데이터 무결성 검증 강화
+      // 실제 패킷 크기가 헤더(10) + 데이터크기(size)와 '정확히' 일치해야 함.
+      const expectedSize = HEADER_SIZE + size;
+      if (packet.byteLength !== expectedSize) {
+        console.error(`[ReceiverWorker] Corrupted packet detected. Expected ${expectedSize}, got ${packet.byteLength}. Dropping.`);
         return;
       }
       
-      // 헤더(10바이트) 이후의 데이터만 추출
-      const data = new Uint8Array(packet, 10, size);
+      // 🚨 [핵심 수정] ArrayBuffer.slice()를 사용하여 안전하게 데이터 추출 (복사본 확보)
+      const dataBuffer = packet.slice(HEADER_SIZE, expectedSize);
+      const data = new Uint8Array(dataBuffer);
       const wrapper = this.fileHandles.get(fileId);
 
       if (wrapper) {

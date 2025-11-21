@@ -240,22 +240,24 @@ class EnhancedWebRTCService {
     // 2. 바이너리 데이터 (청크) -> Receiver Worker로 전달
     if (this.worker) {
       // 🚨 [Critical Fix] Uint8Array View 문제 해결
-      // WebRTC 버퍼가 View 형태로 올 수 있으므로, 순수한 ArrayBuffer로 복제(Slice)하여 전달해야 합니다.
-      // 기존 코드: const chunk = data instanceof Uint8Array ? data.buffer : data; (오류 원인)
-      
+      // WebRTC DataChannel에서 받은 데이터는 ArrayBuffer View일 수 있으며,
+      // 이를 워커로 전달 시 데이터 무결성을 보장하기 위해 명시적으로 복사합니다.
       let chunk: ArrayBuffer;
       
       if (data instanceof Uint8Array) {
-        // View의 byteOffset과 byteLength를 고려하여 정확한 데이터만 복제
-        chunk = data.slice().buffer;
+        // View의 byteOffset과 byteLength를 고려하여 정확한 데이터만 복사
+        // SharedArrayBuffer와 ArrayBuffer를 모두 처리하기 위해 명시적 변환
+        const sourceBuffer = data.buffer as ArrayBuffer;
+        chunk = sourceBuffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       } else if (data instanceof ArrayBuffer) {
-        chunk = data;
+        // ArrayBuffer를 ArrayBuffer.slice()로 복제 (복사본을 워커로 전송)
+        chunk = data.slice(0);
       } else {
         // Node.js Buffer 등의 경우
         chunk = new Uint8Array(data).slice().buffer;
       }
 
-      // Transferable Object로 Worker에 전달 (Zero-Copy 효과를 위해 시도하되, slice()로 인해 복사는 발생함)
+      // Transferable Object로 Worker에 전달 (복사본이므로 안전함)
       this.worker.postMessage({ type: 'chunk', payload: chunk }, [chunk]);
     }
   }
