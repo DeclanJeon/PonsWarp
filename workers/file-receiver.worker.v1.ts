@@ -47,6 +47,12 @@ interface FileHandleWrapper {
     }
 
     private async processChunk(packet: ArrayBuffer) {
+      // 🚨 [추가] 최소 헤더 크기 검증 (10 bytes)
+      if (packet.byteLength < 10) {
+        console.warn('[ReceiverWorker] Packet too small, ignoring:', packet.byteLength);
+        return;
+      }
+
       const view = new DataView(packet);
       
       // 🚀 헤더 파싱 (Sender와 동일해야 함)
@@ -61,6 +67,13 @@ interface FileHandleWrapper {
 
       const seq = view.getUint32(2, true);
       const size = view.getUint32(6, true);
+
+      // 🚨 [추가] 데이터 무결성 검증
+      // 실제 패킷 크기가 헤더(10) + 데이터크기(size)와 일치하는지 확인
+      if (packet.byteLength < 10 + size) {
+        console.error(`[ReceiverWorker] Corrupted packet detected. Expected ${10 + size}, got ${packet.byteLength}. Dropping.`);
+        return;
+      }
       
       // 헤더(10바이트) 이후의 데이터만 추출
       const data = new Uint8Array(packet, 10, size);
