@@ -1,5 +1,5 @@
 import SimplePeer from 'simple-peer/simplepeer.min.js';
-import { signalingService } from './signaling';
+import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1, getReceiverWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types';
 import { logInfo, logWarn, logError } from '../utils/logger';
@@ -13,6 +13,11 @@ class EnhancedWebRTCService {
   private eventListeners: Record<string, EventHandler[]> = {};
   private roomId: string | null = null;
   private isTransferring = false;
+  
+  // 🚀 [추가] 받아온 ICE 서버 설정을 저장할 변수
+  private iceServers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' } // 기본값 (실패 시 대비)
+  ];
 
   constructor() {
     signalingService.on('offer', this.handleOffer.bind(this));
@@ -33,6 +38,9 @@ class EnhancedWebRTCService {
     this.roomId = roomId;
     await this.connectSignaling();
     await this.joinRoom(roomId);
+
+    // 🚨 [수정] TURN 서버 설정 가져오기 (비동기)
+    await this.fetchTurnConfig(roomId);
 
     this.worker = getSenderWorkerV1();
     
@@ -129,6 +137,9 @@ class EnhancedWebRTCService {
     await this.connectSignaling();
     await this.joinRoom(roomId);
 
+    // 🚨 [수정] TURN 서버 설정 가져오기 (비동기)
+    await this.fetchTurnConfig(roomId);
+
     this.worker = getReceiverWorkerV1();
     
     this.worker.onmessage = (e) => {
@@ -148,13 +159,35 @@ class EnhancedWebRTCService {
     this.emit('status', 'CONNECTING');
   }
 
+  // 🚀 [추가] 서버로부터 TURN 설정(ICE Servers)을 받아오는 함수
+  private async fetchTurnConfig(roomId: string) {
+    try {
+      console.log('[WebRTC] Requesting TURN config from server...');
+      // signalingService에 이미 구현된 requestTurnConfig 메서드 사용
+      const response: TurnConfigResponse = await signalingService.requestTurnConfig(roomId);
+      
+      if (response.success && response.data) {
+        this.iceServers = response.data.iceServers;
+        console.log('[WebRTC] ✅ Applied TURN servers:', this.iceServers);
+      }
+    } catch (error) {
+      console.warn('[WebRTC] ⚠️ Failed to fetch TURN config, using default STUN:', error);
+      // 실패해도 기본 STUN으로 계속 진행
+    }
+  }
+
   // ======================= PEER HANDLING =======================
 
   private async createPeer(initiator: boolean) {
+    console.log('[WebRTC] Creating Peer with ICE Servers:', this.iceServers);
+
     const peer = new SimplePeer({
       initiator,
       trickle: true,
-      config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+      config: {
+        // 🚨 [핵심 수정] 하드코딩된 STUN 대신, 서버에서 받아온 설정 사용
+        iceServers: this.iceServers
+      },
       channelConfig: { ordered: true } // 순서 보장 필수
     });
 
