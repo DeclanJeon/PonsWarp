@@ -4,6 +4,7 @@ import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, Fi
 import { transferService } from '../services/webRTCService';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { motion } from 'framer-motion';
+import { requestWakeLock, releaseWakeLock } from '../utils/wakeLock';
 
 interface SenderViewProps {
   onComplete: () => void;
@@ -37,6 +38,19 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
     // 최종 완료 (수신자가 저장까지 마쳤을 때)
     transferService.on('complete', () => setStatus('DONE'));
   }, []);
+
+  // 🚨 [추가] Wake Lock 적용
+  useEffect(() => {
+    // 상태가 TRANSFERRING으로 바뀌면 화면 켜짐 유지
+    if (status === 'TRANSFERRING' || status === 'CONNECTING') {
+        requestWakeLock();
+    } else if (status === 'DONE' || status === 'IDLE') {
+        releaseWakeLock();
+    }
+    
+    // 컴포넌트 언마운트 시 해제
+    return () => { releaseWakeLock(); };
+  }, [status]);
 
   // 공통 핸들러 (파일이든 폴더든 로직은 같음)
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -1,14 +1,22 @@
+// 모바일 감지 (간단한 UA 체크)
+export const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 export const APP_NAME = "PonsWarp";
 export const SIGNALING_SERVER_URL = process.env.SIGNALING_SERVER_URL;
 
-export const CHUNK_SIZE = 64 * 1024;
-export const BATCH_SIZE = 20;
+export const CHUNK_SIZE = 64 * 1024; // 64KB (유지)
 
-// 🚨 [수정] HIGH_WATER_MARK와 LOW_WATER_MARK를 합리적으로 설정
-// 초기값이 너무 작아서 버퍼가 계속 가득 차는 현상 발생
-export const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4MB (송신자와 수신자 동기화)
+// 🚀 [튜닝] 모바일 환경에 따른 동적 설정
+// 모바일은 메모리가 적으므로 배치를 작게 가져가야 튕기지 않음
+export const BATCH_SIZE = isMobile ? 12 : 80;
 
-// 🚨 [수정] 버퍼가 이 이하로 내려갈 때까지 기다림
-export const LOW_WATER_MARK = 2 * 1024 * 1024;   // 2MB (빠른 재개)
+// 🚀 [튜닝] 모바일은 4MB 정도만 버퍼링 (PC는 16MB)
+// iOS Safari는 탭당 메모리 제한이 엄격하므로 보수적으로 잡아야 함
+export const HIGH_WATER_MARK = isMobile ? 4 * 1024 * 1024 : 16 * 1024 * 1024;
+
+// 재개 시점도 낮춤
+export const LOW_WATER_MARK = isMobile ? 1 * 1024 * 1024 : 4 * 1024 * 1024;
 
 export const HEADER_SIZE = 18;
+
+console.log(`[Config] Mode: ${isMobile ? 'Mobile 📱' : 'Desktop 💻'}, Batch: ${BATCH_SIZE}, Buffer: ${HIGH_WATER_MARK / 1024 / 1024}MB`);

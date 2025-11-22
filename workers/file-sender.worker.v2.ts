@@ -3,7 +3,8 @@ declare const self: DedicatedWorkerGlobalScope;
 
 // 상수 직접 정의 (워커에서 import 문제 방지용)
 const CHUNK_SIZE = 64 * 1024; // 64KB
-const BATCH_SIZE = 20;        // 한 번에 20개씩 묶어서 전송
+// 🚨 [수정] const -> let 변경 (초기화 시 메인 스레드에서 값을 받음)
+let BATCH_SIZE = 80;        // 한 번에 80개씩 묶어서 전송 (기본값)
 
 (() => {
   class FastSenderWorker {
@@ -27,7 +28,7 @@ const BATCH_SIZE = 20;        // 한 번에 20개씩 묶어서 전송
 
       switch (type) {
         case 'init':
-          this.init(payload.files, payload.manifest);
+          this.init(payload.files, payload.manifest, payload.config);
           break;
         case 'start': // 전송 시작 또는 재개(Resume)
           console.log('[Sender Worker] Start command received, isPaused:', this.isPaused, 'startTime:', this.startTime);
@@ -45,8 +46,15 @@ const BATCH_SIZE = 20;        // 한 번에 20개씩 묶어서 전송
       }
     }
 
-    private init(files: File[], manifest: any) {
+    private init(files: File[], manifest: any, config?: any) {
       console.log('[Sender Worker] Initializing with', files.length, 'files');
+      
+      // 설정값 적용
+      if (config && config.batchSize) {
+          BATCH_SIZE = config.batchSize;
+          console.log('[Sender Worker] Applied Config - Batch Size:', BATCH_SIZE);
+      }
+
       this.files = files;
       this.manifest = manifest;
       this.currentFileIndex = 0;
@@ -68,7 +76,7 @@ const BATCH_SIZE = 20;        // 한 번에 20개씩 묶어서 전송
 
       const chunkBatch: ArrayBuffer[] = [];
       const transferables: ArrayBuffer[] = [];
-      let batchBytes = 0;
+      let batchRawBytes = 0; // 🚨 헤더 제외 순수 데이터 크기 합계
 
       // 1. 배치 사이즈만큼 청크를 읽어서 모음
       while (chunkBatch.length < BATCH_SIZE && this.currentFileIndex < this.files.length) {
@@ -80,7 +88,9 @@ const BATCH_SIZE = 20;        // 한 번에 20개씩 묶어서 전송
           // Zero-Copy: 버퍼의 소유권을 메인 스레드로 이전하기 위해 준비
           chunkBatch.push(packet.buffer);
           transferables.push(packet.buffer);
-          batchBytes += packet.byteLength;
+          
+          // 🚨 [수정] 패킷 크기가 아니라 순수 데이터 크기(chunkData.data.byteLength)만 누적
+          batchRawBytes += chunkData.data.byteLength;
         } else {
           // 파일 끝 도달, 다음 파일로 이동은 readNextChunk 내부에서 처리됨
           if (this.currentFileIndex >= this.files.length) break;
@@ -89,8 +99,9 @@ const BATCH_SIZE = 20;        // 한 번에 20개씩 묶어서 전송
 
       // 2. 메인 스레드로 "한 방에" 전송 (postMessage 오버헤드 최소화)
       if (chunkBatch.length > 0) {
-        const progress = this.calculateProgress(batchBytes);
-        console.log('[Sender Worker] Sending batch of', chunkBatch.length, 'chunks, total bytes:', batchBytes, 'totalBytesSent:', this.totalBytesSent);
+        // 🚨 [수정] 순수 데이터 크기만 전달하여 진행률 계산
+        const progress = this.calculateProgress(batchRawBytes);
+        console.log('[Sender Worker] Sending batch of', chunkBatch.length, 'chunks, raw bytes:', batchRawBytes, 'totalBytesSent:', this.totalBytesSent);
         
         self.postMessage({
           type: 'chunk-batch',
@@ -168,16 +179,20 @@ const BATCH_SIZE = 20;        // 한 번에 20개씩 묶어서 전송
       return packet; // Uint8Array 반환
     }
 
-    private calculateProgress(batchBytes: number) {
-      this.totalBytesSent += batchBytes; // 헤더 포함 크기지만 근사치로 사용
+    private calculateProgress(rawBytes: number) {
+      this.totalBytesSent += rawBytes; // 🚨 순수 파일 데이터 누적량만 저장
+      
       const elapsed = (Date.now() - this.startTime) / 1000;
       const speed = elapsed > 0 ? this.totalBytesSent / elapsed : 0;
+      
+      // 🚨 [핵심 수정] 100% 초과 방지 (Floating Point 오차 보정)
+      const percentage = Math.min(100, (this.totalBytesSent / this.manifest.totalSize) * 100);
 
       return {
         bytesTransferred: this.totalBytesSent,
         totalBytes: this.manifest.totalSize,
         speed,
-        progress: (this.totalBytesSent / this.manifest.totalSize) * 100
+        progress: percentage
       };
     }
   }

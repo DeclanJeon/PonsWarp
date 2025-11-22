@@ -3,14 +3,17 @@ declare const self: DedicatedWorkerGlobalScope;
 
 interface FileHandleWrapper {
   handle: FileSystemSyncAccessHandle;
-  written: number;
 }
 
 (() => {
   class FastReceiverWorker {
     private opfsRoot: FileSystemDirectoryHandle | null = null;
     private fileHandles: Map<number, FileHandleWrapper> = new Map();
-    private totalBytesWritten = 0;
+    
+    // 🚀 [성능 최적화] 문자열 Set 대신 정수형 Set 사용 (메모리/CPU 효율 극대화)
+    private processedSeqs: Set<number> = new Set();
+    
+    private totalBytesReceived = 0;
     private totalSize = 0;
     private lastReportTime = 0;
     private readonly HEADER_SIZE = 18;
@@ -26,109 +29,110 @@ interface FileHandleWrapper {
     }
 
     private async initStorage(manifest: any) {
-      console.log('[Receiver Worker] Initializing storage for manifest:', manifest);
       try {
         this.opfsRoot = await navigator.storage.getDirectory();
         const transferDir = await this.opfsRoot.getDirectoryHandle(manifest.transferId, { create: true });
-        console.log('[Receiver Worker] Transfer directory created:', manifest.transferId);
+        
+        // 초기화
+        this.fileHandles.clear();
+        this.processedSeqs.clear(); // Set 초기화
+        this.totalBytesReceived = 0;
 
         for (const file of manifest.files) {
-          console.log('[Receiver Worker] Processing file:', file.path, 'ID:', file.id);
-          // 폴더 생성 로직 생략 (기존과 동일)
           const pathParts = file.path.split('/');
           const fileName = pathParts.pop()!;
           let currentDir = transferDir;
-          
           for (const part of pathParts) {
-            if (part) {
-              currentDir = await currentDir.getDirectoryHandle(part, { create: true });
-            }
+            if (part) currentDir = await currentDir.getDirectoryHandle(part, { create: true });
           }
-
           const fh = await currentDir.getFileHandle(fileName, { create: true });
           const ah = await fh.createSyncAccessHandle();
-          
-          ah.truncate(file.size); // 중요: 미리 공간 할당
-          this.fileHandles.set(file.id, { handle: ah, written: 0 });
-          console.log('[Receiver Worker] File handle created for:', file.path);
+          ah.truncate(file.size);
+          this.fileHandles.set(file.id, { handle: ah });
         }
         
         this.totalSize = manifest.totalSize;
-        console.log('[Receiver Worker] Storage initialization complete. Total size:', this.totalSize);
-        
-        // 🚨 [추가] 모든 파일 핸들 생성 완료 후 "준비 완료" 신호 발송
         self.postMessage({ type: 'storage-ready' });
       } catch (error) {
-        console.error('[Receiver Worker] Storage initialization failed:', error);
         self.postMessage({ type: 'error', payload: 'Storage init failed: ' + error.message });
       }
     }
 
     private async processChunk(packet: ArrayBuffer) {
-      // 1. 최소 헤더 크기 체크
-      if (packet.byteLength < this.HEADER_SIZE) {
-        console.warn('[Receiver Worker] Chunk too small:', packet.byteLength, 'Expected at least:', this.HEADER_SIZE);
-        return;
-      }
+      if (packet.byteLength < this.HEADER_SIZE) return;
 
       const view = new DataView(packet);
-      const fileId = view.getUint16(0, true);
+      const fileId = view.getUint16(0, true); // Byte 0-2
       
-      // 2. EOS 체크
+      // EOS 체크
       if (fileId === 0xFFFF) {
-        console.log('[Receiver Worker] EOS packet received, finalizing transfer');
         await this.finalize();
         return;
       }
 
-      const offsetBigInt = view.getBigUint64(6, true);
-      const size = view.getUint32(14, true);
+      // 🚀 [성능 최적화] 헤더에서 시퀀스 번호(Seq) 추출 (Byte 2-6)
+      // Sender가 이미 보내고 있던 고유 번호입니다.
+      const seq = view.getUint32(2, true);
 
-      console.log('[Receiver Worker] Processing chunk - FileID:', fileId, 'Offset:', Number(offsetBigInt), 'Size:', size);
-
-      const wrapper = this.fileHandles.get(fileId);
-      if (wrapper) {
-        try {
-          // 🚀 [최적화] Zero-Copy: slice() 대신 subarray() 사용
-          // packet은 Transferable로 넘어왔으므로 여기서 소유권을 가짐
-          // Uint8Array 뷰만 생성하여 메모리 복사 없이 전달
-          const dataView = new Uint8Array(packet, this.HEADER_SIZE, size);
-          
-          // OPFS SyncHandle은 ArrayBufferView를 받아 즉시 씀
-          wrapper.handle.write(dataView, { at: Number(offsetBigInt) });
-          
-          wrapper.written += size;
-          this.totalBytesWritten += size;
-          
-          console.log('[Receiver Worker] Chunk written successfully. Total written:', this.totalBytesWritten, '/', this.totalSize);
-          
-          // 🚀 [삭제됨] ACK 전송 로직 제거 (가장 큰 병목 해결)
-          
-        } catch (writeError) {
-          console.error('[Receiver Worker] Write error:', writeError);
-        }
+      // 🚨 [핵심] 정수형 비교는 문자열 비교보다 압도적으로 빠릅니다.
+      if (this.processedSeqs.has(seq)) {
+        // 중복 패킷은 무시하되, 쓰기 작업은 안전을 위해 수행할 수도 있으나
+        // 속도가 중요하다면 여기서 바로 return 하는 것이 가장 빠릅니다.
+        // 하지만 "Sender보다 진행률이 앞서는 문제"를 해결하는 것이 주 목적이므로
+        // 쓰기는 허용하되 '카운팅'만 막습니다.
       } else {
-        console.warn('[Receiver Worker] No file handle found for file ID:', fileId, 'Available IDs:', Array.from(this.fileHandles.keys()));
+        // 새로운 패킷임 -> Set에 추가
+        this.processedSeqs.add(seq);
+        
+        const offsetBigInt = view.getBigUint64(6, true);
+        const size = view.getUint32(14, true);
+
+        const wrapper = this.fileHandles.get(fileId);
+        if (wrapper) {
+          try {
+            // Zero-Copy Write
+            const dataView = new Uint8Array(packet, this.HEADER_SIZE, size);
+            wrapper.handle.write(dataView, { at: Number(offsetBigInt) });
+            
+            // 🚨 유효한 패킷일 때만 진행률 증가
+            this.totalBytesReceived += size;
+            
+            // 100% 초과 방지 클램핑
+            if (this.totalBytesReceived > this.totalSize) {
+               this.totalBytesReceived = this.totalSize;
+            }
+          } catch (writeError) {
+            console.error('[Receiver Worker] Write error:', writeError);
+          }
+        }
       }
       
-      // 진행률 보고 (쓰로틀링: 200ms)
+      // 메모리 관리: Set이 너무 커지면(예: 100만개 이상) 오래된 것 비우기 고려 가능하나,
+      // 정수형 Set 100만개는 약 30~40MB 수준이라 최신 브라우저에서는 문제없음.
+      
       const now = Date.now();
       if (now - this.lastReportTime > 200) {
-        const progress = this.totalSize > 0 ? (this.totalBytesWritten / this.totalSize) * 100 : 0;
-        console.log('[Receiver Worker] Progress:', progress.toFixed(2) + '%');
-        self.postMessage({ type: 'progress', payload: { progress } });
+        this.reportProgress();
         this.lastReportTime = now;
       }
     }
 
+    private reportProgress() {
+      const progress = this.totalSize > 0 
+        ? (this.totalBytesReceived / this.totalSize) * 100 
+        : 0;
+      
+      self.postMessage({ type: 'progress', payload: { progress } });
+    }
+
     private async finalize() {
-      let actualSize = 0;
       for (const w of this.fileHandles.values()) {
         w.handle.flush();
         w.handle.close();
-        actualSize += w.written;
       }
-      self.postMessage({ type: 'complete', payload: { actualSize } });
+      
+      self.postMessage({ type: 'progress', payload: { progress: 100 } });
+      self.postMessage({ type: 'complete', payload: { actualSize: this.totalBytesReceived } });
     }
   }
   new FastReceiverWorker();

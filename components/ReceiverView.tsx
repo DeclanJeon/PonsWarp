@@ -3,6 +3,7 @@ import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck }
 import { transferService } from '../services/webRTCService';
 import streamSaver from 'streamsaver';
 import * as fflate from 'fflate';
+import { requestWakeLock, releaseWakeLock } from '../utils/wakeLock';
 
 // 🚨 [수정] StreamSaver 초기화 - MessageChannel 오류 해결
 try {
@@ -135,6 +136,19 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
 
     return () => transferService.cleanup();
   }, [autoRoomId]);
+
+  // 🚨 [추가] Wake Lock 적용
+  useEffect(() => {
+    // 상태가 RECEIVING 또는 PROCESSING으로 바뀌면 화면 켜짐 유지
+    if (status === 'RECEIVING' || status === 'PROCESSING') {
+        requestWakeLock();
+    } else if (status === 'DONE' || status === 'SAVED' || status === 'ERROR' || status === 'SCANNING') {
+        releaseWakeLock();
+    }
+    
+    // 컴포넌트 언마운트 시 해제
+    return () => { releaseWakeLock(); };
+  }, [status]);
 
   const handleJoin = async (id: string) => {
     setStatus('CONNECTING');

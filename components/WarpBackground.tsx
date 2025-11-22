@@ -1,6 +1,7 @@
 import React, { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { isMobile } from '../constants';
 
 const StarField = ({ count = 4000, warpActive = false }) => {
   const mesh = useRef<THREE.Points>(null);
@@ -91,13 +92,16 @@ interface WarpBackgroundProps {
 
 const WarpBackground: React.FC<WarpBackgroundProps> = ({ intensity = 'low' }) => {
   const warpActive = intensity === 'hyper' || intensity === 'high';
+  
+  // 🚨 [튜닝] 모바일이면 파티클 수를 대폭 줄임 (6000 -> 1200)
+  const particleCount = isMobile ? 1200 : 6000;
 
   return (
     <div className="fixed inset-0 z-[-1] bg-black">
       <Canvas camera={{ position: [0, 0, 50], fov: 75 }}>
         <color attach="background" args={['#000000']} />
         <fog attach="fog" args={['#000000', 100, 1000]} />
-        <StarField count={6000} warpActive={warpActive} />
+        <StarField count={particleCount} warpActive={warpActive} />
         <WarpTunnel warpActive={warpActive} />
         
         {/* Radial Burst Core for Warp Effect */}
