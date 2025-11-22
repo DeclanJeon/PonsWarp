@@ -3,9 +3,13 @@ import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1, getReceiverWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types';
 import { logInfo, logWarn, logError } from '../utils/logger';
-import { MAX_BUFFERED_AMOUNT, HEADER_SIZE } from '../constants';
+import { HIGH_WATER_MARK, LOW_WATER_MARK, HEADER_SIZE, BATCH_SIZE } from '../constants';
 
 type EventHandler = (data: any) => void;
+
+// 🚨 [설정] 큐 제한 설정 (메모리 폭발 방지)
+// 100개 * 64KB = 약 6.4MB까지만 메모리에 허용
+const MAX_QUEUE_SIZE = 100;
 
 class EnhancedWebRTCService {
   private peer: SimplePeer.Instance | null = null;
@@ -14,6 +18,13 @@ class EnhancedWebRTCService {
   private roomId: string | null = null;
   private isTransferring = false;
   private isSender = false; // 🚨 [추가] Sender/Receiver 구분
+  
+  // 🚀 [추가] 전송 실패한 청크를 잠시 보관할 큐
+  private pendingQueue: ArrayBuffer[] = [];
+  private isDraining = false; // 현재 버퍼 비우기 대기 중인지 여부
+  
+  // 🚨 [추가] 송신자가 모든 청크 전송 완료 후 수신자의 완료 신호를 기다리기 위한 플래그
+  private awaitingReceiverComplete = false;
   
   private iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' }
@@ -50,8 +61,9 @@ class EnhancedWebRTCService {
       if (type === 'ready') {
         this.worker!.postMessage({ type: 'init', payload: { files, manifest } });
       }
-      else if (type === 'chunk-ready') {
-        this.handleChunkFromWorker(payload);
+      else if (type === 'chunk-batch') {
+        // 🚀 [수정] 단일 chunk가 아니라 chunk-batch 처리
+        this.handleBatchFromWorker(payload.chunks, payload.progressData);
       }
       else if (type === 'complete') {
         this.finishTransfer();
@@ -64,55 +76,193 @@ class EnhancedWebRTCService {
 
   private pendingManifest: TransferManifest | null = null;
 
-  private handleChunkFromWorker(payload: any) {
-    if (!this.peer || this.peer.destroyed) {
-      // console.warn('[Sender] Peer destroyed, stopping worker');
+  // 🚀 [수정] 배치 전송 핸들러
+  private handleBatchFromWorker(chunks: ArrayBuffer[], progressData: any) {
+    if (!this.peer || this.peer.destroyed) return;
+
+    // 1. 큐가 너무 많으면 "워커 정지" 명령 후 리턴
+    // (메인 스레드 부하 방지 핵심: 큐가 넘치면 아예 처리를 미룸)
+    if (this.pendingQueue.length > MAX_QUEUE_SIZE) {
+      console.warn(`[Sender] ⚠️ Queue full (${this.pendingQueue.length}). Pausing worker.`);
+      
+      // 워커에게 "멈춰!" 신호 전송
       this.worker?.postMessage({ type: 'pause' });
+      
+      // 받은 데이터는 버리지 않고 큐에 저장
+      this.pendingQueue.push(...chunks);
+      
+      // 배수 시스템(Drain) 가동
+      const channel = this.peer._channel as RTCDataChannel;
+      if (channel) this.setupDrainHandler(channel);
+      
       return;
     }
+
+    // 2. 정상 범위라면 UI 업데이트 및 전송 시도
+    // (진행률은 여기서 업데이트해야 사용자가 "전송 중"임을 알 수 있음)
+    this.emit('progress', progressData);
+    console.log('[Sender] Progress emitted from worker batch:', progressData.progress.toFixed(1) + '%');
     
-    try {
-      // @ts-ignore
-      const channel = this.peer._channel as RTCDataChannel;
+    // 실제 전송 로직 호출
+    this.processSend(chunks);
+  }
+
+  // 🚀 [수정] 실제 전송 및 흐름 제어
+  private processSend(chunks: ArrayBuffer[]) {
+    // @ts-ignore
+    const channel = this.peer?._channel as RTCDataChannel;
+    
+    // 채널 상태 체크
+    if (!channel || channel.readyState !== 'open') {
+      this.pendingQueue.push(...chunks);
+      return;
+    }
+
+    // 3. 네트워크 버퍼가 찼거나, 이미 큐에 밀린 게 있다면 -> "전송 중단 & 큐 적재"
+    if (this.pendingQueue.length > 0 || channel.bufferedAmount > HIGH_WATER_MARK) {
+      this.pendingQueue.push(...chunks);
       
-      // 🚨 [핵심 수정] 버퍼가 가득 찬 경우 전송 중단
-      if (channel && channel.bufferedAmount > MAX_BUFFERED_AMOUNT) {
-        // console.warn('[Sender] Buffer full, pausing. Buffered:', channel.bufferedAmount);
-        this.worker?.postMessage({ type: 'network-congestion' });
-        this.worker?.postMessage({ type: 'pause' });
-        
-        // 버퍼가 비워질 때까지 대기 후 재개
-        const waitForBuffer = () => {
-          if (this.peer && !this.peer.destroyed && channel.bufferedAmount < MAX_BUFFERED_AMOUNT / 2) {
-            // console.log('[Sender] Buffer cleared, resuming');
-            this.worker?.postMessage({ type: 'start' });
-          } else if (this.peer && !this.peer.destroyed) {
-            setTimeout(waitForBuffer, 100);
-          }
-        };
-        setTimeout(waitForBuffer, 100);
-        return; // 전송 중단
+      if (this.worker) this.worker.postMessage({ type: 'pause' });
+      this.setupDrainHandler(channel);
+      return;
+    }
+
+    // 4. 쾌적한 상태라면 -> "즉시 전송"
+    try {
+      for (const chunk of chunks) {
+        // 루프 도는 중에도 버퍼 체크 (안전장치)
+        if (channel.bufferedAmount > HIGH_WATER_MARK) {
+           throw new Error('Buffer full');
+        }
+        this.peer.send(chunk);
       }
-
-      this.peer.send(payload.chunk);
-      this.emit('progress', payload.progressData);
-
     } catch (e) {
-      logWarn('[Sender]', 'Send failed, stopping worker', e);
+      // 보내다 막히면 나머지는 큐에 넣고 드레인 모드 전환
+      console.log('[Sender] Buffer filled up. Switching to queue mode.');
+      this.pendingQueue.push(...chunks);
       this.worker?.postMessage({ type: 'pause' });
+      this.setupDrainHandler(channel);
     }
   }
 
+  // 🚀 [신규] 새 청크 전송 헬퍼 메서드
+  private sendNewChunks(chunks: ArrayBuffer[], progressData?: any, channel?: RTCDataChannel) {
+    if (!channel) {
+      // @ts-ignore
+      channel = this.peer?._channel as RTCDataChannel;
+    }
+    
+    if (!channel || channel.readyState !== 'open') {
+      console.log('[Sender] Cannot send new chunks - channel not ready');
+      return;
+    }
+
+    try {
+      let sentCount = 0;
+      for (const chunk of chunks) {
+        if (channel.bufferedAmount > HIGH_WATER_MARK) {
+          console.log('[Sender] Buffer exceeded, throwing error at chunk', sentCount, 'of', chunks.length);
+          throw new Error('Buffer full during new chunk send');
+        }
+        this.peer.send(chunk);
+        sentCount++;
+      }
+      
+      // 🚨 [핵심 수정] 모두 성공했다면 진행률 업데이트
+      if (progressData) {
+        console.log('[Sender] All chunks sent successfully, emitting progress:', progressData.progress.toFixed(1) + '%');
+        this.emit('progress', progressData);
+      }
+      
+      console.log('[Sender] New chunks sent successfully:', sentCount, 'chunks');
+    } catch (error) {
+      console.log('[Sender] Buffer full during send, queuing chunks. Current buffered:', channel.bufferedAmount, 'HIGH_WATER_MARK:', HIGH_WATER_MARK);
+      this.pendingQueue.push(...chunks);
+      this.worker?.postMessage({ type: 'pause' });
+      this.setupDrainHandler(channel);
+    }
+  }
+
+  // 🚀 [수정] 드레인 핸들러 (큐 비우기 로직)
+  private setupDrainHandler(channel: RTCDataChannel) {
+    if (this.isDraining) return;
+    this.isDraining = true;
+    
+    // 버퍼가 이 밑으로 떨어져야 다시 전송 시작
+    channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
+    
+    channel.onbufferedamountlow = () => {
+      // 1. 네트워크 공간이 생김 -> 큐에 있는거 밀어넣기
+      // 한 번에 너무 많이 보내면 또 막히므로 적당히(MAX_QUEUE_SIZE만큼) 보냄
+      const processCount = Math.min(this.pendingQueue.length, MAX_QUEUE_SIZE);
+      
+      if (processCount > 0) {
+         // 큐에서 꺼내서 전송
+         const batch = this.pendingQueue.splice(0, processCount);
+         try {
+           for (const chunk of batch) {
+             this.peer!.send(chunk);
+           }
+           console.log(`[Sender] Drained ${batch.length} chunks. Remaining: ${this.pendingQueue.length}`);
+         } catch (e) {
+           // 보내다가 또 실패하면 다시 맨 앞에 쑤셔넣음 (Unshift)
+           console.warn('[Sender] Drain failed, putting back to queue');
+           this.pendingQueue.unshift(...batch);
+           return; // 다음 low 이벤트 대기
+         }
+      }
+
+      // 2. 상태 점검
+      if (this.pendingQueue.length === 0) {
+        // 큐가 싹 비워짐 -> 워커 다시 가동!
+        console.log('[Sender] Queue drained completely. Resuming worker.');
+        this.isDraining = false;
+        channel.onbufferedamountlow = null; // 핸들러 해제
+        this.worker?.postMessage({ type: 'start' });
+      } else {
+        // 아직 큐에 남았으면 -> 핸들러 유지하고 계속 비우기 시도
+        // (onbufferedamountlow는 threshold 이하일 때 반복 호출되지 않을 수 있으므로
+        //  버퍼가 이미 낮다면 수동으로 다시 트리거해야 할 수도 있음)
+        if (channel.bufferedAmount < LOW_WATER_MARK) {
+           // 재귀 호출 대신 약간의 지연 후 다시 체크
+           setTimeout(() => {
+              if (this.isDraining && channel.onbufferedamountlow) {
+                  channel.onbufferedamountlow(new Event('bufferedamountlow'));
+              }
+           }, 10);
+        }
+      }
+    };
+  }
+
+  // 백프레셔 상태 체크용 (단순화 - 더 이상 사용하지 않음)
+  private checkBackpressure() {
+    // 이 메서드는 더 이상 사용하지 않음 (processSend에서 모두 처리)
+    console.log('[Sender] checkBackpressure called (deprecated)');
+  }
+
   private startTransferSequence() {
-    if (!this.peer || !this.pendingManifest) return;
+    if (!this.peer || !this.pendingManifest) {
+      console.error('[Sender] Cannot start transfer sequence - peer or manifest missing');
+      return;
+    }
 
-    this.peer.send(JSON.stringify({ type: 'MANIFEST', manifest: this.pendingManifest }));
+    // Manifest 전송
+    const manifestData = JSON.stringify({ type: 'MANIFEST', manifest: this.pendingManifest });
+    console.log('[Sender] Sending Manifest:', manifestData.length, 'bytes');
+    console.log('[Sender] Data channel state before send:', this.peer._channel?.readyState);
+    
+    try {
+      this.peer.send(manifestData);
+      console.log('[Sender] Manifest sent successfully');
+    } catch (error) {
+      console.error('[Sender] Failed to send manifest:', error);
+      return;
+    }
 
-    setTimeout(() => {
-      this.isTransferring = true;
-      this.worker?.postMessage({ type: 'start' });
-      this.emit('status', 'TRANSFERRING');
-    }, 600);
+    this.emit('status', 'WAITING_FOR_RECEIVER'); // 상태 업데이트
+    console.log('[Sender] Manifest sent, waiting for TRANSFER_READY signal');
+    // 🚨 setTimeout 삭제함. 이제 수신자의 응답을 기다림.
   }
 
   private async finishTransfer() {
@@ -132,7 +282,13 @@ class EnhancedWebRTCService {
     
     logInfo('[Sender]', 'All chunks sent. Waiting for receiver confirmation.');
     
+    // 🚨 [핵심 수정] 수신자의 완료 신호를 기다리기 (DOWNLOAD_COMPLETE)
+    // 이제 이 상태에서 수신자로부터 DOWNLOAD_COMPLETE 신호를 기다린다.
+    // 수신자가 모든 파일을 저장하고 신호를 보낼 때까지 기다린다.
+    this.awaitingReceiverComplete = true;
     this.emit('remote-processing', true);
+    // 🚨 [중요] 여기서는 complete 이벤트를 발생시키지 않는다!
+    // DOWNLOAD_COMPLETE 신호를 받은 후에 발생시킨다.
     this.isTransferring = false;
   }
 
@@ -151,6 +307,7 @@ class EnhancedWebRTCService {
   // ======================= RECEIVER LOGIC =======================
 
   public async initReceiver(roomId: string) {
+    console.log('[Receiver] Initializing receiver for room:', roomId);
     this.cleanup();
     this.isSender = false; // 🚨 [추가] Receiver로 설정
     this.roomId = roomId;
@@ -160,9 +317,11 @@ class EnhancedWebRTCService {
     await this.fetchTurnConfig(roomId);
 
     this.worker = getReceiverWorkerV1();
+    console.log('[Receiver] Worker created');
     
     this.worker.onmessage = (e) => {
       const { type, payload } = e.data;
+      console.log('[Receiver] Message from worker:', type);
       
       if (type === 'ack') {
         // 💡 [수정] Worker에서 받은 seq를 Sender에게 전송
@@ -176,9 +335,21 @@ class EnhancedWebRTCService {
       }
       else if (type === 'progress') this.emit('progress', payload);
       else if (type === 'complete') this.emit('complete', payload);
+      // 🚨 [추가] 워커가 저장소 준비 완료를 알리면 -> 송신자에게 "데이터 보내!" 신호 전송
+      else if (type === 'storage-ready') {
+        console.log('[Receiver] Storage ready. Signaling sender to start.');
+        if (this.peer && !this.peer.destroyed) {
+          const msg = JSON.stringify({ type: 'TRANSFER_READY' });
+          console.log('[Receiver] Sending TRANSFER_READY signal to sender');
+          this.peer.send(msg);
+        } else {
+          console.error('[Receiver] Cannot send TRANSFER_READY - peer not available');
+        }
+      }
     };
 
     this.emit('status', 'CONNECTING');
+    console.log('[Receiver] Initialization complete, waiting for peer connection');
   }
 
   private async fetchTurnConfig(roomId: string) {
@@ -207,16 +378,21 @@ class EnhancedWebRTCService {
       channelConfig: { ordered: true },
     } as any); 
 
-    const forceArrayBuffer = () => {
+    // 데이터 채널 설정을 통합
+    const setupDataChannel = () => {
       // @ts-ignore
-      if (peer._channel && peer._channel.binaryType !== 'arraybuffer') {
+      if (peer._channel) {
         // @ts-ignore
         peer._channel.binaryType = 'arraybuffer';
-        // console.log('[WebRTC] Forced binaryType = arraybuffer');
+        console.log('[WebRTC] Data channel setup complete, binaryType:', peer._channel.binaryType, 'state:', peer._channel.readyState);
       }
     };
 
-    if (initiator) forceArrayBuffer();
+    if (initiator) {
+      console.log('[WebRTC] Initiator peer created');
+    } else {
+      console.log('[WebRTC] Receiver peer created');
+    }
 
     peer.on('signal', data => {
       if (data.type === 'offer') signalingService.sendOffer(this.roomId!, data);
@@ -225,9 +401,23 @@ class EnhancedWebRTCService {
     });
 
     peer.on('connect', () => {
-      forceArrayBuffer(); 
+      console.log('[WebRTC] Peer connected, setting up data channel');
+      // 양쪽 모두 데이터 채널 설정
+      setupDataChannel();
+      
+      // 데이터 채널이 완전히 열릴 때까지 잠시 대기 후 설정 확인
+      setTimeout(() => {
+        console.log('[WebRTC] Data channel state after delay:', peer._channel?.readyState);
+        console.log('[WebRTC] Data channel binaryType after delay:', peer._channel?.binaryType);
+      }, 100);
+      
       this.emit('connected', true);
-      if (initiator) this.startTransferSequence();
+      if (initiator) {
+        // 송신자는 데이터 채널 설정 후 약간의 지연을 두고 전송 시작
+        setTimeout(() => {
+          this.startTransferSequence();
+        }, 200);
+      }
     });
 
     peer.on('data', (data: any) => {
@@ -240,14 +430,15 @@ class EnhancedWebRTCService {
                        data instanceof Uint8Array ? data.byteLength :
                        typeof data === 'string' ? data.length : 0;
       
-      // console.log('[WebRTC] Data received:', {
-      //   type: dataType,
-      //   size: dataSize,
-      //   isString: typeof data === 'string',
-      //   firstBytes: data instanceof Uint8Array ? Array.from(data.slice(0, 4)) : 'N/A'
-      // });
+      console.log('[WebRTC] Data received:', {
+        type: dataType,
+        size: dataSize,
+        isString: typeof data === 'string',
+        firstBytes: data instanceof Uint8Array ? Array.from(data.slice(0, 4)) : 'N/A',
+        isSender: this.isSender
+      });
 
-      // 1. JSON 메시지 처리 (Manifest, ACK, DOWNLOAD_COMPLETE)
+      // 1. JSON 메시지 처리 (Manifest, ACK, DOWNLOAD_COMPLETE, TRANSFER_READY)
       // 🚨 [핵심 수정] Uint8Array가 JSON일 수 있음 - 먼저 JSON 파싱 시도
       if (typeof data === 'string') {
         try {
@@ -267,7 +458,25 @@ class EnhancedWebRTCService {
           }
           if (msg.type === 'DOWNLOAD_COMPLETE') {
             logInfo('[Sender]', 'Receiver confirmed download complete!');
-            this.emit('complete', true);
+            // 🚨 [핵심] 수신자의 완료 신호를 받았을 때만 complete 이벤트 발생
+            if (this.awaitingReceiverComplete) {
+              console.log('[Sender] Received DOWNLOAD_COMPLETE from receiver, emitting complete event');
+              this.awaitingReceiverComplete = false;
+              this.emit('complete', true);
+            }
+            return;
+          }
+          // 🚨 [추가] 수신자가 준비되었다는 신호를 보내면 전송 시작
+          if (msg.type === 'TRANSFER_READY') {
+            console.log('[Sender] Receiver is ready! Starting transfer.');
+            this.isTransferring = true;
+            this.emit('status', 'TRANSFERRING');
+            if (this.worker) {
+              console.log('[Sender] Sending start message to worker');
+              this.worker.postMessage({ type: 'start' }); // 워커 가동
+            } else {
+              console.error('[Sender] Worker not available to start transfer');
+            }
             return;
           }
         } catch (e) {
@@ -280,7 +489,13 @@ class EnhancedWebRTCService {
       if (data instanceof Uint8Array) {
         // JSON인지 확인: 첫 바이트가 { (123) 또는 [ (91)이면 JSON 가능성
         const firstByte = data[0];
-        if (firstByte === 123 || firstByte === 91) { // '{' or '['
+        // 🚨 [수정] JSON 파싱 시도 조건 강화
+        // 파일 청크는 헤더(18바이트) + 데이터이므로 보통 큽니다.
+        // 시그널링 JSON 메시지는 보통 작습니다 (1KB 미만).
+        // 따라서 1KB 미만이고 시작 문자가 '{'일 때만 파싱을 시도하여 오동작 방지
+        const isPotentialJson = (firstByte === 123 || firstByte === 91) && data.byteLength < 1024;
+        
+        if (isPotentialJson) { // '{' or '[' and small size
           try {
             const textDecoder = new TextDecoder();
             const jsonString = textDecoder.decode(data);
@@ -301,7 +516,25 @@ class EnhancedWebRTCService {
             }
             if (msg.type === 'DOWNLOAD_COMPLETE') {
               logInfo('[Sender]', 'Receiver confirmed download complete!');
-              this.emit('complete', true);
+              // 🚨 [핵심] 수신자의 완료 신호를 받았을 때만 complete 이벤트 발생
+              if (this.awaitingReceiverComplete) {
+                console.log('[Sender] Received DOWNLOAD_COMPLETE from receiver, emitting complete event');
+                this.awaitingReceiverComplete = false;
+                this.emit('complete', true);
+              }
+              return;
+            }
+            // 🚨 [추가] 수신자가 준비되었다는 신호를 보내면 전송 시작
+            if (msg.type === 'TRANSFER_READY') {
+              console.log('[Sender] Receiver is ready! Starting transfer.');
+              this.isTransferring = true;
+              this.emit('status', 'TRANSFERRING');
+              if (this.worker) {
+                console.log('[Sender] Sending start message to worker');
+                this.worker.postMessage({ type: 'start' }); // 워커 가동
+              } else {
+                console.error('[Sender] Worker not available to start transfer');
+              }
               return;
             }
           } catch (e) {
@@ -387,6 +620,7 @@ class EnhancedWebRTCService {
     this.worker = null;
     this.isTransferring = false;
     this.isSender = false; // 🚨 [추가] 역할 리셋
+    this.awaitingReceiverComplete = false; // 🚨 [추가] 플래그 리셋
   }
 }
 
