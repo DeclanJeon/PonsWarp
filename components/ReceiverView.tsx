@@ -38,12 +38,14 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     // 🚨 [추가] 송신자가 시작했다는 신호를 받으면 대기 상태 해제
     transferService.on('remote-started', () => {
         setIsWaitingForSender(false);
-        setProcessMsg('Sender started transfer...');
+        // 상태가 아직 RECEIVING으로 안 넘어갔다면 강제 전환 (안전장치)
+        setStatus((prev) => prev === 'WAITING' ? 'RECEIVING' : prev);
     });
 
     transferService.on('progress', (p: any) => {
-      // 🚨 [보완] 혹시 remote-started 이벤트를 놓쳤더라도 데이터가 들어오면 대기 해제
       setIsWaitingForSender(false);
+      // 데이터가 들어오면 무조건 RECEIVING 상태여야 함
+      setStatus('RECEIVING');
       
       const val = typeof p === 'object' ? p.progress : p;
       setProgress(isNaN(val) ? 0 : val);
@@ -165,8 +167,20 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
   const safeProgress = isNaN(progress) || progress < 0 ? 0 : progress;
   const strokeDashoffset = 283 - (283 * safeProgress) / 100;
 
+  // 🚀 [UI 컴포넌트 분리] 대기 화면 (재사용성)
+  const renderWaitingForSender = () => (
+    <div className="bg-black/80 p-8 rounded-3xl border border-yellow-500/30 text-center w-full max-w-md animate-pulse">
+        <Loader2 className="w-16 h-16 text-yellow-500 animate-spin mx-auto mb-6" />
+        <h3 className="text-2xl font-bold mb-2 text-white">Contacting Sender...</h3>
+        <p className="text-yellow-400/80 mb-2 font-mono">Requesting Data Transfer</p>
+        <p className="text-gray-500 text-sm">Please wait for the sender to accept...</p>
+    </div>
+  );
+
   return (
     <div className="flex flex-col items-center justify-center h-full w-full max-w-md mx-auto p-6">
+      
+      {/* 1. SCANNING */}
       {status === 'SCANNING' && (
         <div className="bg-black/80 p-8 rounded-3xl border border-gray-800 text-center w-full">
           <Scan className="w-16 h-16 text-cyan-500 mx-auto mb-4 animate-pulse" />
@@ -183,6 +197,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         </div>
       )}
 
+      {/* 2. CONNECTING */}
       {status === 'CONNECTING' && (
         <div className="text-center w-full">
           <Loader2 className="w-16 h-16 text-cyan-500 animate-spin mx-auto mb-4" />
@@ -194,44 +209,43 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         </div>
       )}
 
+      {/* 3. WAITING (File Info) */}
       {status === 'WAITING' && (
-        <div className="bg-black/80 p-8 rounded-3xl border border-gray-800 text-center w-full">
-          <Archive className="w-16 h-16 text-cyan-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-white mb-2">Incoming Transfer</h2>
-          <p className="text-gray-400 text-sm mb-6">
-            {manifest?.totalFiles === 1 ? manifest?.files[0]?.name : `${manifest?.totalFiles} files`}
-          </p>
-          <p className="text-gray-500 text-sm mb-6">
-            Size: {manifest ? (manifest.totalSize / (1024 * 1024)).toFixed(2) : '0'} MB
-          </p>
-          
-          {errorMsg && (
-            <div className="mb-4 p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-sm text-red-200 flex items-center gap-2">
-              <AlertCircle size={16} />
-              {errorMsg}
-            </div>
-          )}
+        // 🚨 [핵심 수정] isWaitingForSender가 true이면 카드를 숨기고 로더를 보여줌
+        isWaitingForSender ? renderWaitingForSender() : (
+            <div className="bg-black/80 p-8 rounded-3xl border border-gray-800 text-center w-full">
+            <Archive className="w-16 h-16 text-cyan-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-white mb-2">Incoming Transfer</h2>
+            <p className="text-gray-400 text-sm mb-6">
+                {manifest?.totalFiles === 1 ? manifest?.files[0]?.name : `${manifest?.totalFiles} files`}
+            </p>
+            <p className="text-gray-500 text-sm mb-6">
+                Size: {manifest ? (manifest.totalSize / (1024 * 1024)).toFixed(2) : '0'} MB
+            </p>
+            
+            {errorMsg && (
+                <div className="mb-4 p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-sm text-red-200 flex items-center gap-2 text-left">
+                <AlertCircle size={16} className="flex-shrink-0" />
+                <span>{errorMsg}</span>
+                </div>
+            )}
 
-          <button
-            onClick={startDirectDownload}
-            className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-gray-200 flex items-center gap-2 mx-auto transition-colors"
-          >
-            <Download size={20} />
-            Start Download
-          </button>
-        </div>
+            <button
+                onClick={startDirectDownload}
+                className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-gray-200 flex items-center gap-2 mx-auto transition-colors w-full justify-center"
+            >
+                <Download size={20} />
+                Start Download
+            </button>
+            </div>
+        )
       )}
 
+      {/* 4. RECEIVING */}
       {status === 'RECEIVING' && (
         <div className="text-center w-full">
-          {/* 🚨 [수정] 대기 상태일 때와 실제 전송 중일 때 UI 분기 */}
-          {isWaitingForSender ? (
-            <div className="animate-pulse">
-                <Loader2 className="w-16 h-16 text-yellow-500 animate-spin mx-auto mb-4" />
-                <h3 className="text-xl font-bold mb-2 text-yellow-500">Waiting for Sender...</h3>
-                <p className="text-gray-400 mb-6">Request sent. Waiting for sender to start...</p>
-            </div>
-          ) : (
+          {/* 혹시 RECEIVING 상태로 넘어왔는데 아직 Handshake 중일 경우 대비 */}
+          {isWaitingForSender ? renderWaitingForSender() : (
             <>
                 <h3 className="text-xl font-bold mb-2">Receiving Data</h3>
                 <p className="text-cyan-400 mb-6 truncate px-4">{manifest?.rootName || 'Downloading files...'}</p>
@@ -268,11 +282,11 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
                 </div>
             </>
           )}
-          
           <p className="text-gray-500 text-sm">{isWaitingForSender ? 'Waiting for sender to respond...' : 'Downloading directly to your device...'}</p>
         </div>
       )}
 
+      {/* 5. DONE */}
       {status === 'DONE' && (
         <div className="text-center p-8 bg-green-900/20 rounded-3xl border border-green-500/30 w-full">
           <FileCheck className="w-24 h-24 text-green-500 mx-auto mb-6" />
@@ -285,7 +299,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
               Total size: {(actualSize / (1024 * 1024)).toFixed(2)} MB
             </p>
           )}
-          <button 
+          <button
             onClick={() => window.location.reload()}
             className="bg-cyan-600 text-white px-8 py-3 rounded-full font-bold hover:bg-cyan-500 transition-colors"
           >
@@ -294,6 +308,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         </div>
       )}
 
+      {/* 6. ERROR */}
       {status === 'ERROR' && (
         <div className="text-center p-8 bg-red-900/20 rounded-3xl border border-red-500/30 w-full">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
