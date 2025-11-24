@@ -20,6 +20,9 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
   const [processMsg, setProcessMsg] = useState('Getting file ready...');
   const [progressData, setProgressData] = useState({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
   
+  // 🚨 [추가] 송신자 응답 대기 상태 변수
+  const [isWaitingForSender, setIsWaitingForSender] = useState(false);
+  
   // 🚨 [추가] 연결 타임아웃 관리용 Ref
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -32,7 +35,16 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       setStatus('WAITING');
     });
     
+    // 🚨 [추가] 송신자가 시작했다는 신호를 받으면 대기 상태 해제
+    transferService.on('remote-started', () => {
+        setIsWaitingForSender(false);
+        setProcessMsg('Sender started transfer...');
+    });
+
     transferService.on('progress', (p: any) => {
+      // 🚨 [보완] 혹시 remote-started 이벤트를 놓쳤더라도 데이터가 들어오면 대기 해제
+      setIsWaitingForSender(false);
+      
       const val = typeof p === 'object' ? p.progress : p;
       setProgress(isNaN(val) ? 0 : val);
       
@@ -58,6 +70,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     transferService.on('error', (e) => {
       console.error('[ReceiverView] Error:', e);
       clearTimeout(connectionTimeoutRef.current!); // 에러 발생 시 타임아웃 해제
+      setIsWaitingForSender(false);
       
       let msg = typeof e === 'string' ? e : 'Unknown Error';
       // 사용자 친화적 메시지 변환
@@ -106,7 +119,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     if (!manifest) return;
 
     try {
-      setProcessMsg('Initializing download...');
+      setProcessMsg('Requesting files from sender...');
+      
+      // 🚨 [추가] 다운로드 시작 요청 시 대기 상태 활성화
+      setIsWaitingForSender(true);
       
       // 1. 브라우저 감지 및 전략 선택
       const userAgent = navigator.userAgent.toLowerCase();
@@ -120,7 +136,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       if (isFirefox || isSafari || !supportsFileSystemAccess) {
         console.log('[Receiver] Using BrowserFileWriter (Universal compatibility)');
         writer = new BrowserFileWriter();
-      } 
+      }
       // Chrome/Edge는 File System Access API 사용 (사용자가 선택 가능)
       else {
         console.log('[Receiver] Using DirectFileWriter (FileSystemAccess API)');
@@ -137,10 +153,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       if (e.name === 'AbortError') {
         // 사용자가 폴더 선택 취소함
         console.log('User cancelled folder selection');
+        setIsWaitingForSender(false); // 취소 시 대기 해제
         return;
       }
       setErrorMsg('Failed to initialize download: ' + e.message);
       setStatus('ERROR');
+      setIsWaitingForSender(false);
     }
   };
 
@@ -206,41 +224,52 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
 
       {status === 'RECEIVING' && (
         <div className="text-center w-full">
-          <h3 className="text-xl font-bold mb-2">Receiving Data</h3>
-          <p className="text-cyan-400 mb-6 truncate px-4">{manifest?.rootName || 'Downloading files...'}</p>
-          
-          <div className="relative w-48 h-48 mx-auto mb-6">
-             <svg className="w-full h-full" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="45" fill="none" stroke="#1e293b" strokeWidth="8" />
-                <circle
-                  cx="50" cy="50" r="45" fill="none" stroke="#06b6d4" strokeWidth="8"
-                  strokeDasharray="283"
-                  strokeDashoffset={isNaN(strokeDashoffset) ? 283 : strokeDashoffset}
-                  transform="rotate(-90 50 50)"
-                  className="transition-all duration-200"
-                />
-             </svg>
-             <div className="absolute inset-0 flex items-center justify-center text-3xl font-bold">
-               {Math.round(safeProgress)}%
-             </div>
-          </div>
+          {/* 🚨 [수정] 대기 상태일 때와 실제 전송 중일 때 UI 분기 */}
+          {isWaitingForSender ? (
+            <div className="animate-pulse">
+                <Loader2 className="w-16 h-16 text-yellow-500 animate-spin mx-auto mb-4" />
+                <h3 className="text-xl font-bold mb-2 text-yellow-500">Waiting for Sender...</h3>
+                <p className="text-gray-400 mb-6">Request sent. Waiting for sender to start...</p>
+            </div>
+          ) : (
+            <>
+                <h3 className="text-xl font-bold mb-2">Receiving Data</h3>
+                <p className="text-cyan-400 mb-6 truncate px-4">{manifest?.rootName || 'Downloading files...'}</p>
+                
+                <div className="relative w-48 h-48 mx-auto mb-6">
+                    <svg className="w-full h-full" viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="45" fill="none" stroke="#1e293b" strokeWidth="8" />
+                        <circle
+                        cx="50" cy="50" r="45" fill="none" stroke="#06b6d4" strokeWidth="8"
+                        strokeDasharray="283"
+                        strokeDashoffset={isNaN(strokeDashoffset) ? 283 : strokeDashoffset}
+                        transform="rotate(-90 50 50)"
+                        className="transition-all duration-200"
+                        />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center text-3xl font-bold">
+                    {Math.round(safeProgress)}%
+                    </div>
+                </div>
 
-          <div className="grid grid-cols-3 gap-4 mb-6">
-             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-               <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Speed</p>
-               <p className="font-mono font-bold text-cyan-300">{formatBytes(progressData.speed)}/s</p>
-             </div>
-             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-               <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Received</p>
-               <p className="font-mono text-gray-300">{formatBytes(progressData.bytesTransferred)}</p>
-             </div>
-             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-               <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total</p>
-               <p className="font-mono text-gray-300">{formatBytes(progressData.totalBytes)}</p>
-             </div>
-          </div>
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Speed</p>
+                    <p className="font-mono font-bold text-cyan-300">{formatBytes(progressData.speed)}/s</p>
+                    </div>
+                    <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Received</p>
+                    <p className="font-mono text-gray-300">{formatBytes(progressData.bytesTransferred)}</p>
+                    </div>
+                    <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total</p>
+                    <p className="font-mono text-gray-300">{formatBytes(progressData.totalBytes)}</p>
+                    </div>
+                </div>
+            </>
+          )}
           
-          <p className="text-gray-500 text-sm">Downloading directly to your device...</p>
+          <p className="text-gray-500 text-sm">{isWaitingForSender ? 'Waiting for sender to respond...' : 'Downloading directly to your device...'}</p>
         </div>
       )}
 

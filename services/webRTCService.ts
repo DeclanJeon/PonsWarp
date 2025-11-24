@@ -320,10 +320,22 @@ class EnhancedWebRTCService {
             const msg = JSON.parse(str);
             
             if (msg.type === 'TRANSFER_READY') {
-                console.log('[Sender] Receiver READY. Starting transfer...');
+                console.log('[Sender] Receiver READY. Sending ACK and Starting transfer...');
+                
+                // 🚨 [추가] 수신자에게 "시작됨" 알림 (UX 피드백용)
+                if (this.peer && !this.peer.destroyed) {
+                    this.peer.send(JSON.stringify({ type: 'TRANSFER_STARTED' }));
+                }
+
                 this.isTransferring = true;
                 this.requestMoreChunks(); // 첫 배치 요청
                 this.emit('status', 'TRANSFERRING');
+            
+            } else if (msg.type === 'TRANSFER_STARTED') {
+                // 🚨 [추가] 수신자: 송신자가 시작했다는 응답 수신
+                console.log('[Receiver] Sender acknowledged start request.');
+                this.emit('remote-started', true);
+
             } else if (msg.type === 'MANIFEST') {
                 this.emit('metadata', msg.manifest);
             } else if (msg.type === 'DOWNLOAD_COMPLETE') {
