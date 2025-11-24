@@ -3,7 +3,6 @@ import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, 
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../constants';
 import { DirectFileWriter } from '../services/directFileWriter';
-import { StreamSaverWriter } from '../services/streamSaverWriter';
 import { BrowserFileWriter } from '../services/browserFileWriter';
 import { formatBytes } from '../utils/fileUtils';
 
