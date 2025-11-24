@@ -62,12 +62,13 @@ class SignalingService {
     console.log('[Signaling] 🔌 Initiating connection to:', SIGNALING_SERVER_URL);
 
     this.connectionPromise = new Promise((resolve, reject) => {
+      // 🚨 [수정] 옵션 최적화: 불필요한 재연결 시도를 줄이고 타임아웃 설정
       this.socket = io(SIGNALING_SERVER_URL, {
-        transports: ['websocket', 'polling'],
-        reconnectionAttempts: this.maxReconnectAttempts,
-        reconnectionDelay: 1000,
-        timeout: 10000,
+        transports: ['websocket'], // polling 제외 (속도 향상)
+        reconnectionAttempts: 3,
+        timeout: 5000,
         autoConnect: true,
+        forceNew: true // 🚨 [핵심] 기존 소켓 재사용 금지 (좀비 세션 방지)
       });
 
       this.socket.on('connect', () => {
@@ -229,22 +230,23 @@ class SignalingService {
     this.socket.emit('leave-room', roomId);
   }
   
+  // 🚨 [핵심] 클린업 강화
   public disconnect() {
     if (this.socket) {
-      console.log('[Signaling] 🔌 Manually disconnecting');
+      console.log('[Signaling] Disconnecting...');
+      this.socket.removeAllListeners(); // 모든 리스너 제거 (메모리 누수 방지)
       this.socket.disconnect();
       this.socket = null;
-      this.isConnecting = false;
-      this.connectionPromise = null;
     }
+    this.isConnecting = false;
   }
 
   public isConnected(): boolean {
     return this.socket?.connected ?? false;
   }
 
-  // TURN 설정 관련 메서드 추가
-  public async requestTurnConfig(roomId: string, forceRefresh = false): Promise<TurnConfigResponse> {
+  // TURN 설정 관련 메서드 추가 (기존 유지)
+  public async requestTurnConfig(roomId: string): Promise<TurnConfigResponse> {
     return new Promise((resolve, reject) => {
       if (!this.socket?.connected) {
         const error: TurnConfigResponse = {
@@ -256,10 +258,10 @@ class SignalingService {
         return;
       }
 
-      console.log('[Signaling] 🔄 Requesting TURN config for room:', roomId, { forceRefresh });
+      console.log('[Signaling] 🔄 Requesting TURN config for room:', roomId);
 
       // Socket.IO 이벤트로 TURN 설정 요청
-      this.socket.emit('request-turn-config', { roomId, forceRefresh }, (response: TurnConfigResponse) => {
+      this.socket.emit('request-turn-config', { roomId }, (response: TurnConfigResponse) => {
         if (response.success && response.data) {
           console.log('[Signaling] ✅ TURN config received:', {
             roomId,
