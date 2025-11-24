@@ -41,10 +41,10 @@ class EnhancedWebRTCService {
     signalingService.on('ice-candidate', this.handleIceCandidate.bind(this));
     signalingService.on('peer-joined', this.handlePeerJoined.bind(this));
     
-    // 🚨 [추가] Room Full 에러 처리
+    // 🚨 [핵심 수정] Room Full 상태 처리 (에러가 아닌 정보성 메시지)
     signalingService.on('room-full', () => {
-        this.emit('error', 'Room is full. Please try a different Room ID.');
-        this.cleanup();
+        this.emit('room-full', 'Room is currently occupied. Please wait for the current transfer to complete.');
+        // cleanup() 호출하지 않음 - 사용자가 다시 시도할 수 있도록 유지
     });
   }
 
