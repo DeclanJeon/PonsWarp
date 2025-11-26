@@ -3,7 +3,16 @@ import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types';
 import { logInfo, logError } from '../utils/logger';
-import { HEADER_SIZE, MAX_BUFFERED_AMOUNT, LOW_WATER_MARK, BATCH_REQUEST_SIZE } from '../constants';
+import { 
+  HEADER_SIZE, 
+  MAX_BUFFERED_AMOUNT, 
+  LOW_WATER_MARK, 
+  HIGH_WATER_MARK,
+  BATCH_SIZE_MIN,
+  BATCH_SIZE_MAX,
+  BATCH_SIZE_INITIAL,
+  CHUNK_SIZE_MAX
+} from '../constants';
 
 type EventHandler = (data: any) => void;
 
@@ -28,8 +37,14 @@ class EnhancedWebRTCService {
   private isReceiverReady = false;
   
   // 🚀 [최적화] Backpressure 제어 변수
-  private isProcessingBatch = false; // 현재 워커가 데이터를 준비중인가?
+  private isProcessingBatch = false;
   private pendingManifest: TransferManifest | null = null;
+  
+  // 🚀 [Phase 1] 적응형 배치 크기 상태
+  private currentBatchSize = BATCH_SIZE_INITIAL;
+  private lastDrainTime = 0;
+  private drainRate = 0; // bytes/ms
+  private batchSendTime = 0;
   
   private iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' }
@@ -77,8 +92,7 @@ class EnhancedWebRTCService {
   }
 
   /**
-   * 🚀 [핵심 수정] Backpressure 기반 데이터 전송
-   * setInterval 대신 channel.onbufferedamountlow 이벤트를 사용해야 함
+   * 🚀 [Phase 1] 적응형 배치 크기 + 파이프라인 최적화
    */
   private handleBatchFromWorker(payload: any) {
     if (!this.peer || this.peer.destroyed) return;
@@ -88,10 +102,13 @@ class EnhancedWebRTCService {
     if (channel.readyState !== 'open') return;
 
     const { chunks, progressData } = payload;
-    this.isProcessingBatch = false; // 배치 처리 완료 해제
+    const batchBytes = chunks.reduce((sum: number, c: ArrayBuffer) => sum + c.byteLength, 0);
+    
+    this.isProcessingBatch = false;
 
     try {
         // 1. 청크 전송
+        const sendStart = performance.now();
         for (const chunk of chunks) {
             this.peer.send(chunk);
         }
@@ -99,12 +116,14 @@ class EnhancedWebRTCService {
         // 2. 진행률 방출
         this.emit('progress', progressData);
 
-        // 3. 🚀 [핵심] 버퍼가 여유로우면 *즉시* 다음 배치 요청 (파이프라인 유지)
-        if (channel.bufferedAmount < LOW_WATER_MARK) {
+        // 3. 🚀 [Phase 1] 드레인 속도 측정 및 배치 크기 조절
+        this.updateDrainMetrics(channel, batchBytes, sendStart);
+
+        // 4. 🚀 [핵심] 버퍼 상태에 따른 즉시 요청
+        //    HIGH_WATER_MARK 이하면 즉시 다음 배치 요청 (파이프라인 유지)
+        if (channel.bufferedAmount < HIGH_WATER_MARK) {
             this.requestMoreChunks();
         }
-        // 버퍼가 찼다면? -> 아무것도 안 함.
-        // channel.onbufferedamountlow 이벤트가 발생할 때 requestMoreChunks()가 호출됨.
 
     } catch (e) {
         console.error('Send failed:', e);
@@ -112,12 +131,76 @@ class EnhancedWebRTCService {
     }
   }
 
+  /**
+   * 🚀 [Phase 1] 드레인 속도 측정 및 적응형 배치 크기 계산
+   */
+  private updateDrainMetrics(channel: RTCDataChannel, batchBytes: number, sendStart: number) {
+    const now = performance.now();
+    
+    if (this.lastDrainTime > 0 && this.batchSendTime > 0) {
+      const elapsed = now - this.lastDrainTime;
+      if (elapsed > 0) {
+        // 이동 평균으로 드레인 속도 계산
+        const instantDrainRate = batchBytes / elapsed;
+        this.drainRate = this.drainRate === 0 
+          ? instantDrainRate 
+          : this.drainRate * 0.7 + instantDrainRate * 0.3;
+        
+        // 적응형 배치 크기 계산
+        this.adjustBatchSize(channel);
+      }
+    }
+    
+    this.lastDrainTime = now;
+    this.batchSendTime = now - sendStart;
+  }
+
+  /**
+   * 🚀 [Phase 1] 적응형 배치 크기 조절 (AIMD 변형)
+   */
+  private adjustBatchSize(channel: RTCDataChannel) {
+    const bufferUtilization = channel.bufferedAmount / MAX_BUFFERED_AMOUNT;
+    const oldBatchSize = this.currentBatchSize;
+    
+    if (bufferUtilization < 0.3) {
+      // 버퍼 여유 많음 → 배치 크기 증가 (Additive Increase)
+      this.currentBatchSize = Math.min(
+        BATCH_SIZE_MAX, 
+        this.currentBatchSize + 4
+      );
+    } else if (bufferUtilization > 0.7) {
+      // 버퍼 부족 → 배치 크기 감소 (Multiplicative Decrease)
+      this.currentBatchSize = Math.max(
+        BATCH_SIZE_MIN, 
+        Math.floor(this.currentBatchSize * 0.75)
+      );
+    }
+    
+    // 드레인 속도 기반 추가 조절
+    if (this.drainRate > 0) {
+      // 예상 처리 시간 내에 버퍼가 비워질 수 있는 최적 배치 크기
+      const optimalBatch = Math.floor(
+        (MAX_BUFFERED_AMOUNT - channel.bufferedAmount) / CHUNK_SIZE_MAX
+      );
+      
+      // 현재 배치 크기와 최적 배치 크기의 중간값 사용
+      this.currentBatchSize = Math.max(
+        BATCH_SIZE_MIN,
+        Math.min(BATCH_SIZE_MAX, Math.floor((this.currentBatchSize + optimalBatch) / 2))
+      );
+    }
+    
+    if (oldBatchSize !== this.currentBatchSize) {
+      logInfo('[Adaptive]', `Batch size: ${oldBatchSize} → ${this.currentBatchSize} (buffer: ${(bufferUtilization * 100).toFixed(1)}%)`);
+    }
+  }
+
   private requestMoreChunks() {
     if (this.isProcessingBatch || !this.worker || !this.isTransferring) return;
     
     this.isProcessingBatch = true;
-    // BATCH_REQUEST_SIZE 만큼 요청 (약 1MB)
-    this.worker.postMessage({ type: 'process-batch', payload: { count: BATCH_REQUEST_SIZE } });
+    // 🚀 [Phase 1] 적응형 배치 크기 사용
+    this.worker.postMessage({ type: 'process-batch', payload: { count: this.currentBatchSize } });
   }
 
 
@@ -144,6 +227,10 @@ class EnhancedWebRTCService {
     
     // 남은 버퍼가 다 전송될 때까지 대기
     await this.waitForBufferZero();
+    
+    // 🚀 [버그 수정] 추가 대기 시간 - 네트워크 지연 고려
+    // WebRTC 버퍼가 비워져도 실제 전송이 완료되지 않았을 수 있음
+    await new Promise(resolve => setTimeout(resolve, 500));
     
     // EOS 패킷 전송
     const eosPacket = new ArrayBuffer(HEADER_SIZE);
@@ -199,7 +286,15 @@ class EnhancedWebRTCService {
     if (this.writer) this.writer.cleanup();
     this.writer = writerInstance;
 
-    this.writer.onProgress((progress) => this.emit('progress', progress));
+    // 🚀 [Phase 1] progress 데이터를 객체 형태로 전달 (속도 정보 포함)
+    this.writer.onProgress((progressData: any) => {
+      // progressData가 객체인 경우 그대로 전달, 숫자인 경우 객체로 변환
+      if (typeof progressData === 'object') {
+        this.emit('progress', progressData);
+      } else {
+        this.emit('progress', { progress: progressData, speed: 0, bytesTransferred: 0, totalBytes: 0 });
+      }
+    });
     this.writer.onComplete((actualSize) => {
       this.emit('complete', { actualSize });
       this.notifyDownloadComplete();
