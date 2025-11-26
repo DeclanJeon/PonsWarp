@@ -2,7 +2,14 @@
  * Browser-Compatible File Writer Service
  * 브라우저 기본 다운로드 API를 사용한 파일 저장
  * 모든 브라우저에서 작동 (Chrome, Firefox, Safari, Edge)
+ * 
+ * 🚀 2GB+ 파일 지원: 스트리밍 ZIP 생성
  */
+
+import streamSaver from 'streamsaver';
+
+// 2GB 제한 (브라우저 Blob 한계)
+const BLOB_SIZE_LIMIT = 2 * 1024 * 1024 * 1024 - 1; // 2GB - 1 byte
 
 interface FileData {
   id: number;
@@ -196,11 +203,120 @@ export class BrowserFileWriter {
 
   /**
    * 여러 파일을 ZIP으로 압축하여 다운로드
+   * 🚀 2GB 이상 파일은 스트리밍 방식 사용
    */
   private async downloadAsZip(): Promise<number> {
     console.log('[BrowserFileWriter] Creating ZIP archive...');
     
-    // fflate 동적 import
+    // 총 크기 계산
+    let totalSize = 0;
+    for (const fileData of this.files.values()) {
+      totalSize += fileData.totalReceived;
+    }
+    
+    console.log('[BrowserFileWriter] Total size:', totalSize, 'bytes');
+    
+    // 2GB 이상이면 스트리밍 방식 사용
+    if (totalSize > BLOB_SIZE_LIMIT) {
+      console.log('[BrowserFileWriter] Using streaming ZIP (size > 2GB)');
+      return this.downloadAsZipStreaming();
+    }
+    
+    // 2GB 미만이면 기존 방식 사용
+    return this.downloadAsZipInMemory();
+  }
+
+  /**
+   * 🚀 스트리밍 ZIP 다운로드 (2GB+ 지원)
+   * StreamSaver + fflate 스트리밍 조합
+   */
+  private async downloadAsZipStreaming(): Promise<number> {
+    console.log('[BrowserFileWriter] Starting streaming ZIP download...');
+    
+    const { Zip, ZipPassThrough } = await import('fflate');
+    
+    const zipName = this.manifest?.rootName 
+      ? `${this.manifest.rootName}.zip` 
+      : 'download.zip';
+    
+    // StreamSaver로 쓰기 스트림 생성
+    const fileStream = streamSaver.createWriteStream(zipName);
+    const writer = fileStream.getWriter();
+    
+    let totalWritten = 0;
+    
+    return new Promise((resolve, reject) => {
+      // fflate 스트리밍 ZIP 생성
+      const zipStream = new Zip((err, data, final) => {
+        if (err) {
+          writer.abort();
+          reject(err);
+          return;
+        }
+        
+        if (data) {
+          writer.write(data).catch(reject);
+          totalWritten += data.length;
+        }
+        
+        if (final) {
+          writer.close().then(() => {
+            console.log('[BrowserFileWriter] Streaming ZIP complete:', totalWritten, 'bytes');
+            resolve(totalWritten);
+          }).catch(reject);
+        }
+      });
+      
+      // 각 파일을 스트리밍으로 ZIP에 추가
+      this.addFilesToZipStream(zipStream).then(() => {
+        zipStream.end();
+      }).catch((err) => {
+        writer.abort();
+        reject(err);
+      });
+    });
+  }
+
+  /**
+   * ZIP 스트림에 파일들 추가
+   */
+  private async addFilesToZipStream(zipStream: any): Promise<void> {
+    const CHUNK_SIZE = 64 * 1024 * 1024; // 64MB 청크 단위로 처리
+    
+    for (const fileData of this.files.values()) {
+      console.log('[BrowserFileWriter] Adding to ZIP stream:', fileData.path);
+      
+      // ZipPassThrough: 압축 없이 스트리밍 (대용량 파일에 적합)
+      const { ZipPassThrough } = await import('fflate');
+      const fileEntry = new ZipPassThrough(fileData.path);
+      zipStream.add(fileEntry);
+      
+      // 청크들을 오프셋 순서대로 정렬
+      const sortedOffsets = Array.from(fileData.chunks.keys()).sort((a, b) => a - b);
+      
+      // 청크 단위로 스트리밍
+      for (const offset of sortedOffsets) {
+        const chunk = fileData.chunks.get(offset)!;
+        fileEntry.push(new Uint8Array(chunk), false);
+        
+        // 메모리 해제를 위해 처리된 청크 삭제
+        fileData.chunks.delete(offset);
+        
+        // 이벤트 루프 양보 (UI 블로킹 방지)
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      
+      // 파일 완료
+      fileEntry.push(new Uint8Array(0), true);
+    }
+  }
+
+  /**
+   * 메모리 내 ZIP 생성 (2GB 미만용)
+   */
+  private async downloadAsZipInMemory(): Promise<number> {
+    console.log('[BrowserFileWriter] Using in-memory ZIP...');
+    
     const { zip } = await import('fflate');
     
     const zipFiles: Record<string, Uint8Array> = {};
@@ -208,7 +324,6 @@ export class BrowserFileWriter {
     
     // 각 파일을 ZIP에 추가
     for (const fileData of this.files.values()) {
-      // 청크들을 오프셋 순서대로 정렬하여 병합
       const sortedOffsets = Array.from(fileData.chunks.keys()).sort((a, b) => a - b);
       const chunks: Uint8Array[] = [];
       
@@ -240,8 +355,8 @@ export class BrowserFileWriter {
         
         console.log('[BrowserFileWriter] ZIP created, size:', data.length);
         
-        // ZIP 다운로드
-        const blob = new Blob([data], { type: 'application/zip' });
+        // ZIP 다운로드 - ArrayBuffer로 변환하여 타입 호환성 확보
+        const blob = new Blob([data.buffer as ArrayBuffer], { type: 'application/zip' });
         const zipName = this.manifest?.rootName 
           ? `${this.manifest.rootName}.zip` 
           : 'download.zip';

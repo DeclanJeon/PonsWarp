@@ -2,13 +2,23 @@
 declare const self: DedicatedWorkerGlobalScope;
 
 // ============================================================================
-// 🚀 [Phase 2] 파이프라인 병렬화 + 이중 버퍼링 + 청크 풀링
+// 🚀 [Phase 2 + Phase 3] 파이프라인 병렬화 + 이중 버퍼링 + 청크 풀링 + 적응형 청크 크기
 // ============================================================================
 
-const CHUNK_SIZE = 128 * 1024; // 128KB (브라우저 한계)
+const CHUNK_SIZE_MIN = 16 * 1024;   // 16KB
+const CHUNK_SIZE_MAX = 128 * 1024;  // 128KB (브라우저 한계)
+let CHUNK_SIZE = CHUNK_SIZE_MAX;    // 동적 조절 가능
+
 const BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per buffer
 const POOL_SIZE = 64; // 청크 풀 크기
 const PREFETCH_BATCH = 8; // 한 번에 프리페치할 청크 수
+
+// 🚀 [Phase 3] 적응형 설정
+interface AdaptiveConfig {
+  chunkSize: number;
+  prefetchBatch: number;
+  enableAdaptive: boolean;
+}
 
 // ============================================================================
 // 청크 풀링 - 메모리 재사용으로 GC 압박 감소
@@ -143,7 +153,14 @@ const state: WorkerState = {
   isCompleted: false
 };
 
-const chunkPool = new ChunkPool(CHUNK_SIZE, POOL_SIZE);
+// 🚀 [Phase 3] 적응형 설정 상태
+const adaptiveConfig: AdaptiveConfig = {
+  chunkSize: CHUNK_SIZE_MAX,
+  prefetchBatch: PREFETCH_BATCH,
+  enableAdaptive: true
+};
+
+const chunkPool = new ChunkPool(CHUNK_SIZE_MAX, POOL_SIZE);
 const doubleBuffer = new DoubleBuffer(BUFFER_SIZE);
 let isTransferActive = false;
 let prefetchPromise: Promise<void> | null = null;
@@ -164,8 +181,27 @@ self.onmessage = (e: MessageEvent) => {
     case 'reset':
       resetWorker();
       break;
+    // 🚀 [Phase 3] 적응형 설정 업데이트
+    case 'update-config':
+      updateAdaptiveConfig(payload);
+      break;
   }
 };
+
+// 🚀 [Phase 3] 적응형 설정 업데이트
+function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
+  if (config.chunkSize !== undefined) {
+    adaptiveConfig.chunkSize = Math.max(CHUNK_SIZE_MIN, Math.min(CHUNK_SIZE_MAX, config.chunkSize));
+    CHUNK_SIZE = adaptiveConfig.chunkSize;
+    console.log('[Worker] Chunk size updated:', CHUNK_SIZE);
+  }
+  if (config.prefetchBatch !== undefined) {
+    adaptiveConfig.prefetchBatch = Math.max(4, Math.min(32, config.prefetchBatch));
+  }
+  if (config.enableAdaptive !== undefined) {
+    adaptiveConfig.enableAdaptive = config.enableAdaptive;
+  }
+}
 
 function initWorker(payload: { files: File[]; manifest: any }) {
   state.files = payload.files;
@@ -229,9 +265,11 @@ function triggerPrefetch() {
   });
 }
 
-// 🚀 [파이프라인 병렬화] 배치 단위 프리페치
+// 🚀 [파이프라인 병렬화 + Phase 3] 배치 단위 프리페치 (적응형 배치 크기)
 async function prefetchBatch(): Promise<void> {
-  for (let i = 0; i < PREFETCH_BATCH && isTransferActive && !state.isCompleted; i++) {
+  const batchSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.prefetchBatch : PREFETCH_BATCH;
+  
+  for (let i = 0; i < batchSize && isTransferActive && !state.isCompleted; i++) {
     if (!doubleBuffer.canPrefetch()) break;
 
     const chunk = await createNextChunk();
@@ -263,8 +301,11 @@ async function createNextChunk(): Promise<ArrayBuffer | null> {
     return createNextChunk();
   }
 
+  // 🚀 [Phase 3] 적응형 청크 크기 사용
+  const currentChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
+  
   const start = state.currentFileOffset;
-  const end = Math.min(start + CHUNK_SIZE, file.size);
+  const end = Math.min(start + currentChunkSize, file.size);
 
   try {
     const blob = file.slice(start, end);

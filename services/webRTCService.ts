@@ -11,8 +11,10 @@ import {
   BATCH_SIZE_MIN,
   BATCH_SIZE_MAX,
   BATCH_SIZE_INITIAL,
-  CHUNK_SIZE_MAX
+  CHUNK_SIZE_MAX,
+  MULTI_CHANNEL_COUNT
 } from '../constants';
+import { NetworkAdaptiveController } from './networkAdaptiveController';
 
 type EventHandler = (data: any) => void;
 
@@ -45,6 +47,17 @@ class EnhancedWebRTCService {
   private lastDrainTime = 0;
   private drainRate = 0; // bytes/ms
   private batchSendTime = 0;
+  
+  // 🚀 [Phase 3] 네트워크 적응형 컨트롤러
+  private networkController = new NetworkAdaptiveController();
+  private useAdaptiveControl = true;
+  private lastMetricsUpdate = 0;
+  private sendStartTimes: Map<number, number> = new Map(); // seq -> timestamp
+  
+  // 🚀 [Phase 3] 멀티 채널 (선택적 활성화)
+  private useMultiChannel = false;
+  private dataChannels: RTCDataChannel[] = [];
+  private currentChannelIndex = 0;
   
   private iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' }
@@ -92,7 +105,7 @@ class EnhancedWebRTCService {
   }
 
   /**
-   * 🚀 [Phase 1] 적응형 배치 크기 + 파이프라인 최적화
+   * 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 + 파이프라인 최적화 + 네트워크 적응형 제어
    */
   private handleBatchFromWorker(payload: any) {
     if (!this.peer || this.peer.destroyed) return;
@@ -109,19 +122,47 @@ class EnhancedWebRTCService {
     try {
         // 1. 청크 전송
         const sendStart = performance.now();
-        for (const chunk of chunks) {
-            this.peer.send(chunk);
+        
+        // 🚀 [Phase 3] 멀티 채널 사용 시 분산 전송
+        if (this.useMultiChannel && this.dataChannels.length > 0) {
+            this.sendChunksMultiChannel(chunks);
+        } else {
+            for (const chunk of chunks) {
+                // 🚀 [Phase 3] 전송 시간 기록 (RTT 측정용)
+                const view = new DataView(chunk);
+                const seq = view.getUint32(2, true);
+                this.sendStartTimes.set(seq, performance.now());
+                
+                this.peer.send(chunk);
+                
+                // 🚀 [Phase 3] 네트워크 컨트롤러에 전송 기록
+                if (this.useAdaptiveControl) {
+                    this.networkController.recordSend(chunk.byteLength);
+                }
+            }
         }
         
-        // 2. 진행률 방출
-        this.emit('progress', progressData);
+        // 2. 진행률 방출 (속도 정보 포함)
+        this.emit('progress', {
+            ...progressData,
+            networkMetrics: this.useAdaptiveControl ? this.networkController.getMetrics() : null
+        });
 
-        // 3. 🚀 [Phase 1] 드레인 속도 측정 및 배치 크기 조절
+        // 3. 🚀 [Phase 1 + Phase 3] 드레인 속도 측정 및 배치 크기 조절
         this.updateDrainMetrics(channel, batchBytes, sendStart);
+        
+        // 🚀 [Phase 3] 네트워크 컨트롤러 버퍼 상태 업데이트
+        if (this.useAdaptiveControl) {
+            this.networkController.updateBufferState(channel.bufferedAmount);
+        }
 
         // 4. 🚀 [핵심] 버퍼 상태에 따른 즉시 요청
         //    HIGH_WATER_MARK 이하면 즉시 다음 배치 요청 (파이프라인 유지)
-        if (channel.bufferedAmount < HIGH_WATER_MARK) {
+        const canSend = this.useAdaptiveControl 
+            ? this.networkController.canSend(channel.bufferedAmount)
+            : channel.bufferedAmount < HIGH_WATER_MARK;
+            
+        if (canSend) {
             this.requestMoreChunks();
         }
 
@@ -129,6 +170,49 @@ class EnhancedWebRTCService {
         console.error('Send failed:', e);
         this.cleanup();
     }
+  }
+  
+  /**
+   * 🚀 [Phase 3] 멀티 채널 분산 전송
+   */
+  private sendChunksMultiChannel(chunks: ArrayBuffer[]): void {
+    for (const chunk of chunks) {
+        // 버퍼 여유가 가장 많은 채널 선택
+        const channel = this.getBestChannel();
+        if (channel && channel.readyState === 'open') {
+            const view = new DataView(chunk);
+            const seq = view.getUint32(2, true);
+            this.sendStartTimes.set(seq, performance.now());
+            
+            channel.send(chunk);
+            
+            if (this.useAdaptiveControl) {
+                this.networkController.recordSend(chunk.byteLength);
+            }
+        }
+    }
+  }
+  
+  /**
+   * 🚀 [Phase 3] 최적 채널 선택 (버퍼 여유 기반)
+   */
+  private getBestChannel(): RTCDataChannel | null {
+    if (this.dataChannels.length === 0) {
+        // @ts-ignore
+        return this.peer?._channel as RTCDataChannel;
+    }
+    
+    let bestChannel: RTCDataChannel | null = null;
+    let lowestBuffer = Infinity;
+    
+    for (const channel of this.dataChannels) {
+        if (channel.readyState === 'open' && channel.bufferedAmount < lowestBuffer) {
+            lowestBuffer = channel.bufferedAmount;
+            bestChannel = channel;
+        }
+    }
+    
+    return bestChannel;
   }
 
   /**
@@ -156,34 +240,42 @@ class EnhancedWebRTCService {
   }
 
   /**
-   * 🚀 [Phase 1] 적응형 배치 크기 조절 (AIMD 변형)
+   * 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 조절 (AIMD + BBR 통합)
    */
   private adjustBatchSize(channel: RTCDataChannel) {
     const bufferUtilization = channel.bufferedAmount / MAX_BUFFERED_AMOUNT;
     const oldBatchSize = this.currentBatchSize;
     
+    // 🚀 [Phase 3] 네트워크 적응형 컨트롤러 사용 시
+    if (this.useAdaptiveControl) {
+      const adaptiveParams = this.networkController.getAdaptiveParams();
+      this.currentBatchSize = adaptiveParams.batchSize;
+      
+      if (oldBatchSize !== this.currentBatchSize) {
+        const metrics = this.networkController.getMetrics();
+        logInfo('[Adaptive-BBR]', `Batch: ${oldBatchSize} → ${this.currentBatchSize} (RTT: ${metrics.avgRtt.toFixed(1)}ms, throughput: ${(metrics.throughput / 1024 / 1024).toFixed(2)}MB/s)`);
+      }
+      return;
+    }
+    
+    // 기존 AIMD 로직 (fallback)
     if (bufferUtilization < 0.3) {
-      // 버퍼 여유 많음 → 배치 크기 증가 (Additive Increase)
       this.currentBatchSize = Math.min(
         BATCH_SIZE_MAX, 
         this.currentBatchSize + 4
       );
     } else if (bufferUtilization > 0.7) {
-      // 버퍼 부족 → 배치 크기 감소 (Multiplicative Decrease)
       this.currentBatchSize = Math.max(
         BATCH_SIZE_MIN, 
         Math.floor(this.currentBatchSize * 0.75)
       );
     }
     
-    // 드레인 속도 기반 추가 조절
     if (this.drainRate > 0) {
-      // 예상 처리 시간 내에 버퍼가 비워질 수 있는 최적 배치 크기
       const optimalBatch = Math.floor(
         (MAX_BUFFERED_AMOUNT - channel.bufferedAmount) / CHUNK_SIZE_MAX
       );
       
-      // 현재 배치 크기와 최적 배치 크기의 중간값 사용
       this.currentBatchSize = Math.max(
         BATCH_SIZE_MIN,
         Math.min(BATCH_SIZE_MAX, Math.floor((this.currentBatchSize + optimalBatch) / 2))
@@ -509,6 +601,54 @@ class EnhancedWebRTCService {
     }
   }
 
+  /**
+   * 🚀 [Phase 3] 적응형 제어 활성화/비활성화
+   */
+  public setAdaptiveControl(enabled: boolean): void {
+    this.useAdaptiveControl = enabled;
+    if (enabled) {
+      this.networkController.reset();
+      this.networkController.start();
+    }
+    logInfo('[WebRTC]', `Adaptive control: ${enabled ? 'enabled' : 'disabled'}`);
+  }
+  
+  /**
+   * 🚀 [Phase 3] 멀티 채널 활성화/비활성화
+   */
+  public setMultiChannel(enabled: boolean): void {
+    this.useMultiChannel = enabled;
+    logInfo('[WebRTC]', `Multi-channel: ${enabled ? 'enabled' : 'disabled'}`);
+  }
+  
+  /**
+   * 🚀 [Phase 3] 네트워크 메트릭 조회
+   */
+  public getNetworkMetrics() {
+    return this.networkController.getMetrics();
+  }
+  
+  /**
+   * 🚀 [Phase 3] 혼잡 제어 상태 조회
+   */
+  public getCongestionState() {
+    return this.networkController.getCongestionState();
+  }
+  
+  /**
+   * 🚀 [Phase 3] 디버그 정보 조회
+   */
+  public getDebugInfo() {
+    return {
+      adaptiveControl: this.useAdaptiveControl,
+      multiChannel: this.useMultiChannel,
+      channelCount: this.dataChannels.length,
+      currentBatchSize: this.currentBatchSize,
+      drainRate: this.drainRate,
+      networkController: this.networkController.getDebugInfo()
+    };
+  }
+
   public cleanup() {
     this.isTransferring = false;
     this.peer?.destroy();
@@ -516,6 +656,12 @@ class EnhancedWebRTCService {
     this.worker?.terminate();
     this.worker = null;
     this.writer?.cleanup();
+    
+    // 🚀 [Phase 3] 추가 정리
+    this.networkController.reset();
+    this.dataChannels.forEach(ch => ch.close());
+    this.dataChannels = [];
+    this.sendStartTimes.clear();
   }
 }
 

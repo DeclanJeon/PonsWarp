@@ -3,7 +3,7 @@ import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, 
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../constants';
 import { DirectFileWriter } from '../services/directFileWriter';
-import { BrowserFileWriter } from '../services/browserFileWriter';
+import { OPFSFileWriter } from '../services/opfsFileWriter';
 import { formatBytes } from '../utils/fileUtils';
 
 interface ReceiverViewProps {
@@ -197,22 +197,19 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       setIsWaitingForSender(true);
       setStatus('RECEIVING');
       // 1. 브라우저 감지 및 전략 선택
-      const userAgent = navigator.userAgent.toLowerCase();
-      const isFirefox = userAgent.includes('firefox');
-      const isSafari = userAgent.includes('safari') && !userAgent.includes('chrome');
       const supportsFileSystemAccess = 'showDirectoryPicker' in window;
       
       let writer;
 
-      // 파이어폭스와 사파리는 기본 브라우저 다운로드 사용
-      if (isFirefox || isSafari || !supportsFileSystemAccess) {
-        console.log('[Receiver] Using BrowserFileWriter (Universal compatibility)');
-        writer = new BrowserFileWriter();
-      } 
-      // Chrome/Edge는 File System Access API 사용 (사용자가 선택 가능)
-      else {
+      // Chrome/Edge: File System Access API 사용 (사용자가 폴더 선택 → 바로 디스크에 쓰기)
+      if (supportsFileSystemAccess) {
         console.log('[Receiver] Using DirectFileWriter (FileSystemAccess API)');
         writer = new DirectFileWriter();
+      } 
+      // Firefox/Safari: OPFS 사용 (수신하면서 OPFS에 쓰기 → 완료 후 한 번만 다운로드)
+      else {
+        console.log('[Receiver] Using OPFSFileWriter (OPFS + StreamSaver)');
+        writer = new OPFSFileWriter();
       }
 
       // 2. 서비스에 Writer 주입

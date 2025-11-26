@@ -23,3 +23,22 @@ export const BATCH_REQUEST_SIZE = 16;         // 레거시 호환
 // 🚀 프리페치 버퍼 설정
 export const PREFETCH_BUFFER_SIZE = 8 * 1024 * 1024;  // 8MB 프리페치 버퍼
 export const PREFETCH_LOW_THRESHOLD = 2 * 1024 * 1024; // 2MB 이하면 프리페치 시작
+
+// 🚀 [Phase 3] 멀티 채널 설정
+export const MULTI_CHANNEL_COUNT = 3;                  // 기본 데이터 채널 수
+export const MULTI_CHANNEL_MIN = 1;                    // 최소 채널 수
+export const MULTI_CHANNEL_MAX = 4;                    // 최대 채널 수
+export const CHANNEL_BUFFER_THRESHOLD = 512 * 1024;    // 채널별 버퍼 임계값
+
+// 🚀 [Phase 3] 네트워크 적응형 제어 설정
+export const BBR_STARTUP_GAIN = 2.89;                  // BBR Startup 모드 gain
+export const BBR_DRAIN_GAIN = 0.75;                    // BBR Drain 모드 gain
+export const BBR_PROBE_RTT_DURATION = 200;             // ProbeRTT 지속 시간 (ms)
+export const RTT_SAMPLE_WINDOW = 10;                   // RTT 샘플 윈도우 크기
+export const BANDWIDTH_SAMPLE_WINDOW = 10;             // 대역폭 샘플 윈도우 크기
+
+// 🚀 [Phase 3] 적응형 청크 크기 임계값
+export const RTT_LOW_THRESHOLD = 50;                   // 저지연 임계값 (ms)
+export const RTT_HIGH_THRESHOLD = 150;                 // 고지연 임계값 (ms)
+export const LOSS_RATE_WARNING = 0.01;                 // 경고 손실률 (1%)
+export const LOSS_RATE_CRITICAL = 0.05;                // 위험 손실률 (5%)
