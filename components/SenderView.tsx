@@ -14,7 +14,7 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [status, setStatus] = useState<'IDLE' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE'>('IDLE');
+  const [status, setStatus] = useState<'IDLE' | 'PREPARING' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE'>('IDLE');
   const [progressData, setProgressData] = useState({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
   
   // 🚀 [Multi-Receiver] 피어 상태 추적
@@ -43,6 +43,12 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
       if (s === 'WAITING_FOR_PEER') setStatus('WAITING');
       if (s === 'CONNECTING') setStatus('CONNECTING');
       if (s === 'TRANSFERRING') setStatus('TRANSFERRING');
+    });
+    
+    swarmManager.on('error', (errorMsg: string) => {
+      console.error('[SenderView] SwarmManager error:', errorMsg);
+      alert(`Transfer error: ${errorMsg}\n\nPlease try again.`);
+      setStatus('IDLE');
     });
 
     // 🚀 [Multi-Receiver] 피어 이벤트
@@ -185,21 +191,40 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
   };
 
   const processFiles = async (fileList: FileList) => {
-    setStatus('WAITING');
-    
     const { manifest, files } = createManifest(fileList);
     setManifest(manifest);
     
-    // Room ID 생성
+    console.log('[SenderView] 📊 [DEBUG] Manifest created:', {
+      isFolder: manifest.isFolder,
+      totalFiles: manifest.totalFiles,
+      totalSize: manifest.totalSize,
+      rootName: manifest.rootName
+    });
+    
+    // 여러 파일이면 ZIP 압축 준비 중 표시
+    if (files.length > 1) {
+      setStatus('PREPARING');
+    } else {
+      setStatus('WAITING');
+    }
+    
     const id = Math.random().toString(36).substring(2, 8).toUpperCase();
     setRoomId(id);
     setShareLink(`${window.location.origin}/receive/${id}`);
     
-    // SwarmManager로 초기화
+    console.log('[SenderView] 🏠 [DEBUG] Room created:', id);
+    
     try {
+      console.log('[SenderView] 🚀 [DEBUG] Initializing SwarmManager...');
       await swarmManagerRef.current?.initSender(manifest, files, id);
-    } catch (error) {
-      console.error('Init failed', error);
+      console.log('[SenderView] ✅ [DEBUG] SwarmManager initialized successfully');
+      
+      // 초기화 완료 후 WAITING 상태로 전환
+      setStatus('WAITING');
+    } catch (error: any) {
+      console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
+      
+      alert(`Failed to initialize transfer: ${error?.message || 'Unknown error'}\n\nPlease try again with different files.`);
       setStatus('IDLE');
     }
   };
@@ -269,6 +294,26 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
                </button>
              </div>
            </div>
+        </motion.div>
+      )}
+
+      {status === 'PREPARING' && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center p-8 bg-cyan-900/20 rounded-3xl border border-cyan-500/30 max-w-lg w-full"
+        >
+          <div className="relative w-20 h-20 mx-auto mb-6">
+            <Loader2 className="w-full h-full text-cyan-500 animate-spin" />
+          </div>
+          
+          <h2 className="text-2xl font-bold text-white mb-2">Preparing Files...</h2>
+          <p className="text-gray-400 mb-4">
+            Compressing {manifest?.totalFiles} files into ZIP archive
+          </p>
+          <p className="text-sm text-gray-500">
+            This may take a moment for large folders. Please wait...
+          </p>
         </motion.div>
       )}
 

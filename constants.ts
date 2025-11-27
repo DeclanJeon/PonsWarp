@@ -6,10 +6,10 @@ export const CHUNK_SIZE_MIN = 16 * 1024;      // 16KB
 export const CHUNK_SIZE_INITIAL = 64 * 1024;  // 64KB
 export const CHUNK_SIZE_MAX = 128 * 1024;     // 128KB (브라우저 한계)
 
-// WebRTC 버퍼 설정 - 🚀 [Phase 3] 더 공격적인 설정
-export const MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024;  // 4MB (증가)
-export const LOW_WATER_MARK = 1 * 1024 * 1024;       // 1MB (증가)
-export const HIGH_WATER_MARK = 3 * 1024 * 1024;      // 3MB
+// WebRTC 버퍼 설정 - 🚨 [수정] ZIP 압축 오버헤드 고려한 보수적 설정
+export const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;  // 8MB (ZIP 오버헤드 고려)
+export const LOW_WATER_MARK = 2 * 1024 * 1024;       // 2MB
+export const HIGH_WATER_MARK = 6 * 1024 * 1024;      // 6MB
 
 export const HEADER_SIZE = 18; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4)
 export const CONNECTION_TIMEOUT_MS = 15000;

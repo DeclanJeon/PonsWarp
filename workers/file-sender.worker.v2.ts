@@ -4,9 +4,9 @@ declare const self: DedicatedWorkerGlobalScope;
 import { Zip, ZipPassThrough } from 'fflate';
 
 // ============================================================================
-// 🚀 Sender Worker with ZIP compression for folders
-// - 단일 파일: 그대로 전송
-// - 여러 파일/폴더: ZIP으로 압축하여 전송
+// 🚀 Sender Worker V2 (Fixed)
+// - Race Condition 방지: init 완료 전 요청 무시
+// - Packet Flooding 방지: 64KB 이상 모아서 전송 (Aggregation)
 // ============================================================================
 
 const CHUNK_SIZE_MIN = 16 * 1024;
@@ -127,14 +127,9 @@ interface WorkerState {
   files: File[];
   manifest: any;
   mode: 'single' | 'zip';
-  
-  // Single mode
   currentFileOffset: number;
-  
-  // ZIP mode
   zipStream: ReadableStream<Uint8Array> | null;
   zipReader: ReadableStreamDefaultReader<Uint8Array> | null;
-  
   chunkSequence: number;
   totalBytesSent: number;
   startTime: number;
@@ -190,7 +185,6 @@ function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
   if (config.chunkSize !== undefined) {
     adaptiveConfig.chunkSize = Math.max(CHUNK_SIZE_MIN, Math.min(CHUNK_SIZE_MAX, config.chunkSize));
     CHUNK_SIZE = adaptiveConfig.chunkSize;
-    console.log('[Worker] Chunk size updated:', CHUNK_SIZE);
   }
   if (config.prefetchBatch !== undefined) {
     adaptiveConfig.prefetchBatch = Math.max(4, Math.min(32, config.prefetchBatch));
@@ -201,129 +195,159 @@ function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
 }
 
 async function initWorker(payload: { files: File[]; manifest: any }) {
+  // 상태 초기화
+  resetWorker();
+  
   state.files = payload.files;
   state.manifest = payload.manifest;
   state.chunkSequence = 0;
   state.totalBytesSent = 0;
   state.startTime = 0;
-  state.isInitialized = true;
+  state.isInitialized = true; // 플래그 설정
   state.isCompleted = false;
   state.currentFileOffset = 0;
 
-  chunkPool.clear();
-  doubleBuffer.clear();
   isTransferActive = true;
   prefetchPromise = null;
-  
-  // 🚀 [핵심 수정] ZIP 버퍼 및 진행률 추적 초기화
   zipBuffer = null;
-  zipBufferOffset = 0;
-  zipSourceBytesRead = 0;
-
+  
   const fileCount = state.files.length;
-  console.log('[Worker] Initializing:', { fileCount, totalSize: state.manifest.totalSize });
+  console.log('[Worker] Initializing for', fileCount, 'files');
 
-  // 🚨 [핵심] 파일 개수에 따라 모드 결정
   if (fileCount === 1) {
     state.mode = 'single';
-    console.log('[Worker] Mode: SINGLE file');
   } else {
     state.mode = 'zip';
-    console.log('[Worker] Mode: ZIP compression for', fileCount, 'files');
-    await initZipStream();
+    try {
+      await initZipStream();
+      // ZIP 모드 초기 프리패치 (데이터 준비)
+      await prefetchBatch();
+    } catch (error: any) {
+      console.error('[Worker] ZIP init failed:', error);
+      self.postMessage({ type: 'error', payload: { message: error.message } });
+      return;
+    }
   }
 
   triggerPrefetch();
-  
-  // 🚀 [핵심 수정] 초기화 완료 알림
   self.postMessage({ type: 'init-complete' });
 }
 
-// 🚀 [핵심 추가] ZIP 모드에서 원본 파일 읽기 진행률 추적
+// ZIP 소스 읽기 진행률
 let zipSourceBytesRead = 0;
 
-/**
- * ZIP 스트림 초기화
- */
 async function initZipStream() {
-  zipSourceBytesRead = 0; // 초기화
+  zipSourceBytesRead = 0;
   const zip = new Zip();
+  let zipFinalized = false;
+  let hasError = false;
+  const zipDataQueue: Uint8Array[] = [];
+  let resolveDataAvailable: (() => void) | null = null;
   
-  // ReadableStream 생성
-  state.zipStream = new ReadableStream({
-    start(controller) {
-      zip.ondata = (err, data, final) => {
-        if (err) {
-          console.error('[Worker] ZIP error:', err);
-          controller.error(err);
-          return;
+  zip.ondata = (err, data, final) => {
+    if (err) {
+      console.error('[Worker] ZIP error:', err);
+      hasError = true;
+      return;
+    }
+    if (data && data.length > 0) {
+      zipDataQueue.push(data);
+      if (resolveDataAvailable) {
+        resolveDataAvailable();
+        resolveDataAvailable = null;
+      }
+    }
+    if (final) {
+      console.log('[Worker] ZIP stream finalized');
+      zipFinalized = true;
+      if (resolveDataAvailable) {
+        resolveDataAvailable();
+        resolveDataAvailable = null;
+      }
+    }
+  };
+  
+  // 비동기 파일 처리 (webkitRelativePath 대신 manifest path 사용)
+  const processFilesAsync = async () => {
+    try {
+      for (let i = 0; i < state.files.length; i++) {
+        if (!isTransferActive) break;
+        
+        const file = state.files[i];
+        let filePath = file.name;
+        // 🚀 [FIX] Worker에서 webkitRelativePath 손실 대응
+        if (state.manifest && state.manifest.files && state.manifest.files[i]) {
+            filePath = state.manifest.files[i].path;
         }
         
-        if (data && data.length > 0) {
-          controller.enqueue(data);
-        }
+        const entry = new ZipPassThrough(filePath);
+        zip.add(entry);
         
-        if (final) {
-          controller.close();
-        }
-      };
-      
-      // 각 파일을 ZIP에 추가
-      (async () => {
-        for (const file of state.files) {
-          const entry = new ZipPassThrough(file.webkitRelativePath || file.name);
-          zip.add(entry);
-          
-          // 파일 데이터를 스트리밍으로 읽어서 ZIP 엔트리에 푸시
-          const reader = file.stream().getReader();
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              
-              // 🚀 [핵심] 원본 파일에서 읽은 바이트 추적
-              zipSourceBytesRead += value.length;
-              
-              entry.push(value, false);
-            }
-            entry.push(new Uint8Array(0), true); // 파일 종료
-          } catch (e) {
-            console.error('[Worker] File read error:', e);
+        const reader = file.stream().getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            zipSourceBytesRead += value.length;
+            entry.push(value, false);
           }
+          entry.push(new Uint8Array(0), true);
+        } catch (e) {
+          console.error('[Worker] File read error:', filePath, e);
+          try { entry.push(new Uint8Array(0), true); } catch(err) {}
+        } finally {
+          reader.releaseLock();
         }
-        
-        // 모든 파일 추가 완료
-        zip.end();
-      })();
+      }
+      zip.end();
+    } catch (e) {
+      console.error('[Worker] Fatal ZIP error:', e);
+      hasError = true;
+    }
+  };
+  
+  state.zipStream = new ReadableStream({
+    async pull(controller) {
+      if (zipDataQueue.length > 0) {
+        controller.enqueue(zipDataQueue.shift()!);
+        return;
+      }
+      if (zipFinalized) {
+        controller.close();
+        return;
+      }
+      if (hasError) {
+        controller.error(new Error('ZIP failed'));
+        return;
+      }
+      
+      await new Promise<void>((resolve) => {
+        resolveDataAvailable = resolve;
+      });
+      
+      if (zipDataQueue.length > 0) controller.enqueue(zipDataQueue.shift()!);
+      else if (zipFinalized) controller.close();
+      else if (hasError) controller.error(new Error('ZIP failed'));
     }
   });
   
   state.zipReader = state.zipStream.getReader();
-  console.log('[Worker] ZIP stream initialized');
+  processFilesAsync();
 }
 
 function resetWorker() {
   isTransferActive = false;
-  
   if (state.zipReader) {
     state.zipReader.cancel();
     state.zipReader = null;
   }
-  
-  state.files = [];
-  state.manifest = null;
-  state.mode = 'single';
-  state.currentFileOffset = 0;
-  state.zipStream = null;
-  state.chunkSequence = 0;
-  state.totalBytesSent = 0;
-  state.startTime = 0;
   state.isInitialized = false;
   state.isCompleted = false;
-
+  
+  state.files = [];
   chunkPool.clear();
   doubleBuffer.clear();
-  prefetchPromise = null;
+  zipBuffer = null;
 }
 
 function triggerPrefetch() {
@@ -340,31 +364,21 @@ function triggerPrefetch() {
 
 async function prefetchBatch(): Promise<void> {
   const batchSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.prefetchBatch : PREFETCH_BATCH;
-  
   for (let i = 0; i < batchSize && isTransferActive && !state.isCompleted; i++) {
     if (!doubleBuffer.canPrefetch()) break;
-
     const chunk = await createNextChunk();
-    if (chunk) {
-      doubleBuffer.addToInactive(chunk);
-    } else {
-      break;
-    }
+    if (chunk) doubleBuffer.addToInactive(chunk);
+    else break;
   }
 }
 
 async function createNextChunk(): Promise<ArrayBuffer | null> {
-  if (state.mode === 'single') {
-    return createSingleFileChunk();
-  } else {
-    return createZipChunk();
-  }
+  if (state.mode === 'single') return createSingleFileChunk();
+  return createZipChunk();
 }
 
-/**
- * 단일 파일 청크 생성
- */
 async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
+  if (state.files.length === 0) return null; // 방어 코드
   const file = state.files[0];
   
   if (state.currentFileOffset >= file.size) {
@@ -379,38 +393,17 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   try {
     const blob = file.slice(start, end);
     const buffer = await blob.arrayBuffer();
-    const dataSize = buffer.byteLength;
-
-    const packet = chunkPool.acquire();
-    const view = new DataView(packet.buffer);
-
-    // 헤더 작성 (fileId = 0)
-    view.setUint16(0, 0, true);
-    view.setUint32(2, state.chunkSequence++, true);
-    view.setBigUint64(6, BigInt(start), true);
-    view.setUint32(14, dataSize, true);
-
-    packet.set(new Uint8Array(buffer), 18);
+    const packet = createPacket(new Uint8Array(buffer), buffer.byteLength);
     state.currentFileOffset = end;
-    state.totalBytesSent += dataSize;
-
-    const result = new ArrayBuffer(18 + dataSize);
-    new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
-    chunkPool.release(packet);
-
-    return result;
-  } catch (error) {
-    console.error('[Worker] Single file chunk creation failed:', error);
+    return packet;
+  } catch (e) {
+    console.error('[Worker] Single chunk error:', e);
     return null;
   }
 }
 
-/**
- * ZIP 청크 생성
- * ZIP 스트림에서 읽은 데이터를 적절한 크기로 분할하여 전송
- */
+// 🚀 [핵심] ZIP 청크 병합 (Aggregation)
 let zipBuffer: Uint8Array | null = null;
-let zipBufferOffset = 0;
 
 async function createZipChunk(): Promise<ArrayBuffer | null> {
   if (!state.zipReader) {
@@ -418,127 +411,120 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
     return null;
   }
 
-  const currentChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
+  const targetChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
 
-  try {
-    // 버퍼에 남은 데이터가 있으면 먼저 처리
-    if (zipBuffer && zipBufferOffset < zipBuffer.length) {
-      const remaining = zipBuffer.length - zipBufferOffset;
-      const dataSize = Math.min(remaining, currentChunkSize);
-      
-      const result = createPacket(
-        zipBuffer.subarray(zipBufferOffset, zipBufferOffset + dataSize),
-        dataSize
-      );
-      
-      zipBufferOffset += dataSize;
-      
-      // 버퍼 다 사용했으면 초기화
-      if (zipBufferOffset >= zipBuffer.length) {
-        zipBuffer = null;
-        zipBufferOffset = 0;
+  // 1. 버퍼에 데이터가 충분하면 바로 반환
+  if (zipBuffer && zipBuffer.length >= targetChunkSize) {
+    const chunkData = zipBuffer.slice(0, targetChunkSize);
+    const remaining = zipBuffer.slice(targetChunkSize);
+    zipBuffer = remaining.length > 0 ? remaining : null;
+    return createPacket(chunkData, chunkData.length);
+  }
+
+  // 2. 버퍼가 부족하면 스트림에서 읽어서 채움 (Aggregation)
+  while (true) {
+    try {
+      const { done, value } = await state.zipReader.read();
+
+      if (done) {
+        // 스트림 끝: 남은 버퍼 털어내기
+        if (zipBuffer && zipBuffer.length > 0) {
+          const chunkData = zipBuffer;
+          zipBuffer = null;
+          return createPacket(chunkData, chunkData.length);
+        }
+        state.isCompleted = true;
+        return null;
       }
-      
-      return result;
-    }
 
-    // 새 데이터 읽기
-    const { done, value } = await state.zipReader.read();
-    
-    if (done) {
+      if (value && value.length > 0) {
+        // 데이터 병합
+        if (zipBuffer) {
+          const newBuffer = new Uint8Array(zipBuffer.length + value.length);
+          newBuffer.set(zipBuffer);
+          newBuffer.set(value, zipBuffer.length);
+          zipBuffer = newBuffer;
+        } else {
+          zipBuffer = value;
+        }
+
+        // 목표 크기 도달 확인
+        if (zipBuffer.length >= targetChunkSize) {
+          const chunkData = zipBuffer.slice(0, targetChunkSize);
+          const remaining = zipBuffer.slice(targetChunkSize);
+          zipBuffer = remaining.length > 0 ? remaining : null;
+          return createPacket(chunkData, chunkData.length);
+        }
+      }
+    } catch (e) {
+      console.error('[Worker] ZIP chunk error:', e);
       state.isCompleted = true;
       return null;
     }
-
-    if (!value || value.length === 0) {
-      return createZipChunk();
-    }
-
-    // 데이터가 청크 크기보다 크면 버퍼에 저장
-    if (value.length > currentChunkSize) {
-      zipBuffer = value;
-      zipBufferOffset = 0;
-      return createZipChunk();
-    }
-
-    // 청크 크기 이하면 바로 전송
-    return createPacket(value, value.length);
-    
-  } catch (error) {
-    console.error('[Worker] ZIP chunk creation failed:', error);
-    state.isCompleted = true;
-    return null;
   }
 }
 
-/**
- * 패킷 생성 헬퍼
- */
 function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
-  const result = new ArrayBuffer(18 + dataSize);
-  const resultView = new DataView(result);
-  const resultArray = new Uint8Array(result);
+  const packet = chunkPool.acquire();
+  const view = new DataView(packet.buffer);
 
-  // 헤더 작성 (fileId = 0)
-  resultView.setUint16(0, 0, true);
-  resultView.setUint32(2, state.chunkSequence++, true);
-  resultView.setBigUint64(6, BigInt(state.totalBytesSent), true);
-  resultView.setUint32(14, dataSize, true);
+  // Header: FileIndex(2) + ChunkIndex(4) + Offset(8) + Length(4)
+  view.setUint16(0, 0, true);
+  view.setUint32(2, state.chunkSequence++, true);
+  view.setBigUint64(6, BigInt(state.totalBytesSent), true);
+  view.setUint32(14, dataSize, true);
 
-  // 데이터 복사
-  resultArray.set(data, 18);
+  packet.set(data, 18);
   state.totalBytesSent += dataSize;
+
+  // Transferable 복사본 생성
+  const result = new ArrayBuffer(18 + dataSize);
+  new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
+  chunkPool.release(packet);
 
   return result;
 }
 
 function processBatch(requestedCount: number) {
-  if (state.startTime === 0) {
-    state.startTime = Date.now();
+  // 🚨 [FIX] 초기화되지 않았으면 처리하지 않음 (Race Condition 방지)
+  if (!state.isInitialized) {
+    console.warn('[Worker] Ignored process-batch request: Worker not initialized');
+    return;
   }
 
-  if (doubleBuffer.getActiveSize() === 0) {
-    doubleBuffer.swap();
-  }
+  if (state.startTime === 0) state.startTime = Date.now();
+  if (doubleBuffer.getActiveSize() === 0) doubleBuffer.swap();
 
   const chunks = doubleBuffer.takeFromActive(requestedCount);
-
+  
+  // 진행률 계산
   const elapsed = (Date.now() - state.startTime) / 1000;
   const speed = elapsed > 0 ? state.totalBytesSent / elapsed : 0;
-  
-  // 🚀 [핵심 수정] ZIP 모드일 때는 원본 파일 읽기 진행률 사용
   let progress = 0;
+  const totalSize = state.manifest?.totalSize || 0;
+  
   if (state.mode === 'zip') {
-    // ZIP 모드: 원본 파일에서 읽은 바이트 기준으로 진행률 계산
-    progress = state.manifest.totalSize > 0
-      ? Math.min(100, (zipSourceBytesRead / state.manifest.totalSize) * 100)
-      : 0;
+    progress = totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
   } else {
-    // Single 모드: 전송된 바이트 기준
-    progress = state.manifest.totalSize > 0
-      ? Math.min(100, (state.totalBytesSent / state.manifest.totalSize) * 100)
-      : 0;
+    progress = totalSize > 0 ? Math.min(100, (state.totalBytesSent / totalSize) * 100) : 0;
   }
 
   if (chunks.length > 0) {
-    self.postMessage(
-      {
-        type: 'chunk-batch',
-        payload: {
-          chunks,
-          progressData: {
-            bytesTransferred: state.totalBytesSent,
-            totalBytes: state.manifest.totalSize,
-            speed,
-            progress
-          }
+    self.postMessage({
+      type: 'chunk-batch',
+      payload: {
+        chunks,
+        progressData: {
+          bytesTransferred: state.totalBytesSent,
+          totalBytes: totalSize,
+          speed,
+          progress
         }
-      },
-      chunks
-    );
+      }
+    }, chunks);
   }
 
-  if (state.isCompleted && doubleBuffer.isEmpty()) {
+  if (state.isCompleted && doubleBuffer.isEmpty() && (!zipBuffer || zipBuffer.length === 0)) {
     self.postMessage({ type: 'complete' });
     return;
   }
@@ -551,51 +537,37 @@ function processBatch(requestedCount: number) {
 }
 
 async function createAndSendImmediate(count: number) {
-  const chunks: ArrayBuffer[] = [];
+  // 🚨 [FIX] 초기화 체크
+  if (!state.isInitialized) return;
 
+  const chunks: ArrayBuffer[] = [];
   for (let i = 0; i < count && !state.isCompleted; i++) {
     const chunk = await createNextChunk();
-    if (chunk) {
-      chunks.push(chunk);
-    } else {
-      break;
-    }
+    if (chunk) chunks.push(chunk);
+    else break;
   }
 
   if (chunks.length > 0) {
-    const elapsed = (Date.now() - state.startTime) / 1000;
-    const speed = elapsed > 0 ? state.totalBytesSent / elapsed : 0;
-    
-    // 🚀 [핵심 수정] ZIP 모드일 때는 원본 파일 읽기 진행률 사용
+    const totalSize = state.manifest?.totalSize || 0;
     let progress = 0;
-    if (state.mode === 'zip') {
-      progress = state.manifest.totalSize > 0
-        ? Math.min(100, (zipSourceBytesRead / state.manifest.totalSize) * 100)
-        : 0;
-    } else {
-      progress = state.manifest.totalSize > 0
-        ? Math.min(100, (state.totalBytesSent / state.manifest.totalSize) * 100)
-        : 0;
-    }
+    if (state.mode === 'zip') progress = totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
+    else progress = totalSize > 0 ? Math.min(100, (state.totalBytesSent / totalSize) * 100) : 0;
 
-    self.postMessage(
-      {
-        type: 'chunk-batch',
-        payload: {
-          chunks,
-          progressData: {
-            bytesTransferred: state.totalBytesSent,
-            totalBytes: state.manifest.totalSize,
-            speed,
-            progress
-          }
+    self.postMessage({
+      type: 'chunk-batch',
+      payload: {
+        chunks,
+        progressData: {
+          bytesTransferred: state.totalBytesSent,
+          totalBytes: totalSize,
+          speed: 0, 
+          progress
         }
-      },
-      chunks
-    );
+      }
+    }, chunks);
   }
 
-  if (state.isCompleted && doubleBuffer.isEmpty()) {
+  if (state.isCompleted && doubleBuffer.isEmpty() && (!zipBuffer || zipBuffer.length === 0)) {
     self.postMessage({ type: 'complete' });
   }
 }

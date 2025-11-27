@@ -95,7 +95,18 @@ class EnhancedWebRTCService {
     
     this.worker.onmessage = (e) => {
       const { type, payload } = e.data;
-      if (type === 'ready') this.worker!.postMessage({ type: 'init', payload: { files, manifest } });
+      if (type === 'ready') {
+        console.log('[Sender] Worker ready, initializing with files...');
+        this.worker!.postMessage({ type: 'init', payload: { files, manifest } });
+      }
+      else if (type === 'init-complete') {
+        console.log('[Sender] ✅ Worker initialization complete');
+        this.emit('worker-ready', true);
+      }
+      else if (type === 'error') {
+        console.error('[Sender] ❌ Worker error:', payload);
+        this.emit('error', payload.message || 'Worker initialization failed');
+      }
       else if (type === 'chunk-batch') this.handleBatchFromWorker(payload);
       else if (type === 'complete') this.finishTransfer();
     };
@@ -107,21 +118,44 @@ class EnhancedWebRTCService {
   /**
    * 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 + 파이프라인 최적화 + 네트워크 적응형 제어
    */
-  private handleBatchFromWorker(payload: any) {
+  private async handleBatchFromWorker(payload: any) {
     if (!this.peer || this.peer.destroyed) {
-      console.warn('[Sender] Peer not available, dropping batch');
+      console.warn('[Sender] ❌ [DEBUG] Peer not available, dropping batch');
       return;
     }
     
     // @ts-ignore
     const channel = this.peer._channel as RTCDataChannel;
     if (!channel || channel.readyState !== 'open') {
-      console.warn('[Sender] Channel not open, readyState:', channel?.readyState);
+      console.warn('[Sender] ❌ [DEBUG] Channel not open, readyState:', channel?.readyState);
       return;
     }
 
     const { chunks, progressData } = payload;
     const batchBytes = chunks.reduce((sum: number, c: ArrayBuffer) => sum + c.byteLength, 0);
+    
+    // 🚨 [DEBUG] 버퍼 상태 상세 로깅
+    const preSendBuffered = channel.bufferedAmount;
+    const bufferUtilization = (preSendBuffered / MAX_BUFFERED_AMOUNT) * 100;
+    
+    console.log('[Sender] 📊 [DEBUG] Batch received:', {
+      chunkCount: chunks.length,
+      batchBytes,
+      preSendBuffered,
+      bufferUtilization: bufferUtilization.toFixed(1) + '%',
+      maxBuffer: MAX_BUFFERED_AMOUNT
+    });
+    
+    // 🚨 [DEBUG] 버퍼 오버플로우 경고
+    if (preSendBuffered + batchBytes > MAX_BUFFERED_AMOUNT) {
+      console.warn('[Sender] ⚠️ [DEBUG] POTENTIAL BUFFER OVERFLOW!', {
+        preSendBuffered,
+        batchBytes,
+        total: preSendBuffered + batchBytes,
+        maxBuffer: MAX_BUFFERED_AMOUNT,
+        utilization: ((preSendBuffered + batchBytes) / MAX_BUFFERED_AMOUNT * 100).toFixed(1) + '%'
+      });
+    }
     
     this.isProcessingBatch = false;
 
@@ -133,19 +167,56 @@ class EnhancedWebRTCService {
         if (this.useMultiChannel && this.dataChannels.length > 0) {
             this.sendChunksMultiChannel(chunks);
         } else {
-            for (const chunk of chunks) {
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+
                 // 🚨 [핵심 수정] 각 청크 전송 전 채널 상태 재확인
                 if (channel.readyState !== 'open') {
-                  console.error('[Sender] Channel closed during batch send');
+                  console.error('[Sender] ❌ [DEBUG] Channel closed during batch send at chunk', i);
                   this.cleanup();
                   return;
                 }
-                
-                this.peer.send(chunk);
-                
-                // 🚀 [Phase 3] 네트워크 컨트롤러에 전송 기록
-                if (this.useAdaptiveControl) {
-                    this.networkController.recordSend(chunk.byteLength);
+
+                // 🚨 [DEBUG] 청크별 버퍼 상태 확인
+                const preChunkBuffered = channel.bufferedAmount;
+                if (preChunkBuffered + chunk.byteLength > MAX_BUFFERED_AMOUNT) {
+                  console.warn('[Sender] ⚠️ [DEBUG] Buffer full, waiting for drain...', {
+                    preChunkBuffered,
+                    chunkSize: chunk.byteLength,
+                    maxBuffer: MAX_BUFFERED_AMOUNT
+                  });
+
+                  // 🚨 [수정] 버퍼가 차면 대기 후 재시도
+                  await this.waitForBufferDrain(channel);
+                }
+
+                // 🚨 [수정] 청크 전송 전 버퍼 상태 재확인
+                if (channel.bufferedAmount + chunk.byteLength > MAX_BUFFERED_AMOUNT) {
+                  console.warn('[Sender] ⚠️ [DEBUG] Buffer still full after wait, skipping chunk', i);
+                  continue;
+                }
+
+                try {
+                  this.peer.send(chunk);
+
+                  // 🚨 [DEBUG] 전송 후 버퍼 상태
+                  const postChunkBuffered = channel.bufferedAmount;
+                  console.log('[Sender] 📤 [DEBUG] Chunk', i + 1, '/', chunks.length, 'sent:', {
+                    chunkSize: chunk.byteLength,
+                    preChunkBuffered,
+                    postChunkBuffered,
+                    bufferIncrease: postChunkBuffered - preChunkBuffered
+                  });
+
+                  // 🚀 [Phase 3] 네트워크 컨트롤러에 전송 기록
+                  if (this.useAdaptiveControl) {
+                      this.networkController.recordSend(chunk.byteLength);
+                  }
+
+                } catch (e) {
+                  console.error('[Sender] ❌ [DEBUG] Failed to send chunk', i, ':', e);
+                  // 개별 청크 전송 실패 시 다음 청크로 계속 진행
+                  continue;
                 }
             }
         }
@@ -166,26 +237,80 @@ class EnhancedWebRTCService {
             // 🚀 [Phase 3] 적응형 청크 크기를 Worker에 전달
             const adaptiveParams = this.networkController.getAdaptiveParams();
             if (this.worker && adaptiveParams.chunkSize !== CHUNK_SIZE_MAX) {
-                this.worker.postMessage({ 
-                    type: 'update-config', 
-                    payload: { chunkSize: adaptiveParams.chunkSize } 
+                this.worker.postMessage({
+                    type: 'update-config',
+                    payload: { chunkSize: adaptiveParams.chunkSize }
                 });
             }
         }
 
         // 4. 🚀 [핵심] 버퍼 상태에 따른 즉시 요청
         //    HIGH_WATER_MARK 이하면 즉시 다음 배치 요청 (파이프라인 유지)
-        const canSend = this.useAdaptiveControl 
+        const canSend = this.useAdaptiveControl
             ? this.networkController.canSend(channel.bufferedAmount)
             : channel.bufferedAmount < HIGH_WATER_MARK;
+        
+        const postSendBuffered = channel.bufferedAmount;
+        const finalBufferUtilization = (postSendBuffered / MAX_BUFFERED_AMOUNT) * 100;
+            
+        console.log('[Sender] 📊 [DEBUG] Batch completed:', {
+          batchBytes,
+          postSendBuffered,
+          finalBufferUtilization: finalBufferUtilization.toFixed(1) + '%',
+          canSend,
+          highWaterMark: HIGH_WATER_MARK
+        });
             
         if (canSend) {
             this.requestMoreChunks();
+        } else {
+          console.log('[Sender] ⏸️ [DEBUG] Buffer too full, pausing requests');
         }
 
     } catch (e) {
-        console.error('Send failed:', e);
+        console.error('[Sender] ❌ [DEBUG] Send failed:', e);
+        console.log('[Sender] 📊 [DEBUG] State at error:', {
+          peerExists: !!this.peer,
+          peerDestroyed: this.peer?.destroyed,
+          channelReadyState: channel?.readyState,
+          bufferedAmount: channel?.bufferedAmount
+        });
         this.cleanup();
+    }
+  }
+  /**
+   * 🚨 [수정] 버퍼 드레인 대기 함수
+   */
+  private async waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
+    const maxWaitTime = 10000; // 최대 10초 대기
+    const checkInterval = 50;  // 50ms 간격으로 확인
+    let elapsedTime = 0;
+    
+    console.log('[Sender] ⏳ [DEBUG] Waiting for buffer drain...', {
+      currentBuffered: channel.bufferedAmount,
+      maxBuffer: MAX_BUFFERED_AMOUNT
+    });
+    
+    while (channel.bufferedAmount > MAX_BUFFERED_AMOUNT * 0.8 && elapsedTime < maxWaitTime) {
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      elapsedTime += checkInterval;
+      
+      if (elapsedTime % 1000 === 0) { // 1초마다 로그 출력
+        console.log('[Sender] ⏳ [DEBUG] Still waiting for drain...', {
+          elapsedTime: elapsedTime + 'ms',
+          currentBuffered: channel.bufferedAmount,
+          maxBuffer: MAX_BUFFERED_AMOUNT
+        });
+      }
+    }
+    
+    if (channel.bufferedAmount > MAX_BUFFERED_AMOUNT * 0.8) {
+      console.warn('[Sender] ⚠️ [DEBUG] Buffer drain timeout, proceeding anyway');
+    } else {
+      console.log('[Sender] ✅ [DEBUG] Buffer drained successfully', {
+        finalBuffered: channel.bufferedAmount,
+        waitTime: elapsedTime + 'ms'
+      });
     }
   }
   
@@ -259,45 +384,124 @@ class EnhancedWebRTCService {
     const bufferUtilization = channel.bufferedAmount / MAX_BUFFERED_AMOUNT;
     const oldBatchSize = this.currentBatchSize;
     
+    // 🚨 [수정] ZIP 압축률 계산 (원본 대비 전송 데이터 비율)
+    let compressionRatio = 1.0; // 기본값 (압축 없음)
+    if (this.worker && this.pendingManifest && this.pendingManifest.totalFiles > 1) {
+      // ZIP 모드인 경우 압축률 추정
+      compressionRatio = this.estimateZipCompressionRatio();
+      console.log('[Adaptive] 📊 [DEBUG] ZIP compression ratio:', compressionRatio.toFixed(2));
+    }
+    
     // 🚀 [Phase 3] 네트워크 적응형 컨트롤러 사용 시
     if (this.useAdaptiveControl) {
       const adaptiveParams = this.networkController.getAdaptiveParams();
-      this.currentBatchSize = adaptiveParams.batchSize;
+      
+      // 🚨 [수정] ZIP 압축률을 고려한 배치 크기 조절
+      const adjustedBatchSize = Math.floor(adaptiveParams.batchSize / compressionRatio);
+      this.currentBatchSize = Math.max(BATCH_SIZE_MIN, Math.min(BATCH_SIZE_MAX, adjustedBatchSize));
       
       if (oldBatchSize !== this.currentBatchSize) {
         const metrics = this.networkController.getMetrics();
-        logInfo('[Adaptive-BBR]', `Batch: ${oldBatchSize} → ${this.currentBatchSize} (RTT: ${metrics.avgRtt.toFixed(1)}ms, throughput: ${(metrics.throughput / 1024 / 1024).toFixed(2)}MB/s)`);
+        logInfo('[Adaptive-BBR]', `Batch: ${oldBatchSize} → ${this.currentBatchSize} (compression: ${compressionRatio.toFixed(2)}, RTT: ${metrics.avgRtt.toFixed(1)}ms, throughput: ${(metrics.throughput / 1024 / 1024).toFixed(2)}MB/s)`);
       }
       return;
     }
     
-    // 기존 AIMD 로직 (fallback)
+    // 기존 AIMD 로직 (fallback) - ZIP 압축률 고려
+    let targetBatchSize = this.currentBatchSize;
+    
     if (bufferUtilization < 0.3) {
-      this.currentBatchSize = Math.min(
-        BATCH_SIZE_MAX, 
-        this.currentBatchSize + 4
-      );
+      // 버퍼 여유가 많으면 증가 (ZIP 압축률 반영)
+      targetBatchSize = Math.floor(this.currentBatchSize * 1.2 / compressionRatio);
     } else if (bufferUtilization > 0.7) {
-      this.currentBatchSize = Math.max(
-        BATCH_SIZE_MIN, 
-        Math.floor(this.currentBatchSize * 0.75)
-      );
+      // 버퍼가 거의 차면 감소
+      targetBatchSize = Math.floor(this.currentBatchSize * 0.75);
     }
     
     if (this.drainRate > 0) {
       const optimalBatch = Math.floor(
-        (MAX_BUFFERED_AMOUNT - channel.bufferedAmount) / CHUNK_SIZE_MAX
+        (MAX_BUFFERED_AMOUNT - channel.bufferedAmount) / (CHUNK_SIZE_MAX * compressionRatio)
       );
       
-      this.currentBatchSize = Math.max(
-        BATCH_SIZE_MIN,
-        Math.min(BATCH_SIZE_MAX, Math.floor((this.currentBatchSize + optimalBatch) / 2))
-      );
+      targetBatchSize = Math.floor((targetBatchSize + optimalBatch) / 2);
     }
     
+    this.currentBatchSize = Math.max(
+      BATCH_SIZE_MIN,
+      Math.min(BATCH_SIZE_MAX, targetBatchSize)
+    );
+    
     if (oldBatchSize !== this.currentBatchSize) {
-      logInfo('[Adaptive]', `Batch size: ${oldBatchSize} → ${this.currentBatchSize} (buffer: ${(bufferUtilization * 100).toFixed(1)}%)`);
+      logInfo('[Adaptive]', `Batch size: ${oldBatchSize} → ${this.currentBatchSize} (compression: ${compressionRatio.toFixed(2)}, buffer: ${(bufferUtilization * 100).toFixed(1)}%)`);
     }
+  }
+  
+  /**
+   * 🚨 [추가] ZIP 압축률 추정 함수
+   */
+  private estimateZipCompressionRatio(): number {
+    // 파일 종류에 따른 평균 압축률
+    const fileTypes = this.pendingManifest?.files?.map(f => f.name.split('.').pop()?.toLowerCase()) || [];
+    
+    let totalCompressionRatio = 0;
+    let fileCount = 0;
+    
+    for (const fileType of fileTypes) {
+      let compressionRatio = 1.0; // 기본값 (압축 없음)
+      
+      // 파일 종류별 압축률 (실제 경험 기반)
+      switch (fileType) {
+        case 'txt':
+        case 'csv':
+        case 'json':
+        case 'xml':
+        case 'md':
+          compressionRatio = 0.3; // 텍스트 파일은 압축률이 높음
+          break;
+        case 'js':
+        case 'css':
+        case 'html':
+        case 'ts':
+          compressionRatio = 0.4; // 코드 파일
+          break;
+        case 'jpg':
+        case 'jpeg':
+        case 'png':
+        case 'gif':
+        case 'mp3':
+        case 'mp4':
+        case 'avi':
+          compressionRatio = 1.1; // 이미지/영상은 오히려 더 커질 수 있음
+          break;
+        case 'pdf':
+        case 'doc':
+        case 'docx':
+        case 'xls':
+        case 'xlsx':
+          compressionRatio = 0.8; // 문서 파일
+          break;
+        case 'zip':
+        case 'rar':
+        case '7z':
+          compressionRatio = 1.2; // 이미 압축된 파일
+          break;
+        default:
+          compressionRatio = 0.7; // 기타 파일
+      }
+      
+      totalCompressionRatio += compressionRatio;
+      fileCount++;
+    }
+    
+    const averageCompressionRatio = fileCount > 0 ? totalCompressionRatio / fileCount : 1.0;
+    
+    console.log('[Adaptive] 📊 [DEBUG] Compression analysis:', {
+      fileTypes,
+      averageCompressionRatio: averageCompressionRatio.toFixed(2),
+      fileCount
+    });
+    
+    return averageCompressionRatio;
   }
 
   private requestMoreChunks() {
@@ -309,15 +513,6 @@ class EnhancedWebRTCService {
   }
 
 
-  private waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
-    return new Promise((resolve) => {
-      const check = () => {
-        if (channel.bufferedAmount <= 256 * 1024 || channel.readyState !== 'open') resolve();
-        else setTimeout(check, 50);
-      };
-      check();
-    });
-  }
 
   private startTransferSequence() {
     if (!this.peer || !this.pendingManifest) return;
