@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, FolderOpen, RefreshCw } from 'lucide-react';
+import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../constants';
 import { DirectFileWriter } from '../services/directFileWriter';
-import { OPFSFileWriter } from '../services/opfsFileWriter';
 import { formatBytes } from '../utils/fileUtils';
 
 interface ReceiverViewProps {
@@ -183,12 +182,13 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
   /**
    * 🚀 [핵심] 사용자가 "Start Download"를 누르면
    * 저장 위치를 확보하고(또는 스트림을 열고) 전송을 시작함
+   * OPFS 제거 - DirectFileWriter만 사용 (무제한 파일 크기 지원)
    */
   const startDirectDownload = useCallback(async () => {
     if (!manifest) return;
 
     try {
-      // 🚨 [핵심 수정] 다운로드 시작 시 기존 타임아웃 즉시 해제
+      // 다운로드 시작 시 기존 타임아웃 즉시 해제
       if (connectionTimeoutRef.current) {
         clearTimeout(connectionTimeoutRef.current);
         connectionTimeoutRef.current = null;
@@ -196,29 +196,23 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       
       setIsWaitingForSender(true);
       setStatus('RECEIVING');
-      // 1. 브라우저 감지 및 전략 선택
-      const supportsFileSystemAccess = 'showDirectoryPicker' in window;
       
-      let writer;
+      // DirectFileWriter 사용 (File System Access API 또는 StreamSaver)
+      // 브라우저 저장소 quota 제한 없이 무제한 파일 크기 지원
+      console.log('[ReceiverView] Using DirectFileWriter (no storage quota limit)');
+      console.log('[ReceiverView] Manifest:', manifest.totalFiles, 'files,', (manifest.totalSize / (1024 * 1024)).toFixed(2), 'MB');
+      
+      const writer = new DirectFileWriter();
 
-      // Chrome/Edge: File System Access API 사용 (사용자가 폴더 선택 → 바로 디스크에 쓰기)
-      if (supportsFileSystemAccess) {
-        console.log('[Receiver] Using DirectFileWriter (FileSystemAccess API)');
-        writer = new DirectFileWriter();
-      } 
-      // Firefox/Safari: OPFS 사용 (수신하면서 OPFS에 쓰기 → 완료 후 한 번만 다운로드)
-      else {
-        console.log('[Receiver] Using OPFSFileWriter (OPFS + StreamSaver)');
-        writer = new OPFSFileWriter();
-      }
-
-      // 2. 서비스에 Writer 주입
+      // 서비스에 Writer 주입
       transferService.setWriter(writer);
 
-      // 3. 수신 시작 (내부적으로 writer.initStorage -> transferService.startReceiving 호출)
+      // 🚨 [핵심] 수신 시작 - 이 함수가 완료되어야 TRANSFER_READY가 전송됨
+      console.log('[ReceiverView] Starting receiver initialization...');
       await transferService.startReceiving(manifest);
+      console.log('[ReceiverView] ✅ Receiver initialization complete');
       
-      // 🚨 [추가] 다운로드 시작 후 새로운 타임아웃 설정 (송신자 응답 대기)
+      // 다운로드 시작 후 새로운 타임아웃 설정 (송신자 응답 대기)
       connectionTimeoutRef.current = setTimeout(() => {
         if (statusRef.current === 'RECEIVING' && isWaitingForSender) {
           console.warn('[ReceiverView] Download start timeout - no response from sender');
@@ -230,12 +224,18 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       }, 10000); // 10초 타임아웃
       
     } catch (e: any) {
+      console.error('[ReceiverView] startDirectDownload error:', e);
+      
       if (e.name === 'AbortError') {
+        console.log('[ReceiverView] User cancelled file selection');
         setIsWaitingForSender(false);
         setStatus('WAITING');
         return;
       }
-      setErrorMsg('Failed to initialize download: ' + e.message);
+      
+      const errorMessage = e.message || String(e);
+      console.error('[ReceiverView] Download initialization failed:', errorMessage);
+      setErrorMsg('Failed to initialize download: ' + errorMessage);
       setStatus('ERROR');
       setIsWaitingForSender(false);
     }

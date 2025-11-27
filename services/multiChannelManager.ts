@@ -5,6 +5,10 @@
  * - 여러 DataChannel을 통한 병렬 전송
  * - 채널별 버퍼 상태 기반 로드 밸런싱
  * - 네트워크 상태 모니터링 및 동적 조절
+ * 
+ * ⚠️ 현재 상태: 구현 완료, SimplePeer와 통합 대기
+ * SimplePeer는 단일 DataChannel만 지원하므로, 
+ * 멀티 채널 사용 시 native RTCPeerConnection 직접 사용 필요
  */
 
 import { logInfo, logError } from '../utils/logger';

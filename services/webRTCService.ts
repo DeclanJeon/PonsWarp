@@ -42,8 +42,8 @@ class EnhancedWebRTCService {
   private isProcessingBatch = false;
   private pendingManifest: TransferManifest | null = null;
   
-  // 🚀 [Phase 1] 적응형 배치 크기 상태
-  private currentBatchSize = BATCH_SIZE_INITIAL;
+  // 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 상태
+  private currentBatchSize = BATCH_SIZE_INITIAL; // 32로 증가됨
   private lastDrainTime = 0;
   private drainRate = 0; // bytes/ms
   private batchSendTime = 0;
@@ -52,7 +52,7 @@ class EnhancedWebRTCService {
   private networkController = new NetworkAdaptiveController();
   private useAdaptiveControl = true;
   private lastMetricsUpdate = 0;
-  private sendStartTimes: Map<number, number> = new Map(); // seq -> timestamp
+  private statsInterval: ReturnType<typeof setInterval> | null = null;
   
   // 🚀 [Phase 3] 멀티 채널 (선택적 활성화)
   private useMultiChannel = false;
@@ -108,11 +108,17 @@ class EnhancedWebRTCService {
    * 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 + 파이프라인 최적화 + 네트워크 적응형 제어
    */
   private handleBatchFromWorker(payload: any) {
-    if (!this.peer || this.peer.destroyed) return;
+    if (!this.peer || this.peer.destroyed) {
+      console.warn('[Sender] Peer not available, dropping batch');
+      return;
+    }
     
     // @ts-ignore
     const channel = this.peer._channel as RTCDataChannel;
-    if (channel.readyState !== 'open') return;
+    if (!channel || channel.readyState !== 'open') {
+      console.warn('[Sender] Channel not open, readyState:', channel?.readyState);
+      return;
+    }
 
     const { chunks, progressData } = payload;
     const batchBytes = chunks.reduce((sum: number, c: ArrayBuffer) => sum + c.byteLength, 0);
@@ -128,10 +134,12 @@ class EnhancedWebRTCService {
             this.sendChunksMultiChannel(chunks);
         } else {
             for (const chunk of chunks) {
-                // 🚀 [Phase 3] 전송 시간 기록 (RTT 측정용)
-                const view = new DataView(chunk);
-                const seq = view.getUint32(2, true);
-                this.sendStartTimes.set(seq, performance.now());
+                // 🚨 [핵심 수정] 각 청크 전송 전 채널 상태 재확인
+                if (channel.readyState !== 'open') {
+                  console.error('[Sender] Channel closed during batch send');
+                  this.cleanup();
+                  return;
+                }
                 
                 this.peer.send(chunk);
                 
@@ -154,6 +162,15 @@ class EnhancedWebRTCService {
         // 🚀 [Phase 3] 네트워크 컨트롤러 버퍼 상태 업데이트
         if (this.useAdaptiveControl) {
             this.networkController.updateBufferState(channel.bufferedAmount);
+            
+            // 🚀 [Phase 3] 적응형 청크 크기를 Worker에 전달
+            const adaptiveParams = this.networkController.getAdaptiveParams();
+            if (this.worker && adaptiveParams.chunkSize !== CHUNK_SIZE_MAX) {
+                this.worker.postMessage({ 
+                    type: 'update-config', 
+                    payload: { chunkSize: adaptiveParams.chunkSize } 
+                });
+            }
         }
 
         // 4. 🚀 [핵심] 버퍼 상태에 따른 즉시 요청
@@ -180,10 +197,6 @@ class EnhancedWebRTCService {
         // 버퍼 여유가 가장 많은 채널 선택
         const channel = this.getBestChannel();
         if (channel && channel.readyState === 'open') {
-            const view = new DataView(chunk);
-            const seq = view.getUint32(2, true);
-            this.sendStartTimes.set(seq, performance.now());
-            
             channel.send(chunk);
             
             if (this.useAdaptiveControl) {
@@ -402,14 +415,22 @@ class EnhancedWebRTCService {
 
     try {
       console.log('[Receiver] Initializing storage writer...');
+      
+      // 🚨 [핵심 수정] writer.initStorage()가 완전히 완료될 때까지 대기
+      // ZIP 초기화, 파일 다이얼로그 등이 모두 끝나야 함
       await this.writer.initStorage(manifest);
       
-      console.log('[Receiver] Storage ready. Sending TRANSFER_READY...');
+      console.log('[Receiver] ✅ Storage fully initialized. Sending TRANSFER_READY...');
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
 
+      // 🚨 [핵심] 이제 송신자에게 준비 완료 신호 전송
       if (this.peer && !this.peer.destroyed) {
         this.peer.send(JSON.stringify({ type: 'TRANSFER_READY' }));
+        console.log('[Receiver] TRANSFER_READY sent to sender');
+      } else {
+        console.error('[Receiver] Cannot send TRANSFER_READY - peer not connected');
+        this.emit('error', 'Connection lost during initialization');
       }
     } catch (error: any) {
       console.error('[Receiver] Storage init failed:', error);
@@ -474,6 +495,11 @@ class EnhancedWebRTCService {
                         this.requestMoreChunks();
                     }
                 };
+            }
+
+            // 🚀 [Phase 3] WebRTC 통계 수집 시작
+            if (this.useAdaptiveControl && initiator) {
+                this.startStatsCollection();
             }
 
             if (initiator) this.startTransferSequence();
@@ -602,6 +628,47 @@ class EnhancedWebRTCService {
   }
 
   /**
+   * 🚀 [Phase 3] WebRTC 통계 수집 시작
+   */
+  private startStatsCollection(): void {
+    if (this.statsInterval) {
+      clearInterval(this.statsInterval);
+    }
+    
+    this.networkController.reset();
+    this.networkController.start();
+    
+    // 500ms마다 WebRTC 통계 수집
+    this.statsInterval = setInterval(async () => {
+      if (!this.peer || this.peer.destroyed || !this.isTransferring) {
+        this.stopStatsCollection();
+        return;
+      }
+      
+      try {
+        // @ts-ignore - SimplePeer 내부 접근
+        const pc = this.peer._pc as RTCPeerConnection;
+        if (pc) {
+          const stats = await pc.getStats();
+          this.networkController.updateFromWebRTCStats(stats);
+        }
+      } catch (e) {
+        // 통계 수집 실패 무시
+      }
+    }, 500);
+  }
+  
+  /**
+   * 🚀 [Phase 3] WebRTC 통계 수집 중지
+   */
+  private stopStatsCollection(): void {
+    if (this.statsInterval) {
+      clearInterval(this.statsInterval);
+      this.statsInterval = null;
+    }
+  }
+
+  /**
    * 🚀 [Phase 3] 적응형 제어 활성화/비활성화
    */
   public setAdaptiveControl(enabled: boolean): void {
@@ -609,6 +676,8 @@ class EnhancedWebRTCService {
     if (enabled) {
       this.networkController.reset();
       this.networkController.start();
+    } else {
+      this.stopStatsCollection();
     }
     logInfo('[WebRTC]', `Adaptive control: ${enabled ? 'enabled' : 'disabled'}`);
   }
@@ -658,10 +727,10 @@ class EnhancedWebRTCService {
     this.writer?.cleanup();
     
     // 🚀 [Phase 3] 추가 정리
+    this.stopStatsCollection();
     this.networkController.reset();
     this.dataChannels.forEach(ch => ch.close());
     this.dataChannels = [];
-    this.sendStartTimes.clear();
   }
 }
 

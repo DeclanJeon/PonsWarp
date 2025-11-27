@@ -6,23 +6,23 @@ export const CHUNK_SIZE_MIN = 16 * 1024;      // 16KB
 export const CHUNK_SIZE_INITIAL = 64 * 1024;  // 64KB
 export const CHUNK_SIZE_MAX = 128 * 1024;     // 128KB (브라우저 한계)
 
-// WebRTC 버퍼 설정
-export const MAX_BUFFERED_AMOUNT = 2 * 1024 * 1024;  // 2MB (증가)
-export const LOW_WATER_MARK = 512 * 1024;            // 512KB (증가)
-export const HIGH_WATER_MARK = 1.5 * 1024 * 1024;    // 1.5MB
+// WebRTC 버퍼 설정 - 🚀 [Phase 3] 더 공격적인 설정
+export const MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024;  // 4MB (증가)
+export const LOW_WATER_MARK = 1 * 1024 * 1024;       // 1MB (증가)
+export const HIGH_WATER_MARK = 3 * 1024 * 1024;      // 3MB
 
 export const HEADER_SIZE = 18; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4)
 export const CONNECTION_TIMEOUT_MS = 15000;
 
-// 🚀 적응형 배치 설정
+// 🚀 적응형 배치 설정 - [Phase 3] 더 공격적인 설정
 export const BATCH_SIZE_MIN = 8;              // 최소 배치
-export const BATCH_SIZE_MAX = 64;             // 최대 배치
-export const BATCH_SIZE_INITIAL = 16;         // 초기 배치
-export const BATCH_REQUEST_SIZE = 16;         // 레거시 호환
+export const BATCH_SIZE_MAX = 128;            // 최대 배치 (증가)
+export const BATCH_SIZE_INITIAL = 32;         // 초기 배치 (증가)
+export const BATCH_REQUEST_SIZE = 32;         // 레거시 호환 (증가)
 
-// 🚀 프리페치 버퍼 설정
-export const PREFETCH_BUFFER_SIZE = 8 * 1024 * 1024;  // 8MB 프리페치 버퍼
-export const PREFETCH_LOW_THRESHOLD = 2 * 1024 * 1024; // 2MB 이하면 프리페치 시작
+// 🚀 프리페치 버퍼 설정 - [Phase 3] 더 큰 버퍼
+export const PREFETCH_BUFFER_SIZE = 16 * 1024 * 1024;  // 16MB 프리페치 버퍼 (증가)
+export const PREFETCH_LOW_THRESHOLD = 4 * 1024 * 1024; // 4MB 이하면 프리페치 시작
 
 // 🚀 [Phase 3] 멀티 채널 설정
 export const MULTI_CHANNEL_COUNT = 3;                  // 기본 데이터 채널 수

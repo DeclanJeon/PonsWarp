@@ -1,96 +1,113 @@
 /**
  * Direct File Writer Service
- * File System Access API를 사용하여 메인 스레드에서 직접 파일 쓰기
- * OPFS 할당량 제한 없이 디스크 여유 공간만큼 파일 저장 가능
+ * OPFS 없이 청크를 받으면서 바로 다운로드
+ * 
+ * 전략:
+ * - 송신자가 폴더를 ZIP으로 압축해서 보냄
+ * - 수신자는 항상 단일 파일로 받음 (ZIP 또는 원본 파일)
+ * - File System Access API (Chrome/Edge) 또는 StreamSaver (Firefox) 사용
+ * 
+ * 장점:
+ * - 브라우저 저장소 quota 제한 없음
+ * - 무제한 파일 크기 지원
+ * - 메모리 효율적 (청크 단위 처리)
+ * - 간단하고 안정적
  */
 
-interface FileWriterHandle {
-  writable: FileSystemWritableFileStream;
-  written: number;
-  size: number;
+import streamSaver from 'streamsaver';
+
+// StreamSaver MITM 설정
+if (typeof window !== 'undefined') {
+  streamSaver.mitm = `${window.location.origin}/mitm.html`;
 }
 
 export class DirectFileWriter {
-  private fileHandles: Map<number, FileWriterHandle> = new Map();
-  private rootDirHandle: FileSystemDirectoryHandle | null = null;
+  private manifest: any = null;
   private totalBytesWritten = 0;
   private totalSize = 0;
-  private manifest: any = null;
-  private onProgressCallback: ((progress: number) => void) | null = null;
-  private onCompleteCallback: ((actualSize: number) => void) | null = null;
-  private onErrorCallback: ((error: string) => void) | null = null;
-  
-  // 🚀 [Phase 1] 속도 계산용 상태
   private startTime = 0;
   private lastProgressTime = 0;
-  private lastBytesWritten = 0;
-  private currentSpeed = 0;
-  
-  // 🚀 [버그 수정] 중복 finalize 방지
   private isFinalized = false;
   
-  // 🚀 [버그 수정] EOS 수신 후 대기 처리
-  private eosReceived = false;
-  private pendingWrites = 0;
+  // 파일 Writer
+  private writer: WritableStreamDefaultWriter | FileSystemWritableFileStream | null = null;
+  private writerMode: 'file-system-access' | 'streamsaver' = 'streamsaver';
+
+  private onProgressCallback: ((data: any) => void) | null = null;
+  private onCompleteCallback: ((actualSize: number) => void) | null = null;
+  private onErrorCallback: ((error: string) => void) | null = null;
 
   /**
-   * 사용자에게 저장 위치 선택 요청 및 파일 핸들 생성
+   * 스토리지 초기화
    */
   public async initStorage(manifest: any): Promise<void> {
     this.manifest = manifest;
     this.totalSize = manifest.totalSize;
+    this.startTime = Date.now();
+    this.totalBytesWritten = 0;
+    this.isFinalized = false;
+
+    const fileCount = manifest.totalFiles || manifest.files.length;
+    console.log('[DirectFileWriter] Initializing for', fileCount, 'files');
+    console.log('[DirectFileWriter] Total size:', (manifest.totalSize / (1024 * 1024)).toFixed(2), 'MB');
+
+    // 파일명 결정
+    let fileName: string;
+    if (fileCount === 1) {
+      // 단일 파일: 원본 파일명
+      fileName = manifest.files[0].path.split('/').pop()!;
+    } else {
+      // 여러 파일: ZIP 파일명
+      fileName = (manifest.rootName || 'download') + '.zip';
+    }
 
     try {
-      // 🚨 [핵심] File System Access API 지원 확인
-      if (!('showDirectoryPicker' in window)) {
-        throw new Error('UNSUPPORTED_BROWSER');
+      await this.initFileWriter(fileName, manifest.totalSize);
+      console.log('[DirectFileWriter] ✅ Initialized:', fileName);
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        throw new Error('USER_CANCELLED|사용자가 파일 저장을 취소했습니다.');
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * 파일 Writer 초기화
+   */
+  private async initFileWriter(fileName: string, fileSize: number): Promise<void> {
+    // @ts-ignore
+    const hasFileSystemAccess = !!window.showSaveFilePicker;
+
+    if (hasFileSystemAccess) {
+      // File System Access API (Chrome/Edge)
+      const ext = fileName.split('.').pop() || '';
+      const accept: Record<string, string[]> = {};
+      
+      if (ext === 'zip') {
+        accept['application/zip'] = ['.zip'];
+      } else {
+        accept['application/octet-stream'] = [`.${ext}`];
       }
 
-      console.log('[DirectFileWriter] Requesting directory picker...');
-      
-      // 사용자에게 저장 디렉토리 선택 요청
-      this.rootDirHandle = await (window as any).showDirectoryPicker({
-        mode: 'readwrite',
-        startIn: 'downloads',
+      // @ts-ignore
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{
+          description: 'File',
+          accept
+        }]
       });
-
-      console.log('[DirectFileWriter] Directory selected:', this.rootDirHandle.name);
-
-      // 각 파일에 대한 writable stream 생성
-      for (const file of manifest.files) {
-        const pathParts = file.path.split('/');
-        const fileName = pathParts.pop()!;
-        let currentDir = this.rootDirHandle;
-
-        // 폴더 구조 생성
-        for (const part of pathParts) {
-          if (part) {
-            currentDir = await currentDir.getDirectoryHandle(part, { create: true });
-          }
-        }
-
-        // 파일 핸들 생성
-        const fileHandle = await currentDir.getFileHandle(fileName, { create: true });
-        const writable = await fileHandle.createWritable();
-
-        this.fileHandles.set(file.id, {
-          writable,
-          written: 0,
-          size: file.size,
-        });
-
-        console.log(`[DirectFileWriter] File handle created: ${file.path} (${(file.size / (1024 * 1024)).toFixed(2)}MB)`);
-      }
-
-      console.log('[DirectFileWriter] ✅ Storage initialized for', manifest.totalFiles, 'files');
-    } catch (error: any) {
-      console.error('[DirectFileWriter] ❌ Init failed:', error);
       
-      if (error.name === 'AbortError') {
-        throw new Error('User cancelled directory selection');
-      }
-      
-      throw new Error(`Storage initialization failed: ${error.message}`);
+      this.writer = await handle.createWritable();
+      this.writerMode = 'file-system-access';
+      console.log(`[DirectFileWriter] File System Access ready: ${fileName}`);
+    } else {
+      // StreamSaver (Firefox 등)
+      const fileStream = streamSaver.createWriteStream(fileName, { size: fileSize });
+      this.writer = fileStream.getWriter();
+      this.writerMode = 'streamsaver';
+      console.log(`[DirectFileWriter] StreamSaver ready: ${fileName}`);
     }
   }
 
@@ -98,172 +115,107 @@ export class DirectFileWriter {
    * 청크 데이터 쓰기
    */
   public async writeChunk(packet: ArrayBuffer): Promise<void> {
+    if (this.isFinalized) return;
+
     const HEADER_SIZE = 18;
-
-    // 🚀 [버그 수정] 이미 완료된 경우 무시
-    if (this.isFinalized) {
-      return;
-    }
-
-    // 1. 최소 헤더 크기 체크
-    if (packet.byteLength < HEADER_SIZE) {
-      return;
-    }
+    if (packet.byteLength < HEADER_SIZE) return;
 
     const view = new DataView(packet);
     const fileId = view.getUint16(0, true);
 
-    // 2. EOS(End of Stream) 체크
+    // EOS 체크
     if (fileId === 0xFFFF) {
-      console.log('[DirectFileWriter] EOS received. Bytes written:', this.totalBytesWritten, '/', this.totalSize);
-      this.eosReceived = true;
-      
-      // 🚀 [버그 수정] 모든 데이터를 받았는지 확인 후 finalize
-      await this.checkAndFinalize();
+      console.log('[DirectFileWriter] EOS received, finalizing...');
+      await this.finalize();
       return;
     }
 
-    const offsetBigInt = view.getBigUint64(6, true);
     const size = view.getUint32(14, true);
 
-    // 3. 패킷 무결성 검증
+    // 패킷 무결성 검증
     if (packet.byteLength !== HEADER_SIZE + size) {
-      console.error(`[DirectFileWriter] ❌ Corrupt packet. Expected: ${HEADER_SIZE + size}, Got: ${packet.byteLength}`);
+      console.error('[DirectFileWriter] Corrupt packet');
       return;
     }
 
-    const handle = this.fileHandles.get(fileId);
-    if (!handle) {
-      console.error('[DirectFileWriter] ❌ No file handle for fileId:', fileId);
+    if (!this.writer) {
+      console.error('[DirectFileWriter] No writer available');
       return;
     }
-
-    // 🚀 [버그 수정] 진행 중인 쓰기 작업 추적
-    this.pendingWrites++;
 
     try {
-      // 🚀 [Phase 1] 시작 시간 기록
-      if (this.startTime === 0) {
-        this.startTime = performance.now();
-        this.lastProgressTime = this.startTime;
-      }
-      
-      const writePosition = Number(offsetBigInt);
-      const data = packet.slice(HEADER_SIZE, HEADER_SIZE + size);
-      
-      // 🚀 [버그 수정] write()에 position 옵션을 명시적으로 지정
-      // seek() + write() 대신 write({ type: 'write', position, data }) 사용
-      await handle.writable.write({
-        type: 'write',
-        position: writePosition,
-        data: data
-      });
+      const data = new Uint8Array(packet, HEADER_SIZE, size);
 
-      handle.written += size;
-      this.totalBytesWritten += size;
-      
-      // 🚀 [UX 개선] 속도 계산 및 진행률 콜백 (100ms 간격)
-      const now = performance.now();
-      const timeSinceLastUpdate = now - this.lastProgressTime;
-      
-      if (timeSinceLastUpdate > 100) {
-        const elapsed = timeSinceLastUpdate / 1000; // seconds
-        const bytesInInterval = this.totalBytesWritten - this.lastBytesWritten;
-        
-        // 이동 평균으로 속도 계산 (더 부드러운 표시)
-        const instantSpeed = bytesInInterval / elapsed;
-        this.currentSpeed = this.currentSpeed === 0 
-          ? instantSpeed 
-          : this.currentSpeed * 0.7 + instantSpeed * 0.3;
-        
-        this.lastProgressTime = now;
-        this.lastBytesWritten = this.totalBytesWritten;
-        
-        // 진행률 콜백 호출 (속도 정보 포함)
-        if (this.onProgressCallback) {
-          // 🚀 [UX 개선] 진행률을 0-100 범위로 제한
-          const progress = Math.min(100, (this.totalBytesWritten / this.totalSize) * 100);
-          (this.onProgressCallback as any)({
-            progress,
-            speed: this.currentSpeed,
-            bytesTransferred: this.totalBytesWritten,
-            totalBytes: this.totalSize
-          });
-        }
-      }
-
-    } catch (writeError: any) {
-      if (writeError.message?.includes('closing') || writeError.message?.includes('closed')) {
-        console.warn('[DirectFileWriter] Stream already closing, ignoring write');
+      if (this.writerMode === 'file-system-access') {
+        // File System Access: position 지정 쓰기
+        const offset = Number(view.getBigUint64(6, true));
+        await (this.writer as FileSystemWritableFileStream).write({
+          type: 'write',
+          position: offset,
+          data: data,
+        });
       } else {
-        console.error('[DirectFileWriter] Write error:', writeError);
+        // StreamSaver: 순차 쓰기
+        await (this.writer as WritableStreamDefaultWriter).write(data);
       }
-    } finally {
-      this.pendingWrites--;
-      
-      // 🚀 [버그 수정] EOS를 받았고 모든 쓰기가 완료되면 finalize
-      if (this.eosReceived) {
-        await this.checkAndFinalize();
-      }
-    }
-  }
-  
-  /**
-   * 🚀 [버그 수정] 모든 데이터 수신 확인 후 finalize
-   */
-  private async checkAndFinalize(): Promise<void> {
-    // 아직 쓰기 작업이 진행 중이면 대기
-    if (this.pendingWrites > 0) {
-      return;
-    }
-    
-    // 모든 데이터를 받았는지 확인 (95% 이상이면 완료로 간주 - 헤더 오버헤드 고려)
-    const completionRatio = this.totalBytesWritten / this.totalSize;
-    if (completionRatio >= 0.95 || this.totalBytesWritten >= this.totalSize) {
-      await this.finalize();
-    } else {
-      console.log('[DirectFileWriter] Waiting for more data...', 
-        `${this.totalBytesWritten}/${this.totalSize} (${(completionRatio * 100).toFixed(1)}%)`);
+
+      this.totalBytesWritten += size;
+      this.reportProgress();
+
+    } catch (error: any) {
+      console.error('[DirectFileWriter] Write error:', error);
+      this.onErrorCallback?.(`Write failed: ${error.message}`);
     }
   }
 
   /**
-   * 전송 완료 처리
+   * 진행률 보고
+   */
+  private reportProgress(): void {
+    const now = Date.now();
+    if (now - this.lastProgressTime < 100) return;
+
+    const elapsed = (now - this.startTime) / 1000;
+    const speed = elapsed > 0 ? this.totalBytesWritten / elapsed : 0;
+    const progress = this.totalSize > 0 ? (this.totalBytesWritten / this.totalSize) * 100 : 0;
+
+    this.onProgressCallback?.({
+      progress,
+      speed,
+      bytesTransferred: this.totalBytesWritten,
+      totalBytes: this.totalSize,
+    });
+
+    this.lastProgressTime = now;
+  }
+
+  /**
+   * 전송 완료
    */
   private async finalize(): Promise<void> {
-    // 🚀 [버그 수정] 중복 finalize 방지
-    if (this.isFinalized) {
-      console.warn('[DirectFileWriter] Already finalized, skipping');
-      return;
-    }
+    if (this.isFinalized) return;
     this.isFinalized = true;
-    
-    let actualSize = 0;
 
-    // 모든 파일 핸들 닫기
-    for (const handle of this.fileHandles.values()) {
+    if (this.writer) {
       try {
-        await handle.writable.close();
-        actualSize += handle.written;
-      } catch (e: any) {
-        // 이미 닫힌 스트림은 무시
-        if (!e.message?.includes('closed') && !e.message?.includes('closing')) {
-          console.error('[DirectFileWriter] Error closing handle:', e);
+        if (this.writerMode === 'file-system-access') {
+          await (this.writer as FileSystemWritableFileStream).close();
+        } else {
+          await (this.writer as WritableStreamDefaultWriter).close();
         }
+        console.log('[DirectFileWriter] ✅ File completed:', this.totalBytesWritten, 'bytes');
+      } catch (e: any) {
+        console.error('[DirectFileWriter] Error closing file:', e);
       }
     }
 
-    console.log('[DirectFileWriter] ✅ Transfer finalized. Total written:', actualSize);
-
-    if (this.onCompleteCallback) {
-      this.onCompleteCallback(actualSize);
-    }
+    this.onCompleteCallback?.(this.totalBytesWritten);
   }
 
   /**
    * 콜백 등록
    */
-  public onProgress(callback: (progress: number) => void): void {
+  public onProgress(callback: (data: any) => void): void {
     this.onProgressCallback = callback;
   }
 
@@ -279,23 +231,20 @@ export class DirectFileWriter {
    * 정리
    */
   public async cleanup(): Promise<void> {
-    for (const handle of this.fileHandles.values()) {
+    this.isFinalized = true;
+
+    if (this.writer) {
       try {
-        await handle.writable.abort();
+        if (this.writerMode === 'file-system-access') {
+          await (this.writer as FileSystemWritableFileStream).abort();
+        } else {
+          await (this.writer as WritableStreamDefaultWriter).abort();
+        }
       } catch (e) {
         // Ignore
       }
     }
 
-    this.fileHandles.clear();
-    this.rootDirHandle = null;
-    this.isFinalized = false;
-    this.eosReceived = false;
-    this.pendingWrites = 0;
-    this.startTime = 0;
-    this.lastProgressTime = 0;
-    this.lastBytesWritten = 0;
-    this.currentSpeed = 0;
-    this.totalBytesWritten = 0;
+    this.writer = null;
   }
 }

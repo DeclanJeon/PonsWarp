@@ -1,28 +1,28 @@
 /// <reference lib="webworker" />
 declare const self: DedicatedWorkerGlobalScope;
 
+import { Zip, ZipPassThrough } from 'fflate';
+
 // ============================================================================
-// 🚀 [Phase 2 + Phase 3] 파이프라인 병렬화 + 이중 버퍼링 + 청크 풀링 + 적응형 청크 크기
+// 🚀 Sender Worker with ZIP compression for folders
+// - 단일 파일: 그대로 전송
+// - 여러 파일/폴더: ZIP으로 압축하여 전송
 // ============================================================================
 
-const CHUNK_SIZE_MIN = 16 * 1024;   // 16KB
-const CHUNK_SIZE_MAX = 128 * 1024;  // 128KB (브라우저 한계)
-let CHUNK_SIZE = CHUNK_SIZE_MAX;    // 동적 조절 가능
+const CHUNK_SIZE_MIN = 16 * 1024;
+const CHUNK_SIZE_MAX = 128 * 1024;
+let CHUNK_SIZE = CHUNK_SIZE_MAX;
 
-const BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per buffer
-const POOL_SIZE = 64; // 청크 풀 크기
-const PREFETCH_BATCH = 8; // 한 번에 프리페치할 청크 수
+const BUFFER_SIZE = 8 * 1024 * 1024;
+const POOL_SIZE = 128;
+const PREFETCH_BATCH = 16;
 
-// 🚀 [Phase 3] 적응형 설정
 interface AdaptiveConfig {
   chunkSize: number;
   prefetchBatch: number;
   enableAdaptive: boolean;
 }
 
-// ============================================================================
-// 청크 풀링 - 메모리 재사용으로 GC 압박 감소
-// ============================================================================
 class ChunkPool {
   private pool: Uint8Array[] = [];
   private readonly chunkSize: number;
@@ -48,9 +48,6 @@ class ChunkPool {
   }
 }
 
-// ============================================================================
-// 이중 버퍼링 - 전송과 프리페치 완전 분리
-// ============================================================================
 class DoubleBuffer {
   private bufferA: ArrayBuffer[] = [];
   private bufferB: ArrayBuffer[] = [];
@@ -126,14 +123,18 @@ class DoubleBuffer {
   }
 }
 
-// ============================================================================
-// Worker 상태
-// ============================================================================
 interface WorkerState {
   files: File[];
   manifest: any;
-  currentFileIndex: number;
+  mode: 'single' | 'zip';
+  
+  // Single mode
   currentFileOffset: number;
+  
+  // ZIP mode
+  zipStream: ReadableStream<Uint8Array> | null;
+  zipReader: ReadableStreamDefaultReader<Uint8Array> | null;
+  
   chunkSequence: number;
   totalBytesSent: number;
   startTime: number;
@@ -144,8 +145,10 @@ interface WorkerState {
 const state: WorkerState = {
   files: [],
   manifest: null,
-  currentFileIndex: 0,
+  mode: 'single',
   currentFileOffset: 0,
+  zipStream: null,
+  zipReader: null,
   chunkSequence: 0,
   totalBytesSent: 0,
   startTime: 0,
@@ -153,7 +156,6 @@ const state: WorkerState = {
   isCompleted: false
 };
 
-// 🚀 [Phase 3] 적응형 설정 상태
 const adaptiveConfig: AdaptiveConfig = {
   chunkSize: CHUNK_SIZE_MAX,
   prefetchBatch: PREFETCH_BATCH,
@@ -165,9 +167,6 @@ const doubleBuffer = new DoubleBuffer(BUFFER_SIZE);
 let isTransferActive = false;
 let prefetchPromise: Promise<void> | null = null;
 
-// ============================================================================
-// 메시지 핸들러
-// ============================================================================
 self.onmessage = (e: MessageEvent) => {
   const { type, payload } = e.data;
 
@@ -181,14 +180,12 @@ self.onmessage = (e: MessageEvent) => {
     case 'reset':
       resetWorker();
       break;
-    // 🚀 [Phase 3] 적응형 설정 업데이트
     case 'update-config':
       updateAdaptiveConfig(payload);
       break;
   }
 };
 
-// 🚀 [Phase 3] 적응형 설정 업데이트
 function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
   if (config.chunkSize !== undefined) {
     adaptiveConfig.chunkSize = Math.max(CHUNK_SIZE_MIN, Math.min(CHUNK_SIZE_MAX, config.chunkSize));
@@ -203,37 +200,105 @@ function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
   }
 }
 
-function initWorker(payload: { files: File[]; manifest: any }) {
+async function initWorker(payload: { files: File[]; manifest: any }) {
   state.files = payload.files;
   state.manifest = payload.manifest;
-  state.currentFileIndex = 0;
-  state.currentFileOffset = 0;
   state.chunkSequence = 0;
   state.totalBytesSent = 0;
   state.startTime = 0;
   state.isInitialized = true;
   state.isCompleted = false;
+  state.currentFileOffset = 0;
 
   chunkPool.clear();
   doubleBuffer.clear();
   isTransferActive = true;
   prefetchPromise = null;
 
-  console.log('[Worker] Initialized:', {
-    fileCount: state.files.length,
-    totalSize: state.manifest.totalSize
-  });
+  const fileCount = state.files.length;
+  console.log('[Worker] Initializing:', { fileCount, totalSize: state.manifest.totalSize });
 
-  // 🚀 [파이프라인 병렬화] 비동기로 프리페치 시작 (블로킹 없음)
+  // 🚨 [핵심] 파일 개수에 따라 모드 결정
+  if (fileCount === 1) {
+    state.mode = 'single';
+    console.log('[Worker] Mode: SINGLE file');
+  } else {
+    state.mode = 'zip';
+    console.log('[Worker] Mode: ZIP compression for', fileCount, 'files');
+    await initZipStream();
+  }
+
   triggerPrefetch();
+}
+
+/**
+ * ZIP 스트림 초기화
+ */
+async function initZipStream() {
+  const zip = new Zip();
+  
+  // ReadableStream 생성
+  state.zipStream = new ReadableStream({
+    start(controller) {
+      zip.ondata = (err, data, final) => {
+        if (err) {
+          console.error('[Worker] ZIP error:', err);
+          controller.error(err);
+          return;
+        }
+        
+        if (data && data.length > 0) {
+          controller.enqueue(data);
+        }
+        
+        if (final) {
+          controller.close();
+        }
+      };
+      
+      // 각 파일을 ZIP에 추가
+      (async () => {
+        for (const file of state.files) {
+          const entry = new ZipPassThrough(file.webkitRelativePath || file.name);
+          zip.add(entry);
+          
+          // 파일 데이터를 스트리밍으로 읽어서 ZIP 엔트리에 푸시
+          const reader = file.stream().getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              entry.push(value, false);
+            }
+            entry.push(new Uint8Array(0), true); // 파일 종료
+          } catch (e) {
+            console.error('[Worker] File read error:', e);
+          }
+        }
+        
+        // 모든 파일 추가 완료
+        zip.end();
+      })();
+    }
+  });
+  
+  state.zipReader = state.zipStream.getReader();
+  console.log('[Worker] ZIP stream initialized');
 }
 
 function resetWorker() {
   isTransferActive = false;
+  
+  if (state.zipReader) {
+    state.zipReader.cancel();
+    state.zipReader = null;
+  }
+  
   state.files = [];
   state.manifest = null;
-  state.currentFileIndex = 0;
+  state.mode = 'single';
   state.currentFileOffset = 0;
+  state.zipStream = null;
   state.chunkSequence = 0;
   state.totalBytesSent = 0;
   state.startTime = 0;
@@ -245,27 +310,18 @@ function resetWorker() {
   prefetchPromise = null;
 }
 
-// ============================================================================
-// 🚀 [파이프라인 병렬화] 프리페치 트리거 - 비동기 실행
-// ============================================================================
 function triggerPrefetch() {
-  // 이미 프리페치 중이거나 완료된 경우 스킵
   if (prefetchPromise || state.isCompleted || !isTransferActive) return;
-
-  // 비활성 버퍼가 가득 찼으면 스킵
   if (!doubleBuffer.canPrefetch()) return;
 
-  // 🚀 [핵심] 프리페치를 Promise로 실행하고 즉시 반환 (블로킹 없음)
   prefetchPromise = prefetchBatch().finally(() => {
     prefetchPromise = null;
-    // 프리페치 완료 후 추가 프리페치 필요하면 재트리거
     if (isTransferActive && !state.isCompleted && doubleBuffer.canPrefetch()) {
       triggerPrefetch();
     }
   });
 }
 
-// 🚀 [파이프라인 병렬화 + Phase 3] 배치 단위 프리페치 (적응형 배치 크기)
 async function prefetchBatch(): Promise<void> {
   const batchSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.prefetchBatch : PREFETCH_BATCH;
   
@@ -282,28 +338,25 @@ async function prefetchBatch(): Promise<void> {
 }
 
 async function createNextChunk(): Promise<ArrayBuffer | null> {
-  if (state.currentFileIndex >= state.files.length) {
+  if (state.mode === 'single') {
+    return createSingleFileChunk();
+  } else {
+    return createZipChunk();
+  }
+}
+
+/**
+ * 단일 파일 청크 생성
+ */
+async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
+  const file = state.files[0];
+  
+  if (state.currentFileOffset >= file.size) {
     state.isCompleted = true;
     return null;
   }
 
-  const file = state.files[state.currentFileIndex];
-
-  if (state.currentFileOffset >= file.size) {
-    state.currentFileIndex++;
-    state.currentFileOffset = 0;
-
-    if (state.currentFileIndex >= state.files.length) {
-      state.isCompleted = true;
-      return null;
-    }
-
-    return createNextChunk();
-  }
-
-  // 🚀 [Phase 3] 적응형 청크 크기 사용
   const currentChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
-  
   const start = state.currentFileOffset;
   const end = Math.min(start + currentChunkSize, file.size);
 
@@ -312,54 +365,87 @@ async function createNextChunk(): Promise<ArrayBuffer | null> {
     const buffer = await blob.arrayBuffer();
     const dataSize = buffer.byteLength;
 
-    // 청크 풀에서 버퍼 획득
     const packet = chunkPool.acquire();
     const view = new DataView(packet.buffer);
 
-    // 헤더 작성
-    view.setUint16(0, state.currentFileIndex, true);
+    // 헤더 작성 (fileId = 0)
+    view.setUint16(0, 0, true);
     view.setUint32(2, state.chunkSequence++, true);
     view.setBigUint64(6, BigInt(start), true);
     view.setUint32(14, dataSize, true);
 
-    // 데이터 복사
     packet.set(new Uint8Array(buffer), 18);
-
-    // 오프셋 업데이트
     state.currentFileOffset = end;
     state.totalBytesSent += dataSize;
 
-    // 실제 크기만큼 새 ArrayBuffer로 반환
     const result = new ArrayBuffer(18 + dataSize);
     new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
-    
-    // 풀에 버퍼 반환
     chunkPool.release(packet);
 
     return result;
   } catch (error) {
-    console.error('[Worker] Chunk creation failed:', error);
+    console.error('[Worker] Single file chunk creation failed:', error);
     return null;
   }
 }
 
-// ============================================================================
-// 🚀 [파이프라인 병렬화] 배치 처리 - 동기적으로 버퍼에서 가져오기
-// ============================================================================
+/**
+ * ZIP 청크 생성
+ */
+async function createZipChunk(): Promise<ArrayBuffer | null> {
+  if (!state.zipReader) {
+    state.isCompleted = true;
+    return null;
+  }
+
+  try {
+    const { done, value } = await state.zipReader.read();
+    
+    if (done) {
+      state.isCompleted = true;
+      return null;
+    }
+
+    if (!value || value.length === 0) {
+      return createZipChunk(); // 다음 청크 시도
+    }
+
+    const dataSize = value.length;
+    const packet = chunkPool.acquire();
+    const view = new DataView(packet.buffer);
+
+    // 헤더 작성 (fileId = 0, ZIP 파일 하나로 취급)
+    view.setUint16(0, 0, true);
+    view.setUint32(2, state.chunkSequence++, true);
+    view.setBigUint64(6, BigInt(state.totalBytesSent), true);
+    view.setUint32(14, dataSize, true);
+
+    packet.set(value, 18);
+    state.totalBytesSent += dataSize;
+
+    const result = new ArrayBuffer(18 + dataSize);
+    new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
+    chunkPool.release(packet);
+
+    return result;
+  } catch (error) {
+    console.error('[Worker] ZIP chunk creation failed:', error);
+    state.isCompleted = true;
+    return null;
+  }
+}
+
 function processBatch(requestedCount: number) {
   if (state.startTime === 0) {
     state.startTime = Date.now();
   }
 
-  // 활성 버퍼가 비었으면 스왑 시도
   if (doubleBuffer.getActiveSize() === 0) {
     doubleBuffer.swap();
   }
 
-  // 활성 버퍼에서 청크 가져오기 (동기)
   const chunks = doubleBuffer.takeFromActive(requestedCount);
 
-  // 진행률 계산
   const elapsed = (Date.now() - state.startTime) / 1000;
   const speed = elapsed > 0 ? state.totalBytesSent / elapsed : 0;
   const progress =
@@ -367,7 +453,6 @@ function processBatch(requestedCount: number) {
       ? Math.min(100, (state.totalBytesSent / state.manifest.totalSize) * 100)
       : 0;
 
-  // 배치 전송
   if (chunks.length > 0) {
     self.postMessage(
       {
@@ -386,22 +471,18 @@ function processBatch(requestedCount: number) {
     );
   }
 
-  // 완료 체크
   if (state.isCompleted && doubleBuffer.isEmpty()) {
     self.postMessage({ type: 'complete' });
     return;
   }
 
-  // 🚀 [파이프라인 병렬화] 프리페치 트리거 (비동기)
   triggerPrefetch();
 
-  // 버퍼가 비었고 아직 완료 안됐으면 fallback으로 즉시 생성
   if (chunks.length === 0 && !state.isCompleted) {
     createAndSendImmediate(requestedCount);
   }
 }
 
-// Fallback: 버퍼가 비었을 때 즉시 생성하여 전송
 async function createAndSendImmediate(count: number) {
   const chunks: ArrayBuffer[] = [];
 
@@ -439,11 +520,9 @@ async function createAndSendImmediate(count: number) {
     );
   }
 
-  // 완료 체크
   if (state.isCompleted && doubleBuffer.isEmpty()) {
     self.postMessage({ type: 'complete' });
   }
 }
 
-// 워커 준비 완료 신호
 self.postMessage({ type: 'ready' });
