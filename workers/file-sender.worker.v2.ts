@@ -391,14 +391,42 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
 
 /**
  * ZIP 청크 생성
+ * ZIP 스트림에서 읽은 데이터를 적절한 크기로 분할하여 전송
  */
+let zipBuffer: Uint8Array | null = null;
+let zipBufferOffset = 0;
+
 async function createZipChunk(): Promise<ArrayBuffer | null> {
   if (!state.zipReader) {
     state.isCompleted = true;
     return null;
   }
 
+  const currentChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
+
   try {
+    // 버퍼에 남은 데이터가 있으면 먼저 처리
+    if (zipBuffer && zipBufferOffset < zipBuffer.length) {
+      const remaining = zipBuffer.length - zipBufferOffset;
+      const dataSize = Math.min(remaining, currentChunkSize);
+      
+      const result = createPacket(
+        zipBuffer.subarray(zipBufferOffset, zipBufferOffset + dataSize),
+        dataSize
+      );
+      
+      zipBufferOffset += dataSize;
+      
+      // 버퍼 다 사용했으면 초기화
+      if (zipBufferOffset >= zipBuffer.length) {
+        zipBuffer = null;
+        zipBufferOffset = 0;
+      }
+      
+      return result;
+    }
+
+    // 새 데이터 읽기
     const { done, value } = await state.zipReader.read();
     
     if (done) {
@@ -407,32 +435,45 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
     }
 
     if (!value || value.length === 0) {
-      return createZipChunk(); // 다음 청크 시도
+      return createZipChunk();
     }
 
-    const dataSize = value.length;
-    const packet = chunkPool.acquire();
-    const view = new DataView(packet.buffer);
+    // 데이터가 청크 크기보다 크면 버퍼에 저장
+    if (value.length > currentChunkSize) {
+      zipBuffer = value;
+      zipBufferOffset = 0;
+      return createZipChunk();
+    }
 
-    // 헤더 작성 (fileId = 0, ZIP 파일 하나로 취급)
-    view.setUint16(0, 0, true);
-    view.setUint32(2, state.chunkSequence++, true);
-    view.setBigUint64(6, BigInt(state.totalBytesSent), true);
-    view.setUint32(14, dataSize, true);
-
-    packet.set(value, 18);
-    state.totalBytesSent += dataSize;
-
-    const result = new ArrayBuffer(18 + dataSize);
-    new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
-    chunkPool.release(packet);
-
-    return result;
+    // 청크 크기 이하면 바로 전송
+    return createPacket(value, value.length);
+    
   } catch (error) {
     console.error('[Worker] ZIP chunk creation failed:', error);
     state.isCompleted = true;
     return null;
   }
+}
+
+/**
+ * 패킷 생성 헬퍼
+ */
+function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
+  const result = new ArrayBuffer(18 + dataSize);
+  const resultView = new DataView(result);
+  const resultArray = new Uint8Array(result);
+
+  // 헤더 작성 (fileId = 0)
+  resultView.setUint16(0, 0, true);
+  resultView.setUint32(2, state.chunkSequence++, true);
+  resultView.setBigUint64(6, BigInt(state.totalBytesSent), true);
+  resultView.setUint32(14, dataSize, true);
+
+  // 데이터 복사
+  resultArray.set(data, 18);
+  state.totalBytesSent += dataSize;
+
+  return result;
 }
 
 function processBatch(requestedCount: number) {

@@ -199,16 +199,35 @@ export class DirectFileWriter {
     if (this.writer) {
       try {
         if (this.writerMode === 'file-system-access') {
-          await (this.writer as FileSystemWritableFileStream).close();
+          const fsWriter = this.writer as FileSystemWritableFileStream;
+          // @ts-ignore - locked 속성 체크
+          if (!fsWriter.locked) {
+            await fsWriter.close();
+          }
         } else {
-          await (this.writer as WritableStreamDefaultWriter).close();
+          const streamWriter = this.writer as WritableStreamDefaultWriter;
+          // 스트림이 닫히지 않은 경우에만 닫기
+          try {
+            await streamWriter.close();
+          } catch (closeErr: any) {
+            // 이미 닫힌 경우 무시
+            if (!closeErr.message?.includes('close') && !closeErr.message?.includes('closed')) {
+              throw closeErr;
+            }
+          }
         }
         console.log('[DirectFileWriter] ✅ File completed:', this.totalBytesWritten, 'bytes');
       } catch (e: any) {
-        console.error('[DirectFileWriter] Error closing file:', e);
+        // 이미 닫힌 스트림 에러는 무시
+        if (!e.message?.includes('close') && !e.message?.includes('closed')) {
+          console.error('[DirectFileWriter] Error closing file:', e);
+        } else {
+          console.log('[DirectFileWriter] ✅ File completed (stream already closed):', this.totalBytesWritten, 'bytes');
+        }
       }
     }
 
+    this.writer = null;
     this.onCompleteCallback?.(this.totalBytesWritten);
   }
 
