@@ -169,34 +169,37 @@ class SignalingService {
     this.socket!.emit('join-room', roomId);
   }
 
-  public sendOffer(roomId: string, offer: RTCSessionDescriptionInit) {
+  /**
+   * 🚀 [Multi-Receiver] target 파라미터 추가 - 특정 피어에게만 전달
+   */
+  public sendOffer(roomId: string, offer: RTCSessionDescriptionInit, target?: string) {
     if (!this.socket?.connected) {
       console.error('❌ [Signaling] Cannot send offer: Not connected');
       return;
     }
     
-    console.log('[Signaling] 📤 Sending offer to room:', roomId);
-    this.socket.emit('offer', { roomId, offer });
+    console.log('[Signaling] 📤 Sending offer to:', target || roomId);
+    this.socket.emit('offer', { roomId, offer, target });
   }
 
-  public sendAnswer(roomId: string, answer: RTCSessionDescriptionInit) {
+  public sendAnswer(roomId: string, answer: RTCSessionDescriptionInit, target?: string) {
     if (!this.socket?.connected) {
       console.error('❌ [Signaling] Cannot send answer: Not connected');
       return;
     }
     
-    console.log('[Signaling] 📤 Sending answer to room:', roomId);
-    this.socket.emit('answer', { roomId, answer });
+    console.log('[Signaling] 📤 Sending answer to:', target || roomId);
+    this.socket.emit('answer', { roomId, answer, target });
   }
 
-  public sendCandidate(roomId: string, candidate: RTCIceCandidate) {
+  public sendCandidate(roomId: string, candidate: RTCIceCandidate, target?: string) {
     if (!this.socket?.connected) {
       console.error('❌ [Signaling] Cannot send ICE candidate: Not connected');
       return;
     }
     
-    console.log('[Signaling] 📤 Sending ICE candidate to room:', roomId);
-    this.socket.emit('ice-candidate', { roomId, candidate });
+    console.log('[Signaling] 📤 Sending ICE candidate to:', target || roomId);
+    this.socket.emit('ice-candidate', { roomId, candidate, target });
   }
 
   public on(event: string, handler: SignalHandler) {

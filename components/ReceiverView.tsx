@@ -11,7 +11,7 @@ interface ReceiverViewProps {
 
 const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
   const [roomId, setRoomId] = useState(autoRoomId || '');
-  const [status, setStatus] = useState<'SCANNING' | 'CONNECTING' | 'WAITING' | 'RECEIVING' | 'DONE' | 'ERROR' | 'ROOM_FULL'>('SCANNING');
+  const [status, setStatus] = useState<'SCANNING' | 'CONNECTING' | 'WAITING' | 'RECEIVING' | 'DONE' | 'ERROR' | 'ROOM_FULL' | 'QUEUED'>('SCANNING');
   const [manifest, setManifest] = useState<any>(null);
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
@@ -20,6 +20,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
   
   // 🚨 [추가] 송신자 응답 대기 상태 변수
   const [isWaitingForSender, setIsWaitingForSender] = useState(false);
+  
+  // 🚀 [Multi-Receiver] 대기열 상태
+  const [queuePosition, setQueuePosition] = useState<number>(0);
+  const [queueMessage, setQueueMessage] = useState<string>('');
   
   // 🚨 [추가] 연결 타임아웃 관리용 Ref
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -40,7 +44,22 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     }
     setErrorMsg(''); // 이전 에러 메시지 초기화
     setManifest(m);
-    setStatus('WAITING');
+    
+    // 🚀 [Multi-Receiver] QUEUED 상태에서 manifest를 다시 받으면 
+    // 대기열에서 전송이 시작된 것이므로 RECEIVING으로 전환
+    const currentStatus = statusRef.current;
+    if (currentStatus === 'QUEUED') {
+      console.log('[ReceiverView] Manifest received while QUEUED - transfer starting');
+      setQueuePosition(0);
+      setQueueMessage('');
+      setProgress(0);
+      setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: m?.totalSize || 0 });
+      setStatus('RECEIVING');
+      setIsWaitingForSender(false);
+    } else if (currentStatus !== 'RECEIVING' && currentStatus !== 'DONE') {
+      // 일반적인 경우: WAITING 상태로 전환
+      setStatus('WAITING');
+    }
   }, []);
 
   const handleRemoteStarted = useCallback(() => {
@@ -152,10 +171,56 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     }
   }, []);
 
-  // 초기화 및 이벤트 리스너 등록 Effect
-  useEffect(() => {
-    if (autoRoomId) handleJoin(autoRoomId);
+  // 🚨 [핵심 수정] 중복 초기화 방지를 위한 Ref
+  const isInitializedRef = useRef(false);
 
+  // 🚀 [Multi-Receiver] 전송 놓침 핸들러
+  const handleTransferMissed = useCallback((msg: string) => {
+    console.warn('[ReceiverView] Transfer missed:', msg);
+    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+    setIsWaitingForSender(false);
+    setErrorMsg('Transfer has already started. Please wait for it to complete or refresh to join the next transfer.');
+    setStatus('ERROR');
+  }, []);
+
+  // 🚀 [Multi-Receiver] 대기열 추가 핸들러
+  const handleQueued = useCallback((data: { message: string; position: number }) => {
+    console.log('[ReceiverView] Added to queue:', data);
+    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+    setQueuePosition(data.position);
+    setQueueMessage(data.message);
+    setStatus('QUEUED');
+  }, []);
+
+  // 🚀 [Multi-Receiver] 전송 시작 핸들러 (대기열에서 나옴)
+  const handleTransferStarting = useCallback(() => {
+    console.log('[ReceiverView] Transfer starting from queue');
+    // 대기열 상태 초기화
+    setQueuePosition(0);
+    setQueueMessage('');
+    // 진행률 초기화
+    setProgress(0);
+    setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: manifest?.totalSize || 0 });
+    // 상태 전환
+    setStatus('RECEIVING');
+    setIsWaitingForSender(false); // 이미 전송이 시작되었으므로 대기 상태 해제
+  }, [manifest]);
+
+  // 🚀 [Multi-Receiver] 다운로드 가능 알림 핸들러
+  const handleReadyForDownload = useCallback((data: { message: string }) => {
+    console.log('[ReceiverView] Ready for download:', data);
+    // 이미 WAITING 상태면 무시
+    if (statusRef.current === 'WAITING') return;
+    // QUEUED 상태에서 WAITING으로 전환
+    if (statusRef.current === 'QUEUED') {
+      setStatus('WAITING');
+      setQueuePosition(0);
+      setQueueMessage('');
+    }
+  }, []);
+
+  // 🚀 [핵심 수정] 이벤트 리스너 등록 Effect (한 번만 실행)
+  useEffect(() => {
     // 리스너 등록
     transferService.on('metadata', handleMetadata);
     transferService.on('remote-started', handleRemoteStarted);
@@ -163,20 +228,57 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     transferService.on('complete', handleComplete);
     transferService.on('error', handleError);
     transferService.on('room-full', handleRoomFull);
+    transferService.on('transfer-missed', handleTransferMissed);
+    transferService.on('queued', handleQueued);
+    transferService.on('transfer-starting', handleTransferStarting);
+    transferService.on('ready-for-download', handleReadyForDownload);
 
     return () => {
-      // 🚀 [핵심] 클린업 시 리스너를 명시적으로 제거하여 중복 실행 방지
+      // 🚀 [핵심] 클린업 시 리스너만 제거 (transferService.cleanup은 컴포넌트 언마운트 시에만)
       transferService.off('metadata', handleMetadata);
       transferService.off('remote-started', handleRemoteStarted);
       transferService.off('progress', handleProgress);
       transferService.off('complete', handleComplete);
       transferService.off('error', handleError);
       transferService.off('room-full', handleRoomFull);
-      
-      transferService.cleanup();
-      if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+      transferService.off('transfer-missed', handleTransferMissed);
+      transferService.off('queued', handleQueued);
+      transferService.off('transfer-starting', handleTransferStarting);
+      transferService.off('ready-for-download', handleReadyForDownload);
     };
-  }, [autoRoomId, handleMetadata, handleRemoteStarted, handleProgress, handleComplete, handleError, handleRoomFull, handleJoin]);
+  }, [handleMetadata, handleRemoteStarted, handleProgress, handleComplete, handleError, handleRoomFull, handleTransferMissed, handleQueued, handleTransferStarting, handleReadyForDownload]);
+
+  // 🚀 [핵심 수정] 방 참여 Effect (autoRoomId가 있을 때 한 번만 실행)
+  useEffect(() => {
+    if (autoRoomId && !isInitializedRef.current) {
+      isInitializedRef.current = true;
+      handleJoin(autoRoomId);
+    }
+  }, [autoRoomId, handleJoin]);
+
+  // 🚀 [핵심 수정] 컴포넌트 실제 언마운트 시에만 cleanup 실행
+  // React StrictMode에서 useEffect가 두 번 실행되는 문제 방지
+  const isMountedRef = useRef(true);
+  
+  useEffect(() => {
+    isMountedRef.current = true;
+    
+    return () => {
+      // StrictMode에서 첫 번째 cleanup은 무시하고, 실제 언마운트 시에만 실행
+      // 약간의 딜레이를 주어 StrictMode의 재마운트를 감지
+      const timeoutId = setTimeout(() => {
+        if (!isMountedRef.current) {
+          console.log('[ReceiverView] Component unmounted, cleaning up...');
+          transferService.cleanup();
+        }
+      }, 100);
+      
+      isMountedRef.current = false;
+      if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+      
+      return () => clearTimeout(timeoutId);
+    };
+  }, []);
 
 
   /**
@@ -412,7 +514,33 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         </div>
       )}
 
-      {/* 6. ROOM_FULL - 🚨 [추가] 방이 꽉 찼을 때의 대기 상태 */}
+      {/* 6. QUEUED - 🚀 [Multi-Receiver] 대기열 상태 */}
+      {status === 'QUEUED' && (
+        <div className="text-center p-8 bg-cyan-900/20 rounded-3xl border border-cyan-500/30 w-full">
+          <div className="relative w-20 h-20 mx-auto mb-6">
+            <Loader2 className="w-full h-full text-cyan-500 animate-spin" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-lg font-bold text-white">#{queuePosition}</span>
+            </div>
+          </div>
+          <h2 className="text-2xl font-bold mb-2 text-white">In Queue</h2>
+          <p className="text-gray-300 mb-4">{queueMessage || 'Transfer in progress. You will receive the file shortly.'}</p>
+          
+          <div className="bg-black/40 p-4 rounded-xl text-left flex gap-3 border border-cyan-500/20 mb-4">
+            <Archive className="w-6 h-6 text-cyan-500 flex-shrink-0" />
+            <div className="text-sm text-gray-300">
+              <p className="font-bold text-white mb-1">Your download will start automatically</p>
+              <p>Another receiver is currently downloading. Please wait for the current transfer to complete.</p>
+            </div>
+          </div>
+          
+          <p className="text-gray-500 text-sm animate-pulse">
+            Waiting for current transfer to finish...
+          </p>
+        </div>
+      )}
+
+      {/* 7. ROOM_FULL - 🚨 [추가] 방이 꽉 찼을 때의 대기 상태 */}
       {status === 'ROOM_FULL' && (
         <div className="text-center p-8 bg-yellow-900/20 rounded-3xl border border-yellow-500/30 w-full">
           <Loader2 className="w-16 h-16 text-yellow-500 animate-spin mx-auto mb-4" />
@@ -432,7 +560,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         </div>
       )}
 
-      {/* 7. ERROR */}
+      {/* 8. ERROR */}
       {status === 'ERROR' && (
         <div className="text-center p-8 bg-red-900/20 rounded-3xl border border-red-500/30 w-full">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />

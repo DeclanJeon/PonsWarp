@@ -177,7 +177,10 @@ export class DirectFileWriter {
 
     const elapsed = (now - this.startTime) / 1000;
     const speed = elapsed > 0 ? this.totalBytesWritten / elapsed : 0;
-    const progress = this.totalSize > 0 ? (this.totalBytesWritten / this.totalSize) * 100 : 0;
+    
+    // 🚀 [핵심 수정] 진행률을 100%로 제한 (ZIP 오버헤드로 인해 초과할 수 있음)
+    const rawProgress = this.totalSize > 0 ? (this.totalBytesWritten / this.totalSize) * 100 : 0;
+    const progress = Math.min(100, rawProgress);
 
     this.onProgressCallback?.({
       progress,

@@ -367,8 +367,26 @@ class EnhancedWebRTCService {
 
   // 2. initReceiver 메서드 수정 (연결 안정성 강화)
   public async initReceiver(roomId: string) {
+    // 🚨 [핵심 수정] 이미 같은 방에 연결 중이거나 연결된 상태면 중복 초기화 방지
+    if (this.roomId === roomId && !this.isSender) {
+      console.log('[Receiver] Already initializing for room:', roomId);
+      return;
+    }
+    
+    // 🚨 [핵심 수정] 이미 peer가 연결된 상태면 cleanup 건너뛰기
+    // @ts-ignore
+    const isConnected = this.peer && !this.peer.destroyed && (this.peer._connected || this.peer.connected);
+    if (isConnected && this.roomId === roomId) {
+      console.log('[Receiver] Already connected to room:', roomId);
+      return;
+    }
+    
     console.log('[Receiver] Initializing...');
-    this.cleanup(); // 기존 상태 완전 초기화
+    
+    // 🚨 [핵심 수정] 다른 방에 연결 중이었다면 cleanup, 같은 방이면 건너뛰기
+    if (this.roomId && this.roomId !== roomId) {
+      this.cleanup();
+    }
     
     this.isSender = false;
     this.roomId = roomId;
@@ -381,10 +399,6 @@ class EnhancedWebRTCService {
     this.fetchTurnConfig(roomId).catch(err => console.warn('TURN config failed', err));
 
     this.emit('status', 'CONNECTING');
-    
-    // 🚨 [추가] Receiver는 Sender가 들어오기를 기다리거나,
-    // 이미 Sender가 있다면 Sender가 'peer-joined'를 받고 Offer를 보내기를 기다림.
-    // 만약 Sender가 반응이 없으면(이미 연결된 줄 알고), 수동으로 존재를 알릴 필요가 있을 수 있음.
   }
 
   public setWriter(writerInstance: IFileWriter) {
@@ -475,9 +489,12 @@ class EnhancedWebRTCService {
         if (initiator) forceArrayBuffer();
 
         peer.on('signal', data => {
-            if (data.type === 'offer') signalingService.sendOffer(this.roomId!, data);
-            else if (data.type === 'answer') signalingService.sendAnswer(this.roomId!, data);
-            else if (data.candidate) signalingService.sendCandidate(this.roomId!, data);
+            // 🚀 [Multi-Receiver] Receiver는 connectedPeerId(Sender)에게만 시그널 전송
+            const target = !this.isSender ? this.connectedPeerId || undefined : undefined;
+            
+            if (data.type === 'offer') signalingService.sendOffer(this.roomId!, data, target);
+            else if (data.type === 'answer') signalingService.sendAnswer(this.roomId!, data, target);
+            else if (data.candidate) signalingService.sendCandidate(this.roomId!, data, target);
         });
 
         peer.on('connect', () => {
@@ -549,6 +566,27 @@ class EnhancedWebRTCService {
                 console.log('[Receiver] Sender acknowledged start request.');
                 this.emit('remote-started', true);
 
+            } else if (msg.type === 'TRANSFER_STARTED_WITHOUT_YOU' || msg.type === 'TRANSFER_ALREADY_STARTED') {
+                // 🚀 [Multi-Receiver] 전송이 이미 시작되어 참여 불가
+                console.warn('[Receiver] Transfer started without us:', msg.message);
+                this.emit('transfer-missed', msg.message);
+
+            } else if (msg.type === 'QUEUED') {
+                // 🚀 [Multi-Receiver] 대기열에 추가됨
+                console.log('[Receiver] Added to queue:', msg);
+                this.emit('queued', { message: msg.message, position: msg.position });
+
+            } else if (msg.type === 'TRANSFER_STARTING') {
+                // 🚀 [Multi-Receiver] 대기열에서 전송 시작
+                console.log('[Receiver] Transfer starting from queue');
+                this.emit('transfer-starting', true);
+                this.emit('status', 'RECEIVING');
+
+            } else if (msg.type === 'READY_FOR_DOWNLOAD') {
+                // 🚀 [Multi-Receiver] 다운로드 가능 알림
+                console.log('[Receiver] Ready for download:', msg);
+                this.emit('ready-for-download', { message: msg.message });
+
             } else if (msg.type === 'MANIFEST') {
                 this.emit('metadata', msg.manifest);
             } else if (msg.type === 'DOWNLOAD_COMPLETE') {
@@ -607,17 +645,49 @@ class EnhancedWebRTCService {
     }
   };
 
+  // 🚨 [핵심 수정] 연결된 피어 ID 추적
+  private connectedPeerId: string | null = null;
+
   private handleOffer = async (d: any) => {
+    // 🚨 [핵심] Receiver만 offer를 처리 (Sender는 무시)
+    if (this.isSender) return;
+    
+    // 첫 번째 offer를 보낸 피어를 기억
+    if (!this.connectedPeerId) {
+      this.connectedPeerId = d.from;
+    }
+    
+    // 다른 피어의 offer는 무시
+    if (d.from !== this.connectedPeerId) {
+      console.log('[WebRTC] Ignoring offer from different peer:', d.from);
+      return;
+    }
+    
     if (!this.peer) await this.createPeer(false);
     this.peer!.signal(d.offer);
   };
 
   private handleAnswer = async (d: any) => {
-    this.peer?.signal(d.answer);
+    // 🚨 [핵심] Sender만 answer를 처리 (Receiver는 무시)
+    if (!this.isSender) return;
+    
+    // 피어가 없거나 파괴된 경우 무시
+    if (!this.peer || this.peer.destroyed) return;
+    
+    this.peer.signal(d.answer);
   };
 
   private handleIceCandidate = (d: any) => {
-    this.peer?.signal(d.candidate);
+    // 🚨 [핵심] 연결된 피어의 ICE candidate만 처리
+    if (!this.isSender && this.connectedPeerId && d.from !== this.connectedPeerId) {
+      console.log('[WebRTC] Ignoring ICE candidate from different peer:', d.from);
+      return;
+    }
+    
+    // 피어가 없거나 파괴된 경우 무시
+    if (!this.peer || this.peer.destroyed) return;
+    
+    this.peer.signal(d.candidate);
   };
 
   public notifyDownloadComplete() {
@@ -725,6 +795,9 @@ class EnhancedWebRTCService {
     this.worker?.terminate();
     this.worker = null;
     this.writer?.cleanup();
+    
+    // 🚨 [핵심] 연결된 피어 ID 초기화
+    this.connectedPeerId = null;
     
     // 🚀 [Phase 3] 추가 정리
     this.stopStatsCollection();

@@ -214,6 +214,11 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   doubleBuffer.clear();
   isTransferActive = true;
   prefetchPromise = null;
+  
+  // 🚀 [핵심 수정] ZIP 버퍼 및 진행률 추적 초기화
+  zipBuffer = null;
+  zipBufferOffset = 0;
+  zipSourceBytesRead = 0;
 
   const fileCount = state.files.length;
   console.log('[Worker] Initializing:', { fileCount, totalSize: state.manifest.totalSize });
@@ -229,12 +234,19 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   }
 
   triggerPrefetch();
+  
+  // 🚀 [핵심 수정] 초기화 완료 알림
+  self.postMessage({ type: 'init-complete' });
 }
+
+// 🚀 [핵심 추가] ZIP 모드에서 원본 파일 읽기 진행률 추적
+let zipSourceBytesRead = 0;
 
 /**
  * ZIP 스트림 초기화
  */
 async function initZipStream() {
+  zipSourceBytesRead = 0; // 초기화
   const zip = new Zip();
   
   // ReadableStream 생성
@@ -268,6 +280,10 @@ async function initZipStream() {
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
+              
+              // 🚀 [핵심] 원본 파일에서 읽은 바이트 추적
+              zipSourceBytesRead += value.length;
+              
               entry.push(value, false);
             }
             entry.push(new Uint8Array(0), true); // 파일 종료
@@ -489,10 +505,20 @@ function processBatch(requestedCount: number) {
 
   const elapsed = (Date.now() - state.startTime) / 1000;
   const speed = elapsed > 0 ? state.totalBytesSent / elapsed : 0;
-  const progress =
-    state.manifest.totalSize > 0
+  
+  // 🚀 [핵심 수정] ZIP 모드일 때는 원본 파일 읽기 진행률 사용
+  let progress = 0;
+  if (state.mode === 'zip') {
+    // ZIP 모드: 원본 파일에서 읽은 바이트 기준으로 진행률 계산
+    progress = state.manifest.totalSize > 0
+      ? Math.min(100, (zipSourceBytesRead / state.manifest.totalSize) * 100)
+      : 0;
+  } else {
+    // Single 모드: 전송된 바이트 기준
+    progress = state.manifest.totalSize > 0
       ? Math.min(100, (state.totalBytesSent / state.manifest.totalSize) * 100)
       : 0;
+  }
 
   if (chunks.length > 0) {
     self.postMessage(
@@ -539,10 +565,18 @@ async function createAndSendImmediate(count: number) {
   if (chunks.length > 0) {
     const elapsed = (Date.now() - state.startTime) / 1000;
     const speed = elapsed > 0 ? state.totalBytesSent / elapsed : 0;
-    const progress =
-      state.manifest.totalSize > 0
+    
+    // 🚀 [핵심 수정] ZIP 모드일 때는 원본 파일 읽기 진행률 사용
+    let progress = 0;
+    if (state.mode === 'zip') {
+      progress = state.manifest.totalSize > 0
+        ? Math.min(100, (zipSourceBytesRead / state.manifest.totalSize) * 100)
+        : 0;
+    } else {
+      progress = state.manifest.totalSize > 0
         ? Math.min(100, (state.totalBytesSent / state.manifest.totalSize) * 100)
         : 0;
+    }
 
     self.postMessage(
       {
