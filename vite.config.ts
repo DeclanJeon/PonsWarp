@@ -23,9 +23,9 @@ export default defineConfig(({ mode }) => {
         'import.meta.env.DEV': mode === 'development',
         'import.meta.env.PROD': isProduction,
       },
-      // esbuild: {
-      //   drop: isProduction ? ['console', 'debugger'] : [],
-      // },
+      esbuild: {
+        drop: isProduction ? ['console', 'debugger'] : [],
+      },
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
