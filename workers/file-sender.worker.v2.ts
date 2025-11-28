@@ -332,7 +332,17 @@ async function initZipStream() {
   });
   
   state.zipReader = state.zipStream.getReader();
+  console.log('[Worker] ✅ ZIP stream reader created');
   processFilesAsync();
+  
+  // 🚀 [성능 최적화] 초기 대기 로직 개선 - 50ms -> 1ms로 단축
+  // 데이터가 준비될 때까지 기다리되, 반응 속도 극대화
+  const waitStart = Date.now();
+  while (zipDataQueue.length === 0 && !zipFinalized && !hasError && (Date.now() - waitStart) < 2000) {
+    // 1ms 대기는 이벤트 루프를 한 텀 쉬게 하여 CPU 독점을 막으면서도 빠르게 실행
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  console.log('[Worker] ✅ ZIP stream ready, initial queue size:', zipDataQueue.length);
 }
 
 function resetWorker() {

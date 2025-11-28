@@ -35,6 +35,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     statusRef.current = status;
   }, [status]);
 
+  // 🚀 [성능 최적화] UI 렌더링 스로틀링 (초당 10회 제한)
+  const lastProgressUpdateRef = useRef<number>(0);
+  const UI_UPDATE_INTERVAL = 100; // 100ms마다 한 번만 UI 업데이트
+
   // 🚀 [핵심] 이벤트 핸들러들을 useCallback으로 메모이제이션하여 안정성 확보
   const handleMetadata = useCallback((m: any) => {
     // 🚨 [수정] 메타데이터 수신 시 타임아웃 해제 및 에러 상태 초기화
@@ -78,8 +82,18 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     // 2. 상태 강제 동기화 (함수형 업데이트로 안전하게 처리)
     setStatus(prev => (prev !== 'RECEIVING' ? 'RECEIVING' : prev));
 
-    // 3. 진행률 데이터 업데이트
+    // 3. 🚀 [성능 최적화] UI 업데이트 스로틀링
+    //    너무 잦은 업데이트는 메인 스레드 부하를 증가시켜 다운로드 속도 저하
+    const now = Date.now();
     const val = typeof p === 'object' ? p.progress : p;
+    
+    // 100ms가 안 지났고, 완료(100%)가 아니면 업데이트 스킵
+    if (now - lastProgressUpdateRef.current < UI_UPDATE_INTERVAL && val < 100) {
+      return;
+    }
+    lastProgressUpdateRef.current = now;
+
+    // 4. 진행률 데이터 업데이트
     setProgress(isNaN(val) ? 0 : val);
     
     if (typeof p === 'object' && p.speed !== undefined) {

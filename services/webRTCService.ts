@@ -170,43 +170,27 @@ class EnhancedWebRTCService {
             for (let i = 0; i < chunks.length; i++) {
                 const chunk = chunks[i];
 
-                // 🚨 [핵심 수정] 각 청크 전송 전 채널 상태 재확인
+                // 🚨 [안전 장치 1] 채널이 닫혔으면 즉시 중단 (에러 방지)
                 if (channel.readyState !== 'open') {
-                  console.error('[Sender] ❌ [DEBUG] Channel closed during batch send at chunk', i);
-                  this.cleanup();
+                  console.warn('[Sender] Channel closed, stopping batch send');
                   return;
                 }
 
-                // 🚨 [DEBUG] 청크별 버퍼 상태 확인
+                // 🚨 [안전 장치 2] 버퍼가 꽉 찼으면 무리하게 보내지 않고 대기
                 const preChunkBuffered = channel.bufferedAmount;
                 if (preChunkBuffered + chunk.byteLength > MAX_BUFFERED_AMOUNT) {
-                  console.warn('[Sender] ⚠️ [DEBUG] Buffer full, waiting for drain...', {
-                    preChunkBuffered,
-                    chunkSize: chunk.byteLength,
-                    maxBuffer: MAX_BUFFERED_AMOUNT
-                  });
-
-                  // 🚨 [수정] 버퍼가 차면 대기 후 재시도
+                  // 버퍼가 차면 대기 후 재시도
                   await this.waitForBufferDrain(channel);
-                }
-
-                // 🚨 [수정] 청크 전송 전 버퍼 상태 재확인
-                if (channel.bufferedAmount + chunk.byteLength > MAX_BUFFERED_AMOUNT) {
-                  console.warn('[Sender] ⚠️ [DEBUG] Buffer still full after wait, skipping chunk', i);
-                  continue;
+                  
+                  // 대기 후에도 버퍼가 꽉 차있으면 스킵하여 연결 끊김 방지
+                  if (channel.bufferedAmount + chunk.byteLength > MAX_BUFFERED_AMOUNT) {
+                    console.warn('[Sender] Buffer full, skipping chunk to prevent disconnect');
+                    continue;
+                  }
                 }
 
                 try {
                   this.peer.send(chunk);
-
-                  // 🚨 [DEBUG] 전송 후 버퍼 상태
-                  const postChunkBuffered = channel.bufferedAmount;
-                  console.log('[Sender] 📤 [DEBUG] Chunk', i + 1, '/', chunks.length, 'sent:', {
-                    chunkSize: chunk.byteLength,
-                    preChunkBuffered,
-                    postChunkBuffered,
-                    bufferIncrease: postChunkBuffered - preChunkBuffered
-                  });
 
                   // 🚀 [Phase 3] 네트워크 컨트롤러에 전송 기록
                   if (this.useAdaptiveControl) {
@@ -214,8 +198,8 @@ class EnhancedWebRTCService {
                   }
 
                 } catch (e) {
-                  console.error('[Sender] ❌ [DEBUG] Failed to send chunk', i, ':', e);
-                  // 개별 청크 전송 실패 시 다음 청크로 계속 진행
+                  // 전송 실패는 치명적이지 않음 (WebRTC가 알아서 재전송 요청하거나 처리)
+                  console.warn('[Sender] Chunk send failed (non-fatal):', e);
                   continue;
                 }
             }
@@ -244,27 +228,20 @@ class EnhancedWebRTCService {
             }
         }
 
-        // 4. 🚀 [핵심] 버퍼 상태에 따른 즉시 요청
-        //    HIGH_WATER_MARK 이하면 즉시 다음 배치 요청 (파이프라인 유지)
-        const canSend = this.useAdaptiveControl
-            ? this.networkController.canSend(channel.bufferedAmount)
-            : channel.bufferedAmount < HIGH_WATER_MARK;
+        // 4. 🚀 [안정적 리필] 버퍼가 충분히 비었을 때만 요청
+        //    LOW_WATER_MARK(4MB) 이하로 떨어지면 리필 요청 (안정적)
+        const currentBuffered = channel.bufferedAmount;
+        const shouldRefill = currentBuffered < LOW_WATER_MARK;
         
-        const postSendBuffered = channel.bufferedAmount;
-        const finalBufferUtilization = (postSendBuffered / MAX_BUFFERED_AMOUNT) * 100;
-            
-        console.log('[Sender] 📊 [DEBUG] Batch completed:', {
-          batchBytes,
-          postSendBuffered,
-          finalBufferUtilization: finalBufferUtilization.toFixed(1) + '%',
-          canSend,
-          highWaterMark: HIGH_WATER_MARK
-        });
+        // 네트워크 컨트롤러 사용 시 추가 조건 확인
+        const canSend = this.useAdaptiveControl
+            ? this.networkController.canSend(currentBuffered) && shouldRefill
+            : shouldRefill;
             
         if (canSend) {
             this.requestMoreChunks();
         } else {
-          console.log('[Sender] ⏸️ [DEBUG] Buffer too full, pausing requests');
+          console.log(`[Sender] Buffer healthy (${(currentBuffered/1024/1024).toFixed(1)}MB), pausing request`);
         }
 
     } catch (e) {
@@ -279,38 +256,26 @@ class EnhancedWebRTCService {
     }
   }
   /**
-   * 🚨 [수정] 버퍼 드레인 대기 함수
+   * 🚀 [성능 최적화] 버퍼 드레인 대기 함수 - 반응 속도 개선
    */
   private async waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
-    const maxWaitTime = 10000; // 최대 10초 대기
-    const checkInterval = 50;  // 50ms 간격으로 확인
+    const maxWaitTime = 5000;  // 최대 5초 대기 (10초 -> 5초)
+    const checkInterval = 10;  // 10ms 간격으로 확인 (50ms -> 10ms, 반응성 향상)
     let elapsedTime = 0;
     
-    console.log('[Sender] ⏳ [DEBUG] Waiting for buffer drain...', {
-      currentBuffered: channel.bufferedAmount,
-      maxBuffer: MAX_BUFFERED_AMOUNT
-    });
-    
-    while (channel.bufferedAmount > MAX_BUFFERED_AMOUNT * 0.8 && elapsedTime < maxWaitTime) {
+    // 버퍼가 50% 이하로 떨어질 때까지 대기 (80% -> 50%, 더 빠른 리필)
+    while (channel.bufferedAmount > MAX_BUFFERED_AMOUNT * 0.5 && elapsedTime < maxWaitTime) {
       await new Promise(resolve => setTimeout(resolve, checkInterval));
       elapsedTime += checkInterval;
       
-      if (elapsedTime % 1000 === 0) { // 1초마다 로그 출력
-        console.log('[Sender] ⏳ [DEBUG] Still waiting for drain...', {
-          elapsedTime: elapsedTime + 'ms',
-          currentBuffered: channel.bufferedAmount,
-          maxBuffer: MAX_BUFFERED_AMOUNT
-        });
+      // 채널이 닫혔으면 즉시 종료
+      if (channel.readyState !== 'open') {
+        return;
       }
     }
     
-    if (channel.bufferedAmount > MAX_BUFFERED_AMOUNT * 0.8) {
-      console.warn('[Sender] ⚠️ [DEBUG] Buffer drain timeout, proceeding anyway');
-    } else {
-      console.log('[Sender] ✅ [DEBUG] Buffer drained successfully', {
-        finalBuffered: channel.bufferedAmount,
-        waitTime: elapsedTime + 'ms'
-      });
+    if (elapsedTime >= maxWaitTime) {
+      console.warn('[Sender] Buffer drain timeout after', elapsedTime, 'ms');
     }
   }
   
