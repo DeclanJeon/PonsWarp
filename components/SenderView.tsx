@@ -1,15 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus, AlertTriangle, Users } from 'lucide-react';
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { motion } from 'framer-motion';
+import { AppMode } from '../types';
 
 interface SenderViewProps {
-  onComplete: () => void;
+  onComplete?: () => void;
 }
 
-const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
+const SenderView: React.FC<SenderViewProps> = () => {
   const [manifest, setManifest] = useState<any>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
@@ -118,13 +119,13 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
     });
 
     // 🚀 [Multi-Receiver] 다음 전송 준비 상태
-    swarmManager.on('ready-for-next', ({ waitingCount, completedCount }: { waitingCount: number; completedCount: number }) => {
+    swarmManager.on('ready-for-next', ({ waitingCount }: { waitingCount: number }) => {
       setWaitingPeersCount(waitingCount);
       setStatus('READY_FOR_NEXT');
     });
 
     // 🚀 [Multi-Receiver] 배치 완료 (대기 중인 피어 없음)
-    swarmManager.on('batch-complete', ({ completedCount }: { completedCount: number }) => {
+    swarmManager.on('batch-complete', () => {
       // 대기 중인 피어가 없으면 READY_FOR_NEXT로 전환
       setStatus('READY_FOR_NEXT');
     });
@@ -162,10 +163,14 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
     });
 
     swarmManager.on('all-transfers-complete', () => {
+      console.log('[SenderView] 🎉 Received all-transfers-complete event, setting status to DONE');
       setStatus('DONE');
     });
 
-    swarmManager.on('complete', () => setStatus('DONE'));
+    swarmManager.on('complete', () => {
+      console.log('[SenderView] 🎉 Received complete event, setting status to DONE');
+      setStatus('DONE');
+    });
 
     return () => {
       swarmManager.cleanup();
@@ -258,14 +263,13 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
                onChange={handleFileSelect}
                multiple 
              />
-             <input 
-               type="file" 
-               className="hidden" 
-               ref={folderInputRef} 
+             <input
+               type="file"
+               className="hidden"
+               ref={folderInputRef}
                onChange={handleFileSelect}
                multiple
-               // @ts-ignore
-               webkitdirectory="" 
+               {...({ webkitdirectory: "" } as any)}
              />
 
              <div className="mb-8">
@@ -491,7 +495,7 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
                 </div>
               </div>
               <div className="space-y-2 text-left">
-                {connectedPeers.map((peerId, i) => (
+                {connectedPeers.map((peerId: string, i: number) => (
                   <div key={peerId} className="flex items-center justify-between text-sm">
                     <span className="text-gray-400">Receiver {i + 1}</span>
                     <span className={`px-2 py-1 rounded text-xs ${

@@ -14,6 +14,14 @@ export default {
         orbitron: ['Orbitron', 'sans-serif'],
         rajdhani: ['Rajdhani', 'sans-serif'],
       },
+      animation: {
+        'shine': 'shine 1s',
+      },
+      keyframes: {
+        shine: {
+          '100%': { left: '125%' },
+        },
+      },
     },
   },
   plugins: [],

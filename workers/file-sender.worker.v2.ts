@@ -4,9 +4,10 @@ declare const self: DedicatedWorkerGlobalScope;
 import { Zip, ZipPassThrough } from 'fflate';
 
 // ============================================================================
-// 🚀 Sender Worker V2 (Fixed)
+// 🚀 Sender Worker V2 (Final Optimized)
 // - Race Condition 방지: init 완료 전 요청 무시
 // - Packet Flooding 방지: 64KB 이상 모아서 전송 (Aggregation)
+// - Memory Protection: ZIP Backpressure 구현 (High/Low Water Mark)
 // ============================================================================
 
 const CHUNK_SIZE_MIN = 16 * 1024;
@@ -16,6 +17,10 @@ let CHUNK_SIZE = CHUNK_SIZE_MAX;
 const BUFFER_SIZE = 8 * 1024 * 1024;
 const POOL_SIZE = 128;
 const PREFETCH_BATCH = 16;
+
+// 🚀 [추가] ZIP 백프레셔 임계값
+const ZIP_QUEUE_HIGH_WATER_MARK = 32 * 1024 * 1024; // 32MB 초과 시 읽기 중단
+const ZIP_QUEUE_LOW_WATER_MARK = 8 * 1024 * 1024;   // 8MB 미만 시 읽기 재개
 
 interface AdaptiveConfig {
   chunkSize: number;
@@ -162,6 +167,11 @@ const doubleBuffer = new DoubleBuffer(BUFFER_SIZE);
 let isTransferActive = false;
 let prefetchPromise: Promise<void> | null = null;
 
+// 🚀 [추가] 백프레셔 상태 변수
+let isZipPaused = false;
+let resolveZipResume: (() => void) | null = null;
+let currentZipQueueSize = 0;
+
 self.onmessage = (e: MessageEvent) => {
   const { type, payload } = e.data;
 
@@ -237,7 +247,12 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
 let zipSourceBytesRead = 0;
 
 async function initZipStream() {
+  // 상태 초기화
   zipSourceBytesRead = 0;
+  currentZipQueueSize = 0;
+  isZipPaused = false;
+  resolveZipResume = null;
+
   const zip = new Zip();
   let zipFinalized = false;
   let hasError = false;
@@ -252,6 +267,7 @@ async function initZipStream() {
     }
     if (data && data.length > 0) {
       zipDataQueue.push(data);
+      currentZipQueueSize += data.length; // 큐 크기 증가
       if (resolveDataAvailable) {
         resolveDataAvailable();
         resolveDataAvailable = null;
@@ -267,7 +283,7 @@ async function initZipStream() {
     }
   };
   
-  // 비동기 파일 처리 (webkitRelativePath 대신 manifest path 사용)
+  // 🚀 [백프레셔 적용] 파일 처리 루프
   const processFilesAsync = async () => {
     try {
       for (let i = 0; i < state.files.length; i++) {
@@ -275,7 +291,6 @@ async function initZipStream() {
         
         const file = state.files[i];
         let filePath = file.name;
-        // 🚀 [FIX] Worker에서 webkitRelativePath 손실 대응
         if (state.manifest && state.manifest.files && state.manifest.files[i]) {
             filePath = state.manifest.files[i].path;
         }
@@ -286,6 +301,13 @@ async function initZipStream() {
         const reader = file.stream().getReader();
         try {
           while (true) {
+            // 🚨 High Water Mark 초과 시 파일 읽기 일시 중지
+            if (currentZipQueueSize > ZIP_QUEUE_HIGH_WATER_MARK) {
+              isZipPaused = true;
+              await new Promise<void>(resolve => { resolveZipResume = resolve; });
+              isZipPaused = false;
+            }
+
             const { done, value } = await reader.read();
             if (done) break;
             zipSourceBytesRead += value.length;
@@ -308,8 +330,22 @@ async function initZipStream() {
   
   state.zipStream = new ReadableStream({
     async pull(controller) {
+      // 큐에서 데이터 소비 시 크기 감소 및 Resume 체크 함수
+      const consumeAndCheckResume = (chunk: Uint8Array) => {
+        currentZipQueueSize -= chunk.length;
+        controller.enqueue(chunk);
+        
+        // 🚨 Low Water Mark 도달 시 읽기 재개
+        if (isZipPaused && currentZipQueueSize < ZIP_QUEUE_LOW_WATER_MARK) {
+          if (resolveZipResume) {
+            resolveZipResume();
+            resolveZipResume = null;
+          }
+        }
+      };
+
       if (zipDataQueue.length > 0) {
-        controller.enqueue(zipDataQueue.shift()!);
+        consumeAndCheckResume(zipDataQueue.shift()!);
         return;
       }
       if (zipFinalized) {
@@ -325,14 +361,16 @@ async function initZipStream() {
         resolveDataAvailable = resolve;
       });
       
-      if (zipDataQueue.length > 0) controller.enqueue(zipDataQueue.shift()!);
+      if (zipDataQueue.length > 0) {
+        consumeAndCheckResume(zipDataQueue.shift()!);
+      }
       else if (zipFinalized) controller.close();
       else if (hasError) controller.error(new Error('ZIP failed'));
     }
   });
   
   state.zipReader = state.zipStream.getReader();
-  console.log('[Worker] ✅ ZIP stream reader created');
+  console.log('[Worker] ✅ ZIP stream reader created with Backpressure');
   processFilesAsync();
   
   // 🚀 [성능 최적화] 초기 대기 로직 개선 - 50ms -> 1ms로 단축
@@ -351,6 +389,15 @@ function resetWorker() {
     state.zipReader.cancel();
     state.zipReader = null;
   }
+
+  // 백프레셔 초기화
+  if (resolveZipResume) {
+    resolveZipResume();
+    resolveZipResume = null;
+  }
+  isZipPaused = false;
+  currentZipQueueSize = 0;
+
   state.isInitialized = false;
   state.isCompleted = false;
   

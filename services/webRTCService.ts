@@ -853,7 +853,28 @@ class EnhancedWebRTCService {
   public notifyDownloadComplete() {
     if (this.peer && !this.peer.destroyed) {
       const msg = JSON.stringify({ type: 'DOWNLOAD_COMPLETE' });
-      this.peer.send(msg);
+      console.log('[webRTCService] 📤 Sending DOWNLOAD_COMPLETE to sender');
+      
+      // 🚀 [개선] 재전송 메커니즘: 3번 전송하여 신뢰성 향상
+      let successCount = 0;
+      for (let i = 0; i < 3; i++) {
+        setTimeout(() => {
+          try {
+            if (this.peer && !this.peer.destroyed) {
+              this.peer.send(msg);
+              successCount++;
+              console.log(`[webRTCService] ✅ DOWNLOAD_COMPLETE sent (${i + 1}/3)`);
+            }
+          } catch (e) {
+            console.error(`[webRTCService] ❌ Failed to send DOWNLOAD_COMPLETE (${i + 1}/3):`, e);
+          }
+        }, i * 100); // 100ms 간격
+      }
+    } else {
+      console.warn('[webRTCService] ⚠️ Cannot send DOWNLOAD_COMPLETE - peer not available', {
+        peerExists: !!this.peer,
+        peerDestroyed: this.peer?.destroyed
+      });
     }
   }
 

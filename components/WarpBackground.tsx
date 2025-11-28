@@ -1,43 +1,49 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
-const StarField = ({ count = 4000, warpActive = false }) => {
+const StarField = ({ count = 8000, warpActive = false }) => {
   const mesh = useRef<THREE.Points>(null);
   
-  const particles = useMemo(() => {
-    const temp = [];
-    for (let i = 0; i < count; i++) {
-      const x = (Math.random() - 0.5) * 2000;
-      const y = (Math.random() - 0.5) * 2000;
-      const z = (Math.random() - 0.5) * 2000;
-      temp.push(x, y, z);
-    }
-    return new Float32Array(temp);
-  }, [count]);
+  // 🚀 [최적화] 별의 위치와 크기 초기화 (직접 계산)
+  const pos = new Float32Array(count * 3);
+  const sz = new Float32Array(count);
+  
+  for (let i = 0; i < count; i++) {
+    pos[i * 3] = (Math.random() - 0.5) * 2000;     // x
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 2000; // y
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 2000; // z
+    sz[i] = Math.random() * 1.5 + 0.5;
+  }
+  
+  const particles = pos;
+  const sizes = sz;
 
   useFrame((state, delta) => {
-    if (mesh.current) {
-      // Rotation
-      mesh.current.rotation.z += delta * (warpActive ? 0.5 : 0.05);
+    if (!mesh.current) return;
+    
+    // 🚀 [Magician Archetype] 워프 모드일 때 속도 증가 (변형)
+    const currentSpeed = warpActive ? 400 : 10;
+    
+    // Z축으로 이동하며 워프 효과 구현
+    const positions = mesh.current.geometry.attributes.position.array as Float32Array;
+    for (let i = 2; i < positions.length; i += 3) {
+      positions[i] += currentSpeed * delta;
       
-      // Warp effect: Move particles towards camera
-      const positions = mesh.current.geometry.attributes.position.array as Float32Array;
-      const speed = warpActive ? 400 : 10;
-      
-      for (let i = 2; i < positions.length; i += 3) {
-        positions[i] += speed * delta; // Move along Z
-        
-        // Reset if too close
-        if (positions[i] > 500) {
-          positions[i] = -1500;
-          // Randomize X/Y slightly on reset for variety
-          positions[i-2] = (Math.random() - 0.5) * 2000;
-          positions[i-1] = (Math.random() - 0.5) * 2000;
-        }
+      // 카메라 뒤로 넘어가면 다시 앞으로 이동 (무한 루프)
+      if (positions[i] > 500) {
+        positions[i] = -1500;
+        // 다양성을 위해 X/Y 위치 재설정
+        positions[i - 2] = (Math.random() - 0.5) * 2000;
+        positions[i - 1] = (Math.random() - 0.5) * 2000;
       }
-      mesh.current.geometry.attributes.position.needsUpdate = true;
     }
+    mesh.current.geometry.attributes.position.needsUpdate = true;
+    
+    // 🚀 [마우스 반응성] 전체 별무리의 미세한 회전으로 공간감 부여 (Parallax)
+    const { mouse } = state;
+    mesh.current.rotation.x += (mouse.y * 0.05 - mesh.current.rotation.x) * 0.05;
+    mesh.current.rotation.y += (mouse.x * 0.05 - mesh.current.rotation.y) * 0.05;
   });
 
   return (
@@ -46,16 +52,23 @@ const StarField = ({ count = 4000, warpActive = false }) => {
         <bufferAttribute
           attach="attributes-position"
           count={particles.length / 3}
-          array={particles}
+          array={pos}
           itemSize={3}
+        />
+        <bufferAttribute
+          attach="attributes-size"
+          count={sizes.length}
+          array={sz}
+          itemSize={1}
         />
       </bufferGeometry>
       <pointsMaterial
-        size={warpActive ? 4 : 1.5}
+        size={warpActive ? 3 : 2}
         color={warpActive ? "#00ffff" : "#ffffff"}
         transparent
         opacity={0.8}
         sizeAttenuation
+        blending={THREE.AdditiveBlending}
         depthWrite={false}
       />
     </points>
@@ -89,6 +102,13 @@ interface WarpBackgroundProps {
   intensity?: 'low' | 'high' | 'hyper';
 }
 
+/**
+ * WarpBackground - 몰입형 3D 배경 컴포넌트
+ * 
+ * 🚀 [브랜드 심리학] Magician & Explorer 아키타입 적용
+ * - 마법사: 변형과 경이로움 (워프 효과)
+ * - 탐험가: 자유와 발견 (우주 공간)
+ */
 const WarpBackground: React.FC<WarpBackgroundProps> = ({ intensity = 'low' }) => {
   const warpActive = intensity === 'hyper' || intensity === 'high';
 
@@ -97,18 +117,28 @@ const WarpBackground: React.FC<WarpBackgroundProps> = ({ intensity = 'low' }) =>
       <Canvas camera={{ position: [0, 0, 50], fov: 75 }}>
         <color attach="background" args={['#000000']} />
         <fog attach="fog" args={['#000000', 100, 1000]} />
-        <StarField count={6000} warpActive={warpActive} />
+        
+        {/* 🌌 Interactive Star Field with Mouse Parallax */}
+        <StarField count={8000} warpActive={warpActive} />
+        
+        {/* 🌀 Warp Tunnel Effect */}
         <WarpTunnel warpActive={warpActive} />
         
-        {/* Radial Burst Core for Warp Effect */}
+        {/* ✨ Radial Burst Core for Hyper Warp */}
         {warpActive && (
-            <mesh position={[0, 0, -800]}>
-                <sphereGeometry args={[50, 32, 32]} />
-                <meshBasicMaterial color="#00ffff" transparent opacity={0.5} />
-            </mesh>
+          <mesh position={[0, 0, -800]}>
+            <sphereGeometry args={[50, 32, 32]} />
+            <meshBasicMaterial 
+              color="#00ffff" 
+              transparent 
+              opacity={0.5}
+              blending={THREE.AdditiveBlending}
+            />
+          </mesh>
         )}
       </Canvas>
-      {/* Vignette and Color Grade */}
+      
+      {/* 🎨 Post-Processing Overlays */}
       <div className={`absolute inset-0 pointer-events-none transition-colors duration-1000 ${warpActive ? 'bg-cyan-900/20' : 'bg-transparent'}`} />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,black_100%)] pointer-events-none" />
     </div>

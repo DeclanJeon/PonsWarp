@@ -6,6 +6,8 @@ import ReceiverView from './components/ReceiverView';
 import { AppMode } from './types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { signalingService } from './services/signaling';
+import { MagneticButton } from './components/ui/MagneticButton';
+import { TransferProgressBar } from './components/ui/TransferProgressBar';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.INTRO);
@@ -62,7 +64,7 @@ const App: React.FC = () => {
   const intensity = (mode === AppMode.TRANSFERRING) ? 'hyper' : 'low';
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden text-white bg-black">
+    <div className="relative w-screen h-screen overflow-hidden text-white bg-transparent">
       {/* Visual Background */}
       <WarpBackground intensity={intensity} />
 
@@ -96,13 +98,13 @@ const App: React.FC = () => {
               <p className="text-gray-400 mb-10 text-lg">
                 P2P. Multi-Channel. 10GB+ Ready.
               </p>
-              <button 
+              <MagneticButton 
                 onClick={startApp}
-                className="group relative bg-white text-black px-10 py-4 rounded-full font-bold tracking-wider hover:bg-cyan-50 transition-all flex items-center gap-2 mx-auto"
+                className="bg-white text-black px-10 py-4 rounded-full font-bold tracking-wider hover:bg-cyan-50 transition-all flex items-center gap-2 mx-auto"
               >
                 INITIALIZE
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </button>
+              </MagneticButton>
             </motion.div>
           )}
 
@@ -114,7 +116,7 @@ const App: React.FC = () => {
               exit={{ opacity: 0, y: -20 }}
               className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl w-full px-6"
             >
-              <button 
+              <MagneticButton 
                 onClick={() => setMode(AppMode.SENDER)}
                 className="group h-64 bg-black/40 backdrop-blur-md border border-gray-800 rounded-3xl p-8 flex flex-col items-center justify-center hover:border-cyan-500 hover:bg-cyan-950/30 transition-all"
               >
@@ -123,9 +125,9 @@ const App: React.FC = () => {
                 </div>
                 <h3 className="text-2xl font-bold mb-2">SEND FILE</h3>
                 <p className="text-gray-500 text-sm">Generate Warp Key</p>
-              </button>
+              </MagneticButton>
 
-              <button 
+              <MagneticButton 
                 onClick={() => setMode(AppMode.RECEIVER)}
                 className="group h-64 bg-black/40 backdrop-blur-md border border-gray-800 rounded-3xl p-8 flex flex-col items-center justify-center hover:border-purple-500 hover:bg-purple-950/30 transition-all"
               >
@@ -134,16 +136,24 @@ const App: React.FC = () => {
                 </div>
                 <h3 className="text-2xl font-bold mb-2">RECEIVE FILE</h3>
                 <p className="text-gray-500 text-sm">Scan Warp Key</p>
-              </button>
+              </MagneticButton>
             </motion.div>
           )}
 
-          {mode === AppMode.SENDER && (
-            <motion.div key="sender" className="w-full h-full flex items-center justify-center">
+          {(mode === AppMode.SENDER || mode === AppMode.TRANSFERRING) && (
+            <motion.div key="sender" className="w-full h-full flex flex-col items-center justify-center">
               <SenderView onComplete={() => setMode(AppMode.COMPLETED)} />
+              
+              {/* 🚀 [최적화] 전송 중일 때만 최적화된 프로그레스 바 표시 */}
+              {mode === AppMode.TRANSFERRING && (
+                <div className="mt-8">
+                  <TransferProgressBar />
+                </div>
+              )}
+              
               <button 
                 onClick={() => setMode(AppMode.SELECTION)} 
-                className="absolute bottom-8 text-gray-500 hover:text-white"
+                className="absolute bottom-8 text-gray-500 hover:text-white transition-colors"
               >
                 Cancel Transfer
               </button>

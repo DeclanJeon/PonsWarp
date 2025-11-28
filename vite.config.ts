@@ -14,7 +14,10 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
       },
       plugins: [
-        react()
+        react({
+          jsxImportSource: 'react',
+          jsxRuntime: 'automatic'
+        })
       ],
       define: {
         'process.env.SIGNALING_SERVER_URL': JSON.stringify(env.SIGNALING_SERVER_URL),
@@ -33,12 +36,14 @@ export default defineConfig(({ mode }) => {
           'buffer': 'buffer',
           'util': 'util',
           'process': 'process/browser',
+          'three': 'three',
         }
       },
       worker: {
         format: 'es'
       },
       optimizeDeps: {
+        include: ['three', '@react-three/fiber', '@react-three/drei', 'lucide-react'],
         esbuildOptions: {
           define: {
             global: 'globalThis'

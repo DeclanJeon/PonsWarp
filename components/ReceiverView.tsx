@@ -4,6 +4,7 @@ import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../constants';
 import { DirectFileWriter } from '../services/directFileWriter';
 import { formatBytes } from '../utils/fileUtils';
+import { AppMode } from '../types';
 
 interface ReceiverViewProps {
   autoRoomId?: string | null;
@@ -278,19 +279,17 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     isMountedRef.current = true;
     
     return () => {
+      isMountedRef.current = false;
+      if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+      
       // StrictMode에서 첫 번째 cleanup은 무시하고, 실제 언마운트 시에만 실행
       // 약간의 딜레이를 주어 StrictMode의 재마운트를 감지
-      const timeoutId = setTimeout(() => {
+      setTimeout(() => {
         if (!isMountedRef.current) {
           console.log('[ReceiverView] Component unmounted, cleaning up...');
           transferService.cleanup();
         }
       }, 100);
-      
-      isMountedRef.current = false;
-      if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
-      
-      return () => clearTimeout(timeoutId);
     };
   }, []);
 
