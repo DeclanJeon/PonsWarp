@@ -5,12 +5,14 @@ import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { motion } from 'framer-motion';
 import { AppMode } from '../types';
+import { useTransferStore } from '../store/transferStore';
 
 interface SenderViewProps {
   onComplete?: () => void;
 }
 
 const SenderView: React.FC<SenderViewProps> = () => {
+  const { setStatus: setGlobalStatus } = useTransferStore();
   const [manifest, setManifest] = useState<any>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
@@ -184,15 +186,26 @@ const SenderView: React.FC<SenderViewProps> = () => {
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
-    }
+    useTransferStore.setState({ status: 'DRAGGING_FILES' });
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    useTransferStore.setState({ status: 'IDLE' });
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    useTransferStore.getState().startTransfer(); // 여기서 전송 시작
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processFiles(e.dataTransfer.files);
+    }
   };
 
   const processFiles = async (fileList: FileList) => {
@@ -251,9 +264,11 @@ const SenderView: React.FC<SenderViewProps> = () => {
           animate={{ opacity: 1, y: 0 }}
           className="w-full space-y-4"
         >
-           <div 
-             onDrop={handleDrop}
+           <div
+             onDragEnter={handleDragEnter}
              onDragOver={handleDragOver}
+             onDragLeave={handleDragLeave}
+             onDrop={handleDrop}
              className="border-2 border-dashed border-cyan-500/50 bg-black/40 backdrop-blur-md rounded-3xl p-10 text-center transition-all flex flex-col items-center justify-center min-h-[320px]"
            >
              <input 

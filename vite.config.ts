@@ -19,6 +19,7 @@ export default defineConfig(({ mode }) => {
           jsxRuntime: 'automatic'
         })
       ],
+
       define: {
         'process.env.SIGNALING_SERVER_URL': JSON.stringify(env.SIGNALING_SERVER_URL),
         'process.env': {},

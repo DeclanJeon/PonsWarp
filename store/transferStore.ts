@@ -35,7 +35,7 @@ interface TransferState {
   shareLink: string | null;
   
   // 상태
-  status: 'IDLE' | 'PREPARING' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE' | 'ERROR' | 'QUEUED' | 'ROOM_FULL';
+  status: 'IDLE' | 'DRAGGING_FILES' | 'PREPARING' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE' | 'ERROR' | 'QUEUED' | 'ROOM_FULL';
   error: string | null;
   
   // 메타데이터
@@ -60,6 +60,12 @@ interface TransferState {
   setStatus: (status: TransferState['status']) => void;
   setError: (error: string | null) => void;
   setManifest: (manifest: TransferManifest | null) => void;
+  
+  // 드래그/전송 상태 헬퍼
+  startDragging: () => void;
+  stopDragging: () => void;
+  startTransfer: () => void;
+  completeTransfer: () => void;
   
   // 🚀 진행률 업데이트 (고빈도 - 스로틀링 권장)
   updateProgress: (data: Partial<ProgressData>) => void;
@@ -128,6 +134,12 @@ export const useTransferStore = create<TransferState>()(
         ...data,
       }
     })),
+    
+    // 드래그/전송 상태 헬퍼
+    startDragging: () => set({ status: 'DRAGGING_FILES' }),
+    stopDragging: () => set({ status: 'IDLE' }),
+    startTransfer: () => set({ status: 'TRANSFERRING' }),
+    completeTransfer: () => set({ status: 'DONE' }),
     
     // 피어 관리
     addConnectedPeer: (peerId) => set((state) => ({

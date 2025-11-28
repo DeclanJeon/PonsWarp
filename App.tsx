@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Send, Download, ArrowRight } from 'lucide-react';
-import WarpBackground from './components/WarpBackground';
+import SpaceField from './components/SpaceField';
 import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
 import { AppMode } from './types';
@@ -60,16 +60,33 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Determine intensity based on mode
-  const intensity = (mode === AppMode.TRANSFERRING) ? 'hyper' : 'low';
+  // WarpBackground는 이제 전역 상태를 직접 사용하므로 bgMode 계산이 필요 없음
+
+  // 💡 팁: SenderView에서 드래그 시 배경을 바꾸고 싶다면 Zustand 등을 이용해
+  // 전역 상태(isDragging)를 공유해야 합니다.
+  // 일단은 파일 전송 시작 직전(PREPARING)에 흡입 효과를 줄 수 있습니다.
+  // TODO: AppMode에 'PREPARING' 단계를 명시적으로 추가하여 배경 애니메이션 연동
 
   return (
     <div className="relative w-screen h-screen overflow-hidden text-white bg-transparent">
-      {/* Visual Background */}
-      <WarpBackground intensity={intensity} />
+
+      {/* 전송 완료 시 전체 화면 플래시 효과 */}
+      {mode === AppMode.COMPLETED && (
+        <motion.div
+          className="fixed inset-0 bg-cyan-400 pointer-events-none z-50"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: [0, 1, 0] }}
+          transition={{ duration: 0.8 }}
+        />
+      )}
 
       {/* Header / Logo */}
-      <header className="absolute top-0 left-0 p-6 z-50 flex items-center gap-3 pointer-events-none">
+      <header
+        className="absolute top-0 left-0 p-6 z-50 flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+        onClick={() => {
+          window.location.href = '/';
+        }}
+      >
         <div className="w-10 h-10 border-2 border-cyan-500 rounded-full flex items-center justify-center">
           <div className="w-4 h-4 bg-white rounded-full shadow-[0_0_15px_rgba(255,255,255,0.8)]" />
         </div>
@@ -77,6 +94,9 @@ const App: React.FC = () => {
           PONS<span className="text-cyan-500">WARP</span>
         </h1>
       </header>
+
+      {/* Visual Background: 전역 상태를 직접 사용 */}
+      <SpaceField />
 
       <main className="relative z-10 w-full h-full flex flex-col items-center justify-center">
         <AnimatePresence mode="wait">
