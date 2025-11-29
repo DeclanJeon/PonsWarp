@@ -3,6 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus, AlertTriangle, Users } from 'lucide-react';
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
+import { scanFiles, processInputFiles } from '../utils/fileScanner';
 import { motion } from 'framer-motion';
 import { AppMode } from '../types';
 import { useTransferStore } from '../store/transferStore';
@@ -182,7 +183,8 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      processFiles(e.target.files);
+      const scannedFiles = processInputFiles(e.target.files);
+      processScannedFiles(scannedFiles);
     }
   };
 
@@ -200,16 +202,26 @@ const SenderView: React.FC<SenderViewProps> = () => {
     useTransferStore.setState({ status: 'IDLE' });
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    useTransferStore.getState().startTransfer(); // 여기서 전송 시작
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
+    useTransferStore.setState({ status: 'IDLE' });
+    
+    // DataTransferItemList가 있으면 FileSystemEntry 스캔 사용
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      const scannedFiles = await scanFiles(e.dataTransfer.items);
+      processScannedFiles(scannedFiles);
+    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      // Fallback: 단순 파일 처리
+      const scannedFiles = processInputFiles(e.dataTransfer.files);
+      processScannedFiles(scannedFiles);
     }
   };
 
-  const processFiles = async (fileList: FileList) => {
-    const { manifest, files } = createManifest(fileList);
+  const processScannedFiles = async (scannedFiles: any[]) => {
+    if (scannedFiles.length === 0) return;
+    
+    // Manifest 생성
+    const { manifest, files } = createManifest(scannedFiles);
     setManifest(manifest);
     
     console.log('[SenderView] 📊 [DEBUG] Manifest created:', {

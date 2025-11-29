@@ -1,56 +1,57 @@
 import { FileNode, TransferManifest } from '../types';
+import { ScannedFile } from './fileScanner';
 
-// FileList -> TransferManifest 변환
-export const createManifest = (fileList: FileList | File[]): { manifest: TransferManifest, files: File[] } => {
-  const files: File[] = Array.from(fileList);
+// ScannedFile[] -> TransferManifest 변환 (새로운 방식)
+export const createManifest = (scannedFiles: ScannedFile[]): { manifest: TransferManifest, files: File[] } => {
   const fileNodes: FileNode[] = [];
   let totalSize = 0;
+  const rawFiles: File[] = [];
 
-  // 경로 정보가 있는 경우(폴더 업로드)와 없는 경우(단일 파일) 처리
-  // webkitRelativePath는 <input webkitdirectory> 사용 시에만 존재
-  
-  files.forEach((file, index) => {
-    totalSize += file.size;
+  scannedFiles.forEach((item, index) => {
+    totalSize += item.file.size;
+    rawFiles.push(item.file);
     
-    // 경로 정제: webkitRelativePath가 있으면 사용, 없으면 file.name
-    // 윈도우의 백슬래시(\)를 슬래시(/)로 통일
-    const rawPath = file.webkitRelativePath || file.name;
-    const normalizedPath = rawPath.replace(/\\/g, '/');
-
     fileNodes.push({
       id: index,
-      name: file.name,
-      path: normalizedPath,
-      size: file.size,
-      type: file.type || 'application/octet-stream',
-      lastModified: file.lastModified
+      name: item.file.name,
+      path: item.path, // 스캐너가 정제한 전체 경로
+      size: item.file.size,
+      type: item.file.type || 'application/octet-stream',
+      lastModified: item.file.lastModified
     });
   });
 
-  // Root Name 결정 (폴더 업로드면 최상위 폴더명, 아니면 첫 파일명)
+  // Root Name 및 폴더 여부 판단
   let rootName = 'Transfer';
   let isFolder = false;
 
-  if (files.length > 0) {
-    if (files[0].webkitRelativePath) {
-      rootName = files[0].webkitRelativePath.split('/')[0];
+  if (scannedFiles.length > 0) {
+    const firstPath = scannedFiles[0].path;
+    if (firstPath.includes('/')) {
+      // 경로에 슬래시가 있으면 폴더 구조임
+      rootName = firstPath.split('/')[0];
       isFolder = true;
+    } else if (scannedFiles.length > 1) {
+      // 파일이 여러 개지만 최상위 경로가 없으면 'Multi-Files'
+      rootName = `Files (${scannedFiles.length})`;
+      isFolder = true; // ZIP으로 묶어야 함
     } else {
-      rootName = files[0].name;
-      isFolder = files.length > 1;
+      // 단일 파일
+      rootName = scannedFiles[0].file.name;
+      isFolder = false;
     }
   }
 
   const manifest: TransferManifest = {
     transferId: `warp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
     totalSize,
-    totalFiles: files.length,
+    totalFiles: scannedFiles.length,
     rootName,
     files: fileNodes,
     isFolder
   };
 
-  return { manifest, files };
+  return { manifest, files: rawFiles };
 };
 
 export const formatBytes = (bytes: number, decimals = 2) => {

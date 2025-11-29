@@ -1,20 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw } from 'lucide-react';
+import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw, Radio } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../constants';
 import { DirectFileWriter } from '../services/directFileWriter';
 import { formatBytes } from '../utils/fileUtils';
-import { AppMode } from '../types';
+import { useTransferStore } from '../store/transferStore';
 
-interface ReceiverViewProps {
-  autoRoomId?: string | null;
-}
-
-const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
-  const [roomId, setRoomId] = useState(autoRoomId || '');
-  const [status, setStatus] = useState<'SCANNING' | 'CONNECTING' | 'WAITING' | 'RECEIVING' | 'DONE' | 'ERROR' | 'ROOM_FULL' | 'QUEUED'>('SCANNING');
-  const [manifest, setManifest] = useState<any>(null);
-  const [progress, setProgress] = useState(0);
+const ReceiverView: React.FC = () => {
+  // 전역 상태 사용
+  const { roomId, setRoomId, status, setStatus, progress, manifest, setManifest, updateProgress } = useTransferStore();
+  
   const [errorMsg, setErrorMsg] = useState('');
   const [actualSize, setActualSize] = useState<number>(0);
   const [progressData, setProgressData] = useState({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
@@ -57,7 +52,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       console.log('[ReceiverView] Manifest received while QUEUED - transfer starting');
       setQueuePosition(0);
       setQueueMessage('');
-      setProgress(0);
+      updateProgress({ progress: 0, bytesTransferred: 0, totalBytes: m?.totalSize || 0 });
       setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: m?.totalSize || 0 });
       setStatus('RECEIVING');
       setIsWaitingForSender(false);
@@ -65,7 +60,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
       // 일반적인 경우: WAITING 상태로 전환
       setStatus('WAITING');
     }
-  }, []);
+  }, [setStatus, updateProgress]);
 
   const handleRemoteStarted = useCallback(() => {
     // 🚨 [핵심 수정] 송신자 응답 시 타임아웃 해제
@@ -80,11 +75,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     // 1. 대기 상태 해제 (데이터가 들어오기 시작함)
     setIsWaitingForSender(false);
     
-    // 2. 상태 강제 동기화 (함수형 업데이트로 안전하게 처리)
-    setStatus(prev => (prev !== 'RECEIVING' ? 'RECEIVING' : prev));
+    // 2. 상태 강제 동기화
+    if (status !== 'RECEIVING') {
+      setStatus('RECEIVING');
+    }
 
     // 3. 🚀 [성능 최적화] UI 업데이트 스로틀링
-    //    너무 잦은 업데이트는 메인 스레드 부하를 증가시켜 다운로드 속도 저하
     const now = Date.now();
     const val = typeof p === 'object' ? p.progress : p;
     
@@ -95,7 +91,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     lastProgressUpdateRef.current = now;
 
     // 4. 진행률 데이터 업데이트
-    setProgress(isNaN(val) ? 0 : val);
+    updateProgress({ progress: isNaN(val) ? 0 : val });
     
     if (typeof p === 'object' && p.speed !== undefined) {
       setProgressData({
@@ -105,7 +101,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
         totalBytes: p.totalBytes || 0
       });
     }
-  }, []);
+  }, [status, setStatus, updateProgress]);
 
   const handleComplete = useCallback((payload: any) => {
     console.log('[ReceiverView] Transfer Complete.', payload);
@@ -214,12 +210,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     setQueuePosition(0);
     setQueueMessage('');
     // 진행률 초기화
-    setProgress(0);
+    updateProgress({ progress: 0, bytesTransferred: 0, totalBytes: manifest?.totalSize || 0 });
     setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: manifest?.totalSize || 0 });
     // 상태 전환
     setStatus('RECEIVING');
-    setIsWaitingForSender(false); // 이미 전송이 시작되었으므로 대기 상태 해제
-  }, [manifest]);
+    setIsWaitingForSender(false);
+  }, [manifest, updateProgress, setStatus]);
 
   // 🚀 [Multi-Receiver] 다운로드 가능 알림 핸들러
   const handleReadyForDownload = useCallback((data: { message: string }) => {
@@ -263,13 +259,13 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     };
   }, [handleMetadata, handleRemoteStarted, handleProgress, handleComplete, handleError, handleRoomFull, handleTransferMissed, handleQueued, handleTransferStarting, handleReadyForDownload]);
 
-  // 🚀 [핵심 수정] 방 참여 Effect (autoRoomId가 있을 때 한 번만 실행)
+  // 🚀 [핵심 수정] 방 참여 Effect (roomId가 있을 때 한 번만 실행)
   useEffect(() => {
-    if (autoRoomId && !isInitializedRef.current) {
+    if (roomId && !isInitializedRef.current) {
       isInitializedRef.current = true;
-      handleJoin(autoRoomId);
+      handleJoin(roomId);
     }
-  }, [autoRoomId, handleJoin]);
+  }, [roomId, handleJoin]);
 
   // 🚀 [핵심 수정] 컴포넌트 실제 언마운트 시에만 cleanup 실행
   // React StrictMode에서 useEffect가 두 번 실행되는 문제 방지
@@ -356,235 +352,181 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ autoRoomId }) => {
     }
   }, [manifest]);
 
-  const safeProgress = isNaN(progress) || progress < 0 ? 0 : progress;
+  const safeProgress = isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
   const strokeDashoffset = 283 - (283 * safeProgress) / 100;
+  
+  // Glass Panel 스타일
+  const glassPanelClass = "bg-black/30 backdrop-blur-2xl border border-white/10 rounded-[2rem] p-10 shadow-[0_0_40px_rgba(0,0,0,0.5)] w-full max-w-md relative overflow-hidden group";
+  const glowEffectClass = "absolute inset-0 bg-gradient-to-br from-purple-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none";
 
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full max-w-md mx-auto p-6">
+    <div className="flex flex-col items-center justify-center w-full">
       
-      {/* 1. SCANNING */}
-      {status === 'SCANNING' && (
-        <div className="bg-black/80 p-8 rounded-3xl border border-gray-800 text-center w-full">
-          <Scan className="w-16 h-16 text-cyan-500 mx-auto mb-4 animate-pulse" />
-          <input
-            value={roomId}
-            onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-            placeholder="ROOM ID"
-            maxLength={6}
-            className="bg-gray-900 border border-gray-700 rounded-xl p-4 text-center text-2xl font-mono text-cyan-400 w-full mb-4 uppercase outline-none focus:border-cyan-500"
-          />
-          <button onClick={() => handleJoin(roomId)} className="w-full bg-cyan-600 hover:bg-cyan-500 py-3 rounded-xl font-bold transition-colors">
-            CONNECT
-          </button>
+      {/* 1. IDLE / INPUT */}
+      {status === 'IDLE' && (
+        <div className={glassPanelClass}>
+          <div className={glowEffectClass} />
+          <div className="text-center relative z-10">
+            <div className="w-20 h-20 mx-auto mb-6 bg-white/5 rounded-full flex items-center justify-center animate-pulse border border-white/10">
+              <Scan className="w-10 h-10 text-cyan-400" />
+            </div>
+            <h2 className="text-2xl font-bold mb-6 tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-purple-300">
+              ENTER WARP KEY
+            </h2>
+            <div className="relative">
+              <input
+                value={roomId || ''}
+                onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+                placeholder="######"
+                maxLength={6}
+                className="w-full bg-black/40 border-2 border-white/10 rounded-xl p-4 text-center text-3xl font-mono text-cyan-400 tracking-[0.5em] outline-none focus:border-cyan-500/50 focus:shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all placeholder-white/10"
+              />
+              <div className="absolute inset-0 pointer-events-none border border-cyan-500/20 rounded-xl mix-blend-overlay" />
+            </div>
+            <button 
+              onClick={() => handleJoin(roomId!)} 
+              disabled={!roomId || roomId.length < 6}
+              className="mt-6 w-full bg-white text-black py-4 rounded-xl font-bold tracking-widest hover:bg-cyan-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              ESTABLISH LINK
+            </button>
+          </div>
         </div>
       )}
 
       {/* 2. CONNECTING */}
       {status === 'CONNECTING' && (
-        <div className="text-center w-full">
-          <Loader2 className="w-16 h-16 text-cyan-500 animate-spin mx-auto mb-4" />
-          <h3 className="text-xl font-bold mb-2">Connecting...</h3>
-          <p className="text-gray-400 mb-8">Searching for Sender...</p>
-          <button onClick={() => window.location.reload()} className="text-gray-500 hover:text-white underline text-sm">
-            Cancel & Retry
-          </button>
-        </div>
-      )}
-
-      {/* 3. WAITING (File Info) - 🚨 [수정] 버튼 클릭 즉시 RECEIVING으로 전환 */}
-      {status === 'WAITING' && (
-        <div className="bg-black/80 p-8 rounded-3xl border border-gray-800 text-center w-full">
-          <Archive className="w-16 h-16 text-cyan-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-white mb-2">Incoming Transfer</h2>
-          <p className="text-gray-400 text-sm mb-6">
-            {manifest?.totalFiles === 1 ? manifest?.files[0]?.name : `${manifest?.totalFiles} files`}
-          </p>
-          <p className="text-gray-500 text-sm mb-6">
-            Size: {manifest ? (manifest.totalSize / (1024 * 1024)).toFixed(2) : '0'} MB
-          </p>
-          
-          {errorMsg && (
-            <div className="mb-4 p-3 bg-red-900/50 border border-red-500/50 rounded-lg text-sm text-red-200 flex items-center gap-2 text-left">
-              <AlertCircle size={16} className="flex-shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          <button
-            onClick={startDirectDownload}
-            className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-gray-200 flex items-center gap-2 mx-auto transition-colors w-full justify-center"
-          >
-            <Download size={20} />
-            Start Download
-          </button>
-        </div>
-      )}
-
-      {/* 4. RECEIVING - 🚀 [최적화] 세밀한 상태 관리 및 UI 분리 */}
-      {status === 'RECEIVING' && (
-        <div className="text-center w-full">
-          {/* 헤더: 상태에 따른 동적 텍스트와 아이콘 */}
-          <div className="flex items-center justify-center mb-6">
-            {isWaitingForSender ? (
-              <Loader2 className="w-8 h-8 text-yellow-500 animate-spin mr-3" />
-            ) : (
-              <CheckCircle className="w-8 h-8 text-green-500" />
-            )}
-            <h3 className="text-xl font-bold mb-2">
-              {isWaitingForSender ? 'Preparing Transfer...' : 'Receiving Data'}
-            </h3>
+        <div className="text-center">
+          <div className="relative w-32 h-32 mx-auto mb-8">
+            <div className="absolute inset-0 border-4 border-t-cyan-500 border-r-transparent border-b-purple-500 border-l-transparent rounded-full animate-spin" />
+            <div className="absolute inset-4 border-4 border-t-transparent border-r-white/30 border-b-transparent border-l-white/30 rounded-full animate-spin-reverse" />
+            <Radio className="absolute inset-0 m-auto text-cyan-400 animate-pulse" size={32} />
           </div>
+          <h3 className="text-2xl font-bold mb-2 tracking-widest">SEARCHING FREQUENCY...</h3>
+          <p className="text-cyan-400/60 font-mono">Waiting for sender signal</p>
+        </div>
+      )}
 
-          {/* 설명 텍스트 */}
-          <p className="text-cyan-400 mb-6 truncate px-4">
-            {manifest?.rootName || 'Downloading files...'}
-          </p>
-          
-          {/* 프로그래스 바: 통합된 컴포넌트 */}
-          <div className="relative w-48 h-48 mx-auto mb-6">
-            <svg className="w-full h-full" viewBox="0 0 100 100">
-              <circle cx="50" cy="50" r="45" fill="none" stroke="#1e293b" strokeWidth="8" />
+      {/* 3. WAITING */}
+      {status === 'WAITING' && (
+        <div className={glassPanelClass}>
+          <div className={glowEffectClass} />
+          <div className="text-center relative z-10">
+            <Archive className="w-20 h-20 text-cyan-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
+            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">INCOMING TRANSMISSION</h2>
+            <p className="text-cyan-400/80 text-sm mb-6 font-mono">
+              {manifest?.totalFiles === 1 ? manifest?.files[0]?.name : `${manifest?.totalFiles} files`}
+            </p>
+            <p className="text-gray-400 text-sm mb-8">
+              Size: {manifest ? (manifest.totalSize / (1024 * 1024)).toFixed(2) : '0'} MB
+            </p>
+            
+            {errorMsg && (
+              <div className="mb-4 p-3 bg-red-900/30 border border-red-500/30 rounded-lg text-sm text-red-200 flex items-center gap-2 text-left backdrop-blur-sm">
+                <AlertCircle size={16} className="flex-shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            <button
+              onClick={startDirectDownload}
+              className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto w-full justify-center font-bold tracking-wider"
+            >
+              <Download size={20} />
+              MATERIALIZE
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 4. RECEIVING (REVERSE WARP VISIBLE) */}
+      {status === 'RECEIVING' && (
+        <div className="text-center w-full max-w-2xl relative">
+          {/* 중앙 HUD 스타일 프로그레스 */}
+          <div className="relative w-64 h-64 mx-auto mb-8">
+            {/* 배경 링 */}
+            <svg className="w-full h-full rotate-[-90deg]" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+              {/* 진행 링 */}
               <circle
                 cx="50" cy="50" r="45" fill="none"
-                stroke={isWaitingForSender ? "#4b5563" : "#06b6d4"}
-                strokeWidth="8"
+                stroke="url(#gradient)"
+                strokeWidth="4"
                 strokeDasharray="283"
-                strokeDashoffset={isWaitingForSender ? 283 : (isNaN(strokeDashoffset) ? 283 : strokeDashoffset)}
-                transform="rotate(-90 50 50)"
-                className={`transition-all duration-300 ${isWaitingForSender ? 'opacity-60' : 'opacity-100'}`}
+                strokeDashoffset={isNaN(strokeDashoffset) ? 283 : strokeDashoffset}
+                className="transition-all duration-300 ease-out drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]"
               />
+              <defs>
+                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#22d3ee" />
+                  <stop offset="100%" stopColor="#a855f7" />
+                </linearGradient>
+              </defs>
             </svg>
-            <div className="absolute inset-0 flex items-center justify-center text-3xl font-bold">
-              {isWaitingForSender ? (
-                <div className="flex flex-col items-center">
-                  <Loader2 className="w-6 h-6 text-yellow-500 animate-spin mb-2" />
-                  <span className="text-yellow-500">Preparing...</span>
-                </div>
-              ) : (
-                <span className="text-cyan-400">{Math.round(safeProgress)}%</span>
-              )}
+            {/* 중앙 정보 */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-5xl font-black font-rajdhani text-white drop-shadow-lg">
+                {Math.round(safeProgress)}
+                <span className="text-2xl text-cyan-400">%</span>
+              </span>
+              <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">INCOMING STREAM</span>
             </div>
           </div>
 
-          {/* 상세 정보: 조건부 렌더링 */}
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Speed</p>
-              <p className="font-mono font-bold text-cyan-300">
-                {isWaitingForSender ? (
-                  <span className="text-yellow-500">Initializing...</span>
-                ) : (
-                  `${formatBytes(progressData.speed)}/s`
-                )}
-              </p>
+          {/* 하단 정보 패널 (투명) */}
+          <div className="grid grid-cols-2 gap-4 bg-black/20 backdrop-blur-md rounded-2xl p-6 border border-white/5">
+            <div className="text-left">
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Download Speed</p>
+              <p className="font-mono text-xl text-cyan-400 font-bold">{formatBytes(progressData.speed)}/s</p>
             </div>
-            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Received</p>
-              <p className="font-mono text-gray-300">
-                {isWaitingForSender ? (
-                  <span className="text-yellow-500">Waiting...</span>
-                ) : (
-                  formatBytes(progressData.bytesTransferred)
-                )}
-              </p>
-            </div>
-            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total</p>
-              <p className="font-mono text-gray-300">
-                {manifest ? formatBytes(manifest.totalSize) : '-'}
-              </p>
+            <div className="text-right">
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Data Received</p>
+              <p className="font-mono text-xl text-white">{formatBytes(progressData.bytesTransferred)}</p>
             </div>
           </div>
-          
-          {/* 상태 메시지 */}
-          <p className="text-gray-500 text-sm animate-pulse">
-            {isWaitingForSender
-              ? 'Allocating space & establishing connection...'
-              : 'Downloading directly to your device...'}
+
+          <p className="mt-8 text-cyan-500/50 text-sm animate-pulse tracking-[0.2em] font-mono">
+            &lt;&lt;&lt; RECEIVING MATTER STREAM &lt;&lt;&lt;
           </p>
         </div>
       )}
 
       {/* 5. DONE */}
       {status === 'DONE' && (
-        <div className="text-center p-8 bg-green-900/20 rounded-3xl border border-green-500/30 w-full">
-          <FileCheck className="w-24 h-24 text-green-500 mx-auto mb-6" />
-          <h2 className="text-3xl font-bold text-white mb-2">Download Complete!</h2>
-          <p className="text-gray-300 mb-8">
-            {manifest?.totalFiles === 1 ? 'File saved to your selected location.' : 'Files saved to your selected folder.'}
-          </p>
-          {actualSize > 0 && (
-            <p className="text-gray-400 text-sm mb-6">
-              Total size: {(actualSize / (1024 * 1024)).toFixed(2)} MB
-            </p>
-          )}
-          <button 
-            onClick={() => window.location.reload()}
-            className="bg-cyan-600 text-white px-8 py-3 rounded-full font-bold hover:bg-cyan-500 transition-colors"
-          >
-            Receive Another
-          </button>
+        <div className={glassPanelClass}>
+          <div className="text-center relative z-10">
+            <CheckCircle className="w-20 h-20 text-green-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
+            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">MATERIALIZED</h2>
+            <p className="text-gray-400 mb-8">File reconstruction complete.</p>
+            {actualSize > 0 && (
+              <p className="text-gray-500 text-sm mb-6 font-mono">
+                {(actualSize / (1024 * 1024)).toFixed(2)} MB transferred
+              </p>
+            )}
+            <button 
+              onClick={() => window.location.reload()}
+              className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto"
+            >
+              <RefreshCw size={18} /> Process Next
+            </button>
+          </div>
         </div>
       )}
 
-      {/* 6. QUEUED - 🚀 [Multi-Receiver] 대기열 상태 */}
-      {status === 'QUEUED' && (
-        <div className="text-center p-8 bg-cyan-900/20 rounded-3xl border border-cyan-500/30 w-full">
-          <div className="relative w-20 h-20 mx-auto mb-6">
-            <Loader2 className="w-full h-full text-cyan-500 animate-spin" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-lg font-bold text-white">#{queuePosition}</span>
-            </div>
-          </div>
-          <h2 className="text-2xl font-bold mb-2 text-white">In Queue</h2>
-          <p className="text-gray-300 mb-4">{queueMessage || 'Transfer in progress. You will receive the file shortly.'}</p>
-          
-          <div className="bg-black/40 p-4 rounded-xl text-left flex gap-3 border border-cyan-500/20 mb-4">
-            <Archive className="w-6 h-6 text-cyan-500 flex-shrink-0" />
-            <div className="text-sm text-gray-300">
-              <p className="font-bold text-white mb-1">Your download will start automatically</p>
-              <p>Another receiver is currently downloading. Please wait for the current transfer to complete.</p>
-            </div>
-          </div>
-          
-          <p className="text-gray-500 text-sm animate-pulse">
-            Waiting for current transfer to finish...
-          </p>
-        </div>
-      )}
-
-      {/* 7. ROOM_FULL - 🚨 [추가] 방이 꽉 찼을 때의 대기 상태 */}
-      {status === 'ROOM_FULL' && (
-        <div className="text-center p-8 bg-yellow-900/20 rounded-3xl border border-yellow-500/30 w-full">
-          <Loader2 className="w-16 h-16 text-yellow-500 animate-spin mx-auto mb-4" />
-          <h2 className="text-2xl font-bold mb-2 text-white">Room Occupied</h2>
-          <p className="text-gray-300 mb-6">{errorMsg}</p>
-          <div className="flex flex-col gap-3">
+      {/* 6. ERROR */}
+      {status === 'ERROR' && (
+        <div className={glassPanelClass}>
+          <div className="text-center relative z-10">
+            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]" />
+            <h2 className="text-2xl font-bold mb-2 text-white tracking-wider">CONNECTION FAILED</h2>
+            <p className="text-gray-300 mb-6">{errorMsg}</p>
             <button
               onClick={() => window.location.reload()}
-              className="bg-yellow-600 text-white px-6 py-3 rounded-full hover:bg-yellow-500 flex items-center gap-2 mx-auto"
+              className="bg-white/10 border border-white/20 text-white px-6 py-3 rounded-full hover:bg-white/20 flex items-center gap-2 mx-auto transition-all"
             >
-              <RefreshCw size={18} /> Try Again
+              <RefreshCw size={18} /> Retry
             </button>
-            <p className="text-gray-400 text-sm">
-              Or wait a few moments and try again
-            </p>
           </div>
-        </div>
-      )}
-
-      {/* 8. ERROR */}
-      {status === 'ERROR' && (
-        <div className="text-center p-8 bg-red-900/20 rounded-3xl border border-red-500/30 w-full">
-          <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold mb-2 text-white">Connection Failed</h2>
-          <p className="text-gray-300 mb-6">{errorMsg}</p>
-          <button
-            onClick={() => window.location.reload()}
-            className="bg-gray-800 text-white px-6 py-3 rounded-full hover:bg-gray-700 flex items-center gap-2 mx-auto"
-          >
-            <RefreshCw size={18} /> Retry
-          </button>
         </div>
       )}
     </div>

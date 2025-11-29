@@ -35,7 +35,7 @@ interface TransferState {
   shareLink: string | null;
   
   // 상태
-  status: 'IDLE' | 'DRAGGING_FILES' | 'PREPARING' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE' | 'ERROR' | 'QUEUED' | 'ROOM_FULL';
+  status: 'IDLE' | 'DRAGGING_FILES' | 'PREPARING' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'RECEIVING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE' | 'ERROR' | 'QUEUED' | 'ROOM_FULL';
   error: string | null;
   
   // 메타데이터
