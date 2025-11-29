@@ -5,6 +5,7 @@
  */
 import { LOW_WATER_MARK, MULTI_CHANNEL_COUNT } from '../utils/constants';
 import { logInfo, logError, logWarn } from '../utils/logger';
+import { optimizeSDP } from '../utils/sdpUtils'; // 🚀 추가
 
 type EventHandler = (data: any) => void;
 
@@ -172,7 +173,17 @@ export class SinglePeerConnection {
     if (!this.pc) return;
     try {
       const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
+      
+      // 🚀 [Step 15] Local SDP 최적화 (Munching)
+      // 상대방에게 보내기 전에 내 SDP를 수정하여 "나는 엄청난 속도를 원해!"라고 선언
+      const mungedSdp = optimizeSDP(offer.sdp || '');
+      
+      const optimizedOffer = {
+        type: offer.type,
+        sdp: mungedSdp
+      };
+
+      await this.pc.setLocalDescription(optimizedOffer);
       
       // 🚨 [FIX] setLocalDescription 이후 pc.localDescription 사용
       const localDesc = this.pc.localDescription;
@@ -212,38 +223,50 @@ export class SinglePeerConnection {
         fullData: data
       });
 
-      if (data.type === 'offer' || data.type === 'answer') {
+      if (data.type === 'offer') {
+        // 상대방의 Offer를 받았을 때
         if (!data.sdp) {
           logError(`[NativePeer ${this.id}]`, 'Missing SDP in signal data', data);
           return;
         }
 
-        const desc = new RTCSessionDescription({
-          type: data.type,
-          sdp: data.sdp
-        });
-        await this.pc.setRemoteDescription(desc);
+        await this.pc.setRemoteDescription(new RTCSessionDescription(data));
+        const answer = await this.pc.createAnswer();
+        
+        // 🚀 [Step 15] Answer SDP 최적화
+        const mungedSdp = optimizeSDP(answer.sdp || '');
+        const optimizedAnswer = {
+          type: answer.type,
+          sdp: mungedSdp
+        };
 
-        if (data.type === 'offer') {
-          const answer = await this.pc.createAnswer();
-          await this.pc.setLocalDescription(answer);
-          
-          // 🚨 [FIX] setLocalDescription 이후 pc.localDescription 사용
-          const localDesc = this.pc.localDescription;
-          if (!localDesc || !localDesc.sdp) {
-            logError(`[NativePeer ${this.id}]`, 'Local description is null after setLocalDescription');
-            return;
-          }
-          
-          // 시그널 포맷 (명시적 직렬화)
-          const signalData = {
-            type: localDesc.type as 'answer',
-            sdp: localDesc.sdp
-          };
-          
-          logInfo(`[NativePeer ${this.id}]`, `Answer created, SDP length: ${signalData.sdp.length}`);
-          this.emit('signal', signalData);
+        await this.pc.setLocalDescription(optimizedAnswer);
+        
+        // 🚨 [FIX] setLocalDescription 이후 pc.localDescription 사용
+        const localDesc = this.pc.localDescription;
+        if (!localDesc || !localDesc.sdp) {
+          logError(`[NativePeer ${this.id}]`, 'Local description is null after setLocalDescription');
+          return;
         }
+        
+        // 시그널 포맷 (명시적 직렬화)
+        const signalData = {
+          type: localDesc.type as 'answer',
+          sdp: localDesc.sdp
+        };
+        
+        logInfo(`[NativePeer ${this.id}]`, `Answer created, SDP length: ${signalData.sdp.length}`);
+        this.emit('signal', signalData);
+
+      } else if (data.type === 'answer') {
+        // 상대방의 Answer를 받았을 때
+        if (!data.sdp) {
+          logError(`[NativePeer ${this.id}]`, 'Missing SDP in signal data', data);
+          return;
+        }
+
+        await this.pc.setRemoteDescription(new RTCSessionDescription(data));
+
       } else if (data.candidate) {
         await this.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
       }
