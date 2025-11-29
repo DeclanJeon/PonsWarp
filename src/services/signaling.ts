@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { SIGNALING_SERVER_URL } from '../constants';
+import { SIGNALING_SERVER_URL } from '../utils/constants';
 
 type SignalHandler = (data: any) => void;
 

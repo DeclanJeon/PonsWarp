@@ -3,7 +3,7 @@ import { Send, Download, ArrowRight } from 'lucide-react';
 import SpaceField from './components/SpaceField';
 import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
-import { AppMode } from './types';
+import { AppMode } from './types/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { signalingService } from './services/signaling';
 import { MagneticButton } from './components/ui/MagneticButton';
@@ -13,10 +13,39 @@ import { ToastContainer } from './components/ui/ToastContainer';
 import { StatusOverlay } from './components/ui/StatusOverlay';
 import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
+// import initWasm, { init_wasm, add_numbers } from './wasm-pkg/ponswarp_wasm';
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
   const { mode, setMode, setRoomId, status } = useTransferStore();
+
+  // 🚀 [Step 1] WASM 초기화 및 테스트
+  useEffect(() => {
+    const loadWasm = async () => {
+      try {
+        console.log('[App] 🔄 Starting WASM module loading...');
+        // 동적 import로 WASM 모듈 로드
+        const wasmModule = await import('./wasm-pkg/ponswarp_wasm.js');
+        console.log('[App] ✅ WASM module loaded successfully');
+        await wasmModule.default(); // WASM 모듈 초기화
+        console.log('[App] ✅ WASM module initialized');
+        wasmModule.init_wasm(); // Rust 내부 초기화 로그 출력
+        
+        // 연산 테스트
+        const result = wasmModule.add_numbers(10, 20);
+        console.log(`[App] 🦀 Rust WASM Test: 10 + 20 = ${result}`);
+        
+        if (result === 30) {
+            toast.success('System Core (WASM) Initialized');
+            console.log('[App] 🎉 WASM initialization complete!');
+        }
+      } catch (e) {
+        console.error('[App] ❌ Failed to load WASM module:', e);
+        toast.error('System Core Failure');
+      }
+    };
+    loadWasm();
+  }, []);
 
   // URL 파라미터 체크 (앱 로드 시)
   useEffect(() => {

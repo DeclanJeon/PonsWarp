@@ -1,4 +1,4 @@
-import { FileNode, TransferManifest } from '../types';
+import { FileNode, TransferManifest } from '../types/types';
 import { ScannedFile } from './fileScanner';
 
 // ScannedFile[] -> TransferManifest 변환 (새로운 방식)

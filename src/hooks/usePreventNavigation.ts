@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { AppMode } from '../types';
+import { AppMode } from '../types/types';
 
 export const usePreventNavigation = (mode: AppMode) => {
   useEffect(() => {

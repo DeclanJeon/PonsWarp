@@ -1,4 +1,4 @@
-import { FileNode } from '../types';
+import { FileNode } from '../types/types';
 
 export interface ScannedFile {
   file: File;

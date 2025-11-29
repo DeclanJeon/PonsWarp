@@ -9,7 +9,7 @@
 
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
-import { TransferManifest, AppMode } from '../types';
+import { TransferManifest, AppMode } from '../types/types';
 
 // 피어 상태 인터페이스
 export interface PeerInfo {

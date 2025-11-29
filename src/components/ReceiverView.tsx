@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw, Radio } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
-import { CONNECTION_TIMEOUT_MS } from '../constants';
+import { CONNECTION_TIMEOUT_MS } from '../utils/constants';
 import { DirectFileWriter } from '../services/directFileWriter';
 import { formatBytes } from '../utils/fileUtils';
 import { useTransferStore } from '../store/transferStore';

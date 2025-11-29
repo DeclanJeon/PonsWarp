@@ -17,7 +17,7 @@ import {
   LOW_WATER_MARK,
   HIGH_WATER_MARK,
   CHUNK_SIZE_MAX
-} from '../constants';
+} from '../utils/constants';
 
 // ============================================================================
 // 타입 정의

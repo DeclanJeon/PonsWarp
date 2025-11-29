@@ -1,7 +1,7 @@
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
-import { TransferManifest } from '../types';
+import { TransferManifest } from '../types/types';
 import { logInfo, logError } from '../utils/logger';
 import { 
   HEADER_SIZE, 
@@ -13,7 +13,7 @@ import {
   BATCH_SIZE_INITIAL,
   CHUNK_SIZE_MAX,
   MULTI_CHANNEL_COUNT
-} from '../constants';
+} from '../utils/constants';
 import { NetworkAdaptiveController } from './networkAdaptiveController';
 
 type EventHandler = (data: any) => void;

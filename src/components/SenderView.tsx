@@ -5,7 +5,7 @@ import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { scanFiles, processInputFiles } from '../utils/fileScanner';
 import { motion } from 'framer-motion';
-import { AppMode } from '../types';
+import { AppMode } from '../types/types';
 import { useTransferStore } from '../store/transferStore';
 
 interface SenderViewProps {

@@ -13,13 +13,13 @@
 import { SinglePeerConnection, PeerConfig, PeerState } from './singlePeerConnection';
 import { signalingService } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
-import { TransferManifest } from '../types';
+import { TransferManifest } from '../types/types';
 import { logInfo, logError } from '../utils/logger';
 import {
   HIGH_WATER_MARK,
   HEADER_SIZE,
   BATCH_SIZE_INITIAL
-} from '../constants';
+} from '../utils/constants';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;

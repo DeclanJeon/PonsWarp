@@ -5,7 +5,7 @@
  * SwarmManager에서 여러 인스턴스를 생성하여 1:N 연결 관리.
  */
 import SimplePeer from 'simple-peer/simplepeer.min.js';
-import { LOW_WATER_MARK } from '../constants';
+import { LOW_WATER_MARK } from '../utils/constants';
 import { logInfo, logError } from '../utils/logger';
 
 type EventHandler = (data: any) => void;

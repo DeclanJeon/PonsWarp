@@ -15,7 +15,7 @@ import {
   BATCH_SIZE_MIN,
   BATCH_SIZE_MAX,
   MAX_BUFFERED_AMOUNT
-} from '../constants';
+} from '../utils/constants';
 
 export interface CongestionState {
   mode: 'slow_start' | 'congestion_avoidance' | 'fast_recovery';

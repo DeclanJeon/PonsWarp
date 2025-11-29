@@ -3,7 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useTransferStore } from '../store/transferStore';
-import { AppMode } from '../types';
+import { AppMode } from '../types/types';
 
 // 설정 상수
 const STAR_COUNT = 2000;
