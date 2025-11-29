@@ -1,6 +1,6 @@
 /**
  * SinglePeerConnection (Native WebRTC Implementation)
- * * simple-peer 라이브러리를 제거하고 Native RTCPeerConnection으로 대체했습니다.
+ * Native RTCPeerConnection으로 구현된 WebRTC 연결 클래스입니다.
  * Multi-Channel(병렬 전송)을 지원하며, SwarmManager와의 호환성을 유지합니다.
  */
 import { LOW_WATER_MARK, MULTI_CHANNEL_COUNT } from '../utils/constants';
@@ -55,8 +55,16 @@ export class SinglePeerConnection {
       // 1. ICE Candidate 핸들링
       this.pc.onicecandidate = (event) => {
         if (event.candidate) {
-          // simple-peer 호환 시그널 포맷
-          this.emit('signal', { candidate: event.candidate });
+          // 시그널 포맷 (명시적 직렬화)
+          const signalData = {
+            candidate: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              usernameFragment: event.candidate.usernameFragment
+            }
+          };
+          this.emit('signal', signalData);
         }
       };
 
@@ -165,8 +173,22 @@ export class SinglePeerConnection {
     try {
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
-      // simple-peer 호환 포맷
-      this.emit('signal', { type: 'offer', sdp: offer.sdp });
+      
+      // 🚨 [FIX] setLocalDescription 이후 pc.localDescription 사용
+      const localDesc = this.pc.localDescription;
+      if (!localDesc || !localDesc.sdp) {
+        logError(`[NativePeer ${this.id}]`, 'Local description is null after setLocalDescription');
+        return;
+      }
+      
+      // 시그널 포맷 (명시적 직렬화)
+      const signalData = {
+        type: localDesc.type as 'offer',
+        sdp: localDesc.sdp
+      };
+      
+      logInfo(`[NativePeer ${this.id}]`, `Offer created, SDP length: ${signalData.sdp.length}`);
+      this.emit('signal', signalData);
     } catch (e) {
       this.emit('error', e);
     }
@@ -179,7 +201,23 @@ export class SinglePeerConnection {
     if (this.isDestroyed || !this.pc) return;
 
     try {
+      console.log(`[NativePeer ${this.id}] 🔍 Signal data received:`, {
+        dataType: typeof data,
+        dataKeys: data ? Object.keys(data) : [],
+        hasType: !!data?.type,
+        hasSdp: !!data?.sdp,
+        hasCandidate: !!data?.candidate,
+        type: data?.type,
+        sdpLength: data?.sdp?.length,
+        fullData: data
+      });
+
       if (data.type === 'offer' || data.type === 'answer') {
+        if (!data.sdp) {
+          logError(`[NativePeer ${this.id}]`, 'Missing SDP in signal data', data);
+          return;
+        }
+
         const desc = new RTCSessionDescription({
           type: data.type,
           sdp: data.sdp
@@ -189,7 +227,22 @@ export class SinglePeerConnection {
         if (data.type === 'offer') {
           const answer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(answer);
-          this.emit('signal', { type: 'answer', sdp: answer.sdp });
+          
+          // 🚨 [FIX] setLocalDescription 이후 pc.localDescription 사용
+          const localDesc = this.pc.localDescription;
+          if (!localDesc || !localDesc.sdp) {
+            logError(`[NativePeer ${this.id}]`, 'Local description is null after setLocalDescription');
+            return;
+          }
+          
+          // 시그널 포맷 (명시적 직렬화)
+          const signalData = {
+            type: localDesc.type as 'answer',
+            sdp: localDesc.sdp
+          };
+          
+          logInfo(`[NativePeer ${this.id}]`, `Answer created, SDP length: ${signalData.sdp.length}`);
+          this.emit('signal', signalData);
         }
       } else if (data.candidate) {
         await this.pc.addIceCandidate(new RTCIceCandidate(data.candidate));

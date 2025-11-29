@@ -1,71 +1,92 @@
-/**
- * ReorderingBuffer (Optimized with TTL)
- * 
- * 비순차적으로 도착하는 청크들을 순서대로 정렬하여 내보내는 버퍼.
- * StreamSaver와 같이 순차 쓰기만 지원하는 Writer를 위해 필수적입니다.
- * 
- * Multi-Channel 전송이나 네트워크 지연(Jitter) 상황에서 
- * 패킷이 순서 뒤바뀜(Out-of-Order) 상태로 도착할 경우 파일 손상을 방지합니다.
- * 
- * 🚀 [최적화] TTL(Time-To-Live) 및 자동 정리 기능 추가
- */
-
-import { logDebug, logWarn, logError } from '../utils/logger';
+import { PriorityQueue } from '../utils/priorityQueue';
+import { logWarn, logError, logDebug } from '../utils/logger';
 
 interface BufferedChunk {
   data: ArrayBuffer;
+  offset: number;
   timestamp: number;
+  size: number;
 }
 
+/**
+ * 🚀 High-Performance Reordering Buffer
+ * * Multi-Channel로 인해 뒤섞여 들어오는 패킷을 순서대로 정렬합니다.
+ * - Map: O(1) 접근으로 "다음 순서 패킷"을 즉시 찾음.
+ * - PriorityQueue: 버퍼 내부의 가장 오래된(오프셋 기준) 패킷을 추적하여 상태 모니터링.
+ */
 export class ReorderingBuffer {
-  private buffer: Map<number, BufferedChunk> = new Map();
+  // 빠른 조회를 위한 Map (Offset -> Chunk)
+  private chunkMap: Map<number, BufferedChunk> = new Map();
+  
+  // (선택적) 힙은 복잡한 갭 관리가 필요할 때 사용하지만, 
+  // 여기서는 Map의 성능이 압도적이므로 메타데이터 추적용으로만 활용하거나
+  // 순수 Map + Offset 추적으로 최적화합니다.
+  
   private nextExpectedOffset: number = 0;
   private totalProcessedBytes: number = 0;
-  
-  // 🚀 [최적화] 메모리 보호 설정
-  private readonly MAX_BUFFER_SIZE = 64 * 1024 * 1024; // 64MB 제한
-  private readonly CHUNK_TTL = 30000; // 30초가 지난 청크는 폐기 (유효기간)
   private currentBufferSize: number = 0;
+  
+  // 🚀 메모리 보호 설정
+  private readonly MAX_BUFFER_SIZE = 64 * 1024 * 1024; // 64MB (기존 유지)
+  private readonly CHUNK_TTL = 30000; // 30초
   private cleanupInterval: NodeJS.Timeout | null = null;
+
+  // 디버깅용: 갭 통계
+  private maxGapDetected = 0;
 
   constructor(startOffset: number = 0) {
     this.nextExpectedOffset = startOffset;
     
-    // 5초마다 청소부 실행
+    // 주기적 청소 (메모리 누수 방지)
     this.cleanupInterval = setInterval(() => this.cleanupStaleChunks(), 5000);
   }
 
   /**
-   * 청크를 추가하고, 순서가 맞는 청크들을 반환합니다.
-   * @param chunk 데이터 청크
-   * @param offset 청크의 시작 오프셋 (전체 파일 기준)
-   * @returns 순서대로 정렬된 청크 배열 (없으면 빈 배열)
+   * 청크를 버퍼에 추가하고, 순서가 맞는 연속된 청크들을 배출합니다.
    */
   public push(chunk: ArrayBuffer, offset: number): ArrayBuffer[] {
     const chunkLen = chunk.byteLength;
     const orderedChunks: ArrayBuffer[] = [];
 
-    // 1. 이미 처리된 데이터거나 중복인 경우 무시 (Fast Return)
+    // 1. 이미 처리된 패킷 (중복/지연 도착) -> 무시
     if (offset < this.nextExpectedOffset) {
+      // logWarn('[Reorder]', `Duplicate or late chunk ignored. Offset: ${offset}, Expected: ${this.nextExpectedOffset}`);
       return [];
     }
 
-    // 2. Fast Path: 정확히 기다리던 순서
+    // 2. 버퍼 용량 초과 체크 (Drop Strategy)
+    if (this.currentBufferSize + chunkLen > this.MAX_BUFFER_SIZE) {
+      logError('[Reorder]', `Buffer overflow! Dropping chunk ${offset}. Buffer: ${(this.currentBufferSize/1024/1024).toFixed(2)}MB`);
+      // 🚨 치명적 상황: 여기서 드랍하면 파일이 깨짐. 
+      // 실제 프로덕션에선 여기서 "재전송 요청"을 보내야 함.
+      // 현재는 보호를 위해 드랍.
+      return [];
+    }
+
+    // 3. Fast Path: 정확히 기다리던 순서면 바로 배출
     if (offset === this.nextExpectedOffset) {
       orderedChunks.push(chunk);
       this.advanceOffset(chunkLen);
-      this.drainBuffer(orderedChunks); // 연속된 다음 청크 확인
+      
+      // 4. 연속된 다음 청크들이 버퍼에 있는지 확인 (Drain)
+      this.drainMap(orderedChunks);
     } else {
-      // 3. Buffered Path: 순서가 아님 -> 버퍼링
-      // 🚨 [최적화] 버퍼 오버플로우 방지 (Drop Strategy)
-      if (this.currentBufferSize + chunkLen > this.MAX_BUFFER_SIZE) {
-        logError('[Reorder]', 'Buffer overflow! Dropping packet to prevent crash.');
-        return []; // 치명적이지만 앱 크래시보다는 나음 (재전송 로직 필요)
-      }
-
-      if (!this.buffer.has(offset)) {
-        this.buffer.set(offset, { data: chunk, timestamp: Date.now() });
+      // 5. 순서가 아니면 버퍼링 (Out-of-Order)
+      if (!this.chunkMap.has(offset)) {
+        this.chunkMap.set(offset, {
+          data: chunk,
+          offset,
+          timestamp: Date.now(),
+          size: chunkLen
+        });
         this.currentBufferSize += chunkLen;
+        
+        // 갭 크기 모니터링 (디버깅)
+        const gap = offset - this.nextExpectedOffset;
+        if (gap > this.maxGapDetected) {
+          this.maxGapDetected = gap;
+          // logDebug('[Reorder]', `New Max Gap: ${gap} bytes`);
+        }
       }
     }
 
@@ -73,19 +94,17 @@ export class ReorderingBuffer {
   }
 
   /**
-   * 버퍼에서 연속된 청크를 찾아 배출합니다.
+   * Map에서 연속된 청크를 찾아 배출
    */
-  private drainBuffer(outputList: ArrayBuffer[]): void {
-    while (this.buffer.has(this.nextExpectedOffset)) {
-      const { data } = this.buffer.get(this.nextExpectedOffset)!;
-      const len = data.byteLength;
-
-      outputList.push(data);
-
-      // 버퍼에서 제거 및 상태 업데이트
-      this.buffer.delete(this.nextExpectedOffset);
-      this.currentBufferSize -= len;
-      this.advanceOffset(len);
+  private drainMap(outputList: ArrayBuffer[]): void {
+    while (this.chunkMap.has(this.nextExpectedOffset)) {
+      const chunkObj = this.chunkMap.get(this.nextExpectedOffset)!;
+      
+      outputList.push(chunkObj.data);
+      
+      this.chunkMap.delete(this.nextExpectedOffset);
+      this.currentBufferSize -= chunkObj.size;
+      this.advanceOffset(chunkObj.size);
     }
   }
 
@@ -95,28 +114,28 @@ export class ReorderingBuffer {
   }
 
   /**
-   * 🚀 [최적화] 오래된 청크 청소 (GC 유도)
+   * 오래된 청크 청소
    */
   private cleanupStaleChunks() {
     const now = Date.now();
-    for (const [offset, chunk] of this.buffer.entries()) {
+    // Map은 삽입 순서대로 순회하므로, 타임스탬프 체크에 효율적이지 않을 수 있음.
+    // 하지만 전체 스캔은 5초마다 한 번이라 부담 적음.
+    for (const [offset, chunk] of this.chunkMap) {
       if (now - chunk.timestamp > this.CHUNK_TTL) {
-        logWarn('[Reorder]', `Dropping stale chunk at offset ${offset}`);
-        this.currentBufferSize -= chunk.data.byteLength;
-        this.buffer.delete(offset);
+        logWarn('[Reorder]', `Dropping stale chunk at offset ${offset} (TTL expired)`);
+        this.currentBufferSize -= chunk.size;
+        this.chunkMap.delete(offset);
       }
     }
   }
 
-  /**
-   * 디버그용 상태 조회
-   */
   public getStatus() {
     return {
-      bufferedCount: this.buffer.size,
+      bufferedCount: this.chunkMap.size,
       bufferedBytes: this.currentBufferSize,
       nextExpected: this.nextExpectedOffset,
-      totalProcessed: this.totalProcessedBytes
+      processedBytes: this.totalProcessedBytes,
+      maxGap: this.maxGapDetected
     };
   }
 
@@ -131,21 +150,19 @@ export class ReorderingBuffer {
    * 버퍼에 남은 청크 수 조회
    */
   public getPendingCount(): number {
-    return this.buffer.size;
+    return this.chunkMap.size;
   }
 
-  /**
-   * 메모리 정리
-   */
   public clear(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
-    this.buffer.clear();
+    this.chunkMap.clear();
     this.currentBufferSize = 0;
     this.nextExpectedOffset = 0;
     this.totalProcessedBytes = 0;
+    this.maxGapDetected = 0;
   }
 
   /**

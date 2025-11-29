@@ -332,11 +332,8 @@ const ReceiverView: React.FC = () => {
           // 🚀 [핵심] 추가 대기 없이 즉시 TRANSFER_READY 재전송
           try {
             console.log('[ReceiverView] Resending TRANSFER_READY to ensure sender receives it');
-            // webRTCService를 통해 직접 메시지 전송
-            const peer = transferService.getPeer();
-            if (peer && peer.connected) {
-              peer.send(JSON.stringify({ type: 'TRANSFER_READY' }));
-            }
+            // webRTCService의 sendControlMessage 메서드 사용
+            transferService.sendControlMessage(JSON.stringify({ type: 'TRANSFER_READY' }));
           } catch (e) {
             console.error('[ReceiverView] Failed to resend TRANSFER_READY:', e);
           }

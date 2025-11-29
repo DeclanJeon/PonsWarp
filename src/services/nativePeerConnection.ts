@@ -179,7 +179,7 @@ export class NativePeerConnection implements IPeerConnection {
     try {
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
-      this.emit('signal', { type: 'offer', sdp: offer });
+      this.emit('signal', { type: 'offer', offer }); // 🚨 [수정] offer 객체 전체를 전달
     } catch (e) {
       this.emit('error', e);
     }
@@ -189,14 +189,18 @@ export class NativePeerConnection implements IPeerConnection {
     if (!this.pc) return;
 
     try {
-      if (data.type === 'offer') {
-        await this.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        const answer = await this.pc.createAnswer();
-        await this.pc.setLocalDescription(answer);
-        this.emit('signal', { type: 'answer', sdp: answer });
-      } else if (data.type === 'answer') {
-        await this.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      } else if (data.type === 'candidate') {
+      // 🚨 [수정] RTCSessionDescription 객체를 직접 받는 경우 처리
+      if (data.type === 'offer' || data.type === 'answer') {
+        await this.pc.setRemoteDescription(new RTCSessionDescription(data));
+        
+        // offer를 받았으면 answer 생성
+        if (data.type === 'offer') {
+          const answer = await this.pc.createAnswer();
+          await this.pc.setLocalDescription(answer);
+          this.emit('signal', { type: 'answer', answer });
+        }
+      } else if (data.candidate) {
+        // ICE candidate 처리
         await this.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
       }
     } catch (e) {

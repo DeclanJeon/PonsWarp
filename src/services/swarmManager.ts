@@ -355,9 +355,9 @@ export class SwarmManager {
 
     // 🚀 [핵심] peerId를 target으로 지정하여 특정 피어에게만 전달
     if (data.type === 'offer') {
-      signalingService.sendOffer(this.roomId, data, peerId);
+      signalingService.sendOffer(this.roomId, data.offer, peerId); // 🚨 [수정] offer 객체만 전달
     } else if (data.type === 'answer') {
-      signalingService.sendAnswer(this.roomId, data, peerId);
+      signalingService.sendAnswer(this.roomId, data.answer, peerId); // 🚨 [수정] answer 객체만 전달
     } else if (data.candidate) {
       signalingService.sendCandidate(this.roomId, data, peerId);
     }

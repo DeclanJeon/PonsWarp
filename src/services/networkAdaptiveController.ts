@@ -1,261 +1,116 @@
 /**
- * 🚀 [Phase 3] Network Adaptive Controller - 안정화 버전
- * 
- * 네트워크 상태 기반 동적 조절
- * - 실시간 대역폭 추정 (버퍼 드레인 기반)
- * - WebRTC 통계 기반 RTT 측정
- * - 단순화된 AIMD 혼잡 제어
- * - 안정성 우선 설계
+ * 🚀 [Step 12] Simple Transfer Metrics
+ * 복잡한 혼잡 제어 로직을 제거하고, 순수하게 전송 속도와 통계만 측정합니다.
+ * 실제 흐름 제어는 WebRTC DataChannel의 Backpressure에 맡깁니다.
  */
-
-import { logInfo } from '../utils/logger';
-import {
-  CHUNK_SIZE_MIN,
-  CHUNK_SIZE_MAX,
-  BATCH_SIZE_MIN,
-  BATCH_SIZE_MAX,
-  MAX_BUFFERED_AMOUNT
-} from '../utils/constants';
-
-export interface CongestionState {
-  mode: 'slow_start' | 'congestion_avoidance' | 'fast_recovery';
-  cwnd: number;
-  ssthresh: number;
-  estimatedBw: number;
-  estimatedRtt: number;
-}
-
-export interface AdaptiveParams {
-  chunkSize: number;
-  batchSize: number;
-  sendRate: number;
-  bufferTarget: number;
-}
 
 export interface TransferMetrics {
   bytesSent: number;
-  bytesAcked: number;
-  chunksInFlight: number;
-  lastRtt: number;
-  minRtt: number;
-  maxRtt: number;
-  avgRtt: number;
-  lossRate: number;
-  throughput: number;
+  totalBytes: number;
+  speed: number;        // bytes per second
+  averageSpeed: number; // bytes per second
+  progress: number;     // 0-100
+  elapsedTime: number;  // seconds
+  remainingTime: number;// seconds
 }
 
-
 export class NetworkAdaptiveController {
-  private congestionState: CongestionState = {
-    mode: 'congestion_avoidance', // 🚨 [수정] slow_start 건너뛰기
-    cwnd: MAX_BUFFERED_AMOUNT,    // 🚀 [수정] 초기 윈도우를 최대(16MB)로 설정 -> 4MB/s 제한 해제
-    ssthresh: MAX_BUFFERED_AMOUNT,
-    estimatedBw: 0,
-    estimatedRtt: 5               // 🚀 [수정] LAN 환경 가정 (5ms)
-  };
-
-  private metrics: TransferMetrics = {
-    bytesSent: 0,
-    bytesAcked: 0,
-    chunksInFlight: 0,
-    lastRtt: 0,
-    minRtt: Infinity,
-    maxRtt: 0,
-    avgRtt: 0,
-    lossRate: 0,
-    throughput: 0
-  };
-
-  private adaptiveParams: AdaptiveParams = {
-    chunkSize: CHUNK_SIZE_MAX,
-    batchSize: 128,              // 🚀 [수정] 배치를 처음부터 최대(128개, 약 16MB)로 고정
-    sendRate: 0,
-    bufferTarget: MAX_BUFFERED_AMOUNT
-  };
-
   private startTime = 0;
   private lastUpdateTime = 0;
   private lastBytesSent = 0;
-  private rttSamples: number[] = [];
-  private throughputSamples: number[] = [];
-  private consecutiveIncreases = 0;
-  private lastBufferedAmount = 0;
-
-  private readonly RTT_SAMPLE_SIZE = 20;
-  private readonly THROUGHPUT_SAMPLE_SIZE = 10;
-  private readonly UPDATE_INTERVAL_MS = 100;
+  private totalBytes = 0;
+  private totalBytesSent = 0;
+  
+  // 이동 평균 속도 계산용 (부드러운 UI 표시)
+  private speedSamples: number[] = [];
+  private readonly SAMPLE_SIZE = 10;
 
   constructor() {
     this.reset();
   }
 
-  public start(): void {
-    this.startTime = performance.now();
+  public start(totalBytes: number): void {
+    this.startTime = Date.now();
     this.lastUpdateTime = this.startTime;
-    logInfo('[NetworkController]', 'Started (Aggressive Mode)');
+    this.totalBytes = totalBytes;
+    this.totalBytesSent = 0;
+    this.speedSamples = [];
   }
 
   public recordSend(bytes: number): void {
-    this.metrics.bytesSent += bytes;
-    this.metrics.chunksInFlight++;
+    this.totalBytesSent += bytes;
   }
 
-  public updateBufferState(bufferedAmount: number): void {
-    const now = performance.now();
-    const elapsed = now - this.lastUpdateTime;
-
-    if (this.lastBufferedAmount > bufferedAmount && elapsed > 0) {
-      const drained = this.lastBufferedAmount - bufferedAmount;
-      const drainRate = drained / (elapsed / 1000);
-      
-      if (drainRate > 0) {
-        this.congestionState.estimatedBw = this.congestionState.estimatedBw === 0
-          ? drainRate
-          : this.congestionState.estimatedBw * 0.8 + drainRate * 0.2;
-      }
-    }
-
-    if (elapsed >= this.UPDATE_INTERVAL_MS) {
-      const bytesDelta = this.metrics.bytesSent - this.lastBytesSent;
-      const throughput = bytesDelta / (elapsed / 1000);
-      
-      this.throughputSamples.push(throughput);
-      if (this.throughputSamples.length > this.THROUGHPUT_SAMPLE_SIZE) {
-        this.throughputSamples.shift();
-      }
-      
-      this.metrics.throughput = this.throughputSamples.reduce((a, b) => a + b, 0) 
-        / this.throughputSamples.length;
-      
-      this.lastBytesSent = this.metrics.bytesSent;
-      this.lastUpdateTime = now;
-    }
-
-    this.lastBufferedAmount = bufferedAmount;
-    this.updateCongestionControl(bufferedAmount);
-    this.updateAdaptiveParams();
-  }
-
-  public recordRtt(rttMs: number): void {
-    if (rttMs <= 0 || rttMs > 10000) return;
-
-    this.rttSamples.push(rttMs);
-    if (this.rttSamples.length > this.RTT_SAMPLE_SIZE) {
-      this.rttSamples.shift();
-    }
-
-    this.metrics.lastRtt = rttMs;
-    this.metrics.minRtt = Math.min(this.metrics.minRtt, rttMs);
-    this.metrics.maxRtt = Math.max(this.metrics.maxRtt, rttMs);
-    this.metrics.avgRtt = this.rttSamples.reduce((a, b) => a + b, 0) / this.rttSamples.length;
-    this.congestionState.estimatedRtt = this.metrics.avgRtt;
-  }
-
-  public updateFromWebRTCStats(stats: RTCStatsReport): void {
-    stats.forEach((report: any) => {
-      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-        if (report.currentRoundTripTime !== undefined) {
-          this.recordRtt(report.currentRoundTripTime * 1000);
-        }
-        if (report.availableOutgoingBitrate !== undefined) {
-          const bwBytesPerSec = report.availableOutgoingBitrate / 8;
-          this.congestionState.estimatedBw = this.congestionState.estimatedBw === 0
-            ? bwBytesPerSec
-            : this.congestionState.estimatedBw * 0.7 + bwBytesPerSec * 0.3;
-        }
-      }
-    });
-  }
-
-
-  // 🚀 [핵심] 혼잡 제어 로직을 "LAN 환경"에 맞게 관대하게 변경
-  private updateCongestionControl(bufferedAmount: number): void {
-    const { lossRate } = this.metrics;
-    const { estimatedRtt } = this.congestionState;
-
-    // 패킷 손실이 감지되어도 LAN에서는 무시하거나 아주 조금만 줄임
-    // 🚨 [수정] RTT가 200ms 이상 튀지 않는 한 윈도우를 줄이지 않음
-    if (estimatedRtt > 200) { // 아주 심각할 때만 90%로 축소 (기존 50% 축소 로직 제거)
-      this.congestionState.cwnd = Math.max(this.congestionState.cwnd * 0.9, 8 * 1024 * 1024);
-      return;
-    }
-
-    // 기본적으로 항상 최대 윈도우 유지 시도 (Speed Limit 해제)
-    this.congestionState.cwnd = MAX_BUFFERED_AMOUNT;
-  }
-
-  private updateAdaptiveParams(): void {
-    // 🚀 [수정] 배치 사이즈 동적 계산 무시하고 항상 최대값 유지
-    this.adaptiveParams.chunkSize = CHUNK_SIZE_MAX;
-    this.adaptiveParams.batchSize = 128; // 128개 * 128KB = 16MB 배치
-
-    this.adaptiveParams.sendRate = this.congestionState.estimatedBw > 0 
-      ? this.congestionState.estimatedBw 
-      : this.metrics.throughput;
-    this.adaptiveParams.bufferTarget = this.congestionState.cwnd * 0.8;
-  }
-
-  public canSend(currentBuffered: number): boolean {
-    return currentBuffered < this.congestionState.cwnd;
-  }
-
-  public getAdaptiveParams(): AdaptiveParams {
-    return { ...this.adaptiveParams };
-  }
-
+  /**
+   * 주기적으로 호출되어 현재 속도와 진행률을 계산합니다.
+   * (UI 업데이트 루프에서 호출 권장)
+   */
   public getMetrics(): TransferMetrics {
-    return { ...this.metrics };
+    const now = Date.now();
+    const elapsedSinceLast = (now - this.lastUpdateTime) / 1000; // seconds
+
+    let currentSpeed = 0;
+
+    // 200ms 이상 지났을 때만 속도 갱신 (너무 잦은 갱신 방지)
+    if (elapsedSinceLast >= 0.2) {
+      const bytesDiff = this.totalBytesSent - this.lastBytesSent;
+      currentSpeed = bytesDiff / elapsedSinceLast;
+
+      // 이동 평균 필터 적용
+      this.speedSamples.push(currentSpeed);
+      if (this.speedSamples.length > this.SAMPLE_SIZE) {
+        this.speedSamples.shift();
+      }
+
+      this.lastBytesSent = this.totalBytesSent;
+      this.lastUpdateTime = now;
+    } else {
+      // 갱신 주기 전에는 마지막 계산된 평균 속도 유지
+      currentSpeed = this.getAverageSpeed();
+    }
+
+    const avgSpeed = this.getAverageSpeed();
+    const totalElapsed = (now - this.startTime) / 1000;
+    const remainingBytes = Math.max(0, this.totalBytes - this.totalBytesSent);
+    const remainingTime = avgSpeed > 0 ? remainingBytes / avgSpeed : 0;
+
+    return {
+      bytesSent: this.totalBytesSent,
+      totalBytes: this.totalBytes,
+      speed: avgSpeed, // UI에는 부드러운 평균값 표시
+      averageSpeed: avgSpeed,
+      progress: this.totalBytes > 0 ? (this.totalBytesSent / this.totalBytes) * 100 : 0,
+      elapsedTime: totalElapsed,
+      remainingTime
+    };
   }
 
-  public getCongestionState(): CongestionState {
-    return { ...this.congestionState };
+  private getAverageSpeed(): number {
+    if (this.speedSamples.length === 0) return 0;
+    const sum = this.speedSamples.reduce((a, b) => a + b, 0);
+    return sum / this.speedSamples.length;
+  }
+
+  // 기존 코드와의 호환성을 위한 Stub 메서드들 (빈 껍데기)
+  public updateBufferState(bufferedAmount: number): void {}
+  public updateFromWebRTCStats(stats: any): void {}
+  
+  // 항상 고정된 최대 배치 설정 반환
+  public getAdaptiveParams() {
+    return {
+      chunkSize: 64 * 1024, // 64KB (고정)
+      batchSize: 128,       // 128개 (약 8MB) - 항상 최대 성능
+      bufferTarget: 16 * 1024 * 1024 // 16MB
+    };
   }
 
   public reset(): void {
-    this.congestionState = {
-      mode: 'congestion_avoidance',
-      cwnd: MAX_BUFFERED_AMOUNT,
-      ssthresh: MAX_BUFFERED_AMOUNT,
-      estimatedBw: 0,
-      estimatedRtt: 5
-    };
-
-    this.metrics = {
-      bytesSent: 0,
-      bytesAcked: 0,
-      chunksInFlight: 0,
-      lastRtt: 0,
-      minRtt: Infinity,
-      maxRtt: 0,
-      avgRtt: 0,
-      lossRate: 0,
-      throughput: 0
-    };
-
-    this.adaptiveParams = {
-      chunkSize: CHUNK_SIZE_MAX,
-      batchSize: 128,
-      sendRate: 0,
-      bufferTarget: MAX_BUFFERED_AMOUNT
-    };
-
     this.startTime = 0;
     this.lastUpdateTime = 0;
     this.lastBytesSent = 0;
-    this.rttSamples = [];
-    this.throughputSamples = [];
-    this.consecutiveIncreases = 0;
-    this.lastBufferedAmount = 0;
-  }
-
-  public getDebugInfo(): object {
-    return {
-      congestion: this.congestionState,
-      metrics: this.metrics,
-      params: this.adaptiveParams,
-      rttSamples: this.rttSamples.slice(-5),
-      throughputMBps: (this.metrics.throughput / (1024 * 1024)).toFixed(2)
-    };
+    this.totalBytesSent = 0;
+    this.totalBytes = 0;
+    this.speedSamples = [];
   }
 }
 
