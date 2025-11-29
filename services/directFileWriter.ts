@@ -42,6 +42,17 @@ export class DirectFileWriter {
   // 🚀 [추가] 재정렬 버퍼 (StreamSaver 모드용)
   private reorderingBuffer: ReorderingBuffer | null = null;
 
+  // 🚀 [추가] 쓰기 작업을 순차적으로 처리하기 위한 Promise 체인
+  private writeQueue: Promise<void> = Promise.resolve();
+
+  // 🚀 [속도 개선] 배치 버퍼 설정 (메모리에 모았다가 한 번에 쓰기)
+  private writeBuffer: Uint8Array[] = [];
+  private currentBatchSize = 0;
+  private readonly BATCH_THRESHOLD = 2 * 1024 * 1024; // 2MB 단위로 디스크 기록 (안정성 우선)
+  
+  // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
+  private pendingBytesInBuffer = 0;
+
   private onProgressCallback: ((data: any) => void) | null = null;
   private onCompleteCallback: ((actualSize: number) => void) | null = null;
   private onErrorCallback: ((error: string) => void) | null = null;
@@ -55,6 +66,9 @@ export class DirectFileWriter {
     this.startTime = Date.now();
     this.totalBytesWritten = 0;
     this.isFinalized = false;
+    this.writeBuffer = [];
+    this.currentBatchSize = 0;
+    this.pendingBytesInBuffer = 0;
 
     const fileCount = manifest.totalFiles || manifest.files.length;
     console.log('[DirectFileWriter] Initializing for', fileCount, 'files');
@@ -110,26 +124,52 @@ export class DirectFileWriter {
       
       this.writer = await handle.createWritable();
       this.writerMode = 'file-system-access';
-      // FileSystem 모드에서는 OS 레벨에서 Random Access Write가 가능하므로
-      // 애플리케이션 레벨의 ReorderingBuffer가 필요 없음
-      this.reorderingBuffer = null;
-      logInfo('[DirectFileWriter]', `File System Access ready: ${fileName} (Random Access Enabled)`);
+      // 🚀 [중요] 두 모드 모두 ReorderingBuffer를 사용하여 순차 데이터 보장
+      // 순차 데이터여야만 Batch Merge가 가능함
+      this.reorderingBuffer = new ReorderingBuffer(0);
+      logInfo('[DirectFileWriter]', `File System Access ready: ${fileName} (Batch Mode ON)`);
     } else {
       // StreamSaver (Firefox 등)
-      const fileStream = streamSaver.createWriteStream(fileName, { size: fileSize });
+      // 🚨 [수정] ZIP 파일(여러 파일 전송)인 경우 fileSize가 정확하지 않음.
+      // size를 undefined로 보내면 StreamSaver는 Content-Length를 설정하지 않아 브라우저가 크기 불일치 오류를 뱉지 않음.
+      const isZip = fileName.endsWith('.zip');
+      const streamConfig = isZip ? {} : { size: fileSize };
+      const fileStream = streamSaver.createWriteStream(fileName, streamConfig);
       this.writer = fileStream.getWriter();
       this.writerMode = 'streamsaver';
-      // StreamSaver는 순서가 틀리면 파일이 깨지므로 버퍼 필수
+      // 🚀 [중요] 두 모드 모두 ReorderingBuffer를 사용하여 순차 데이터 보장
       this.reorderingBuffer = new ReorderingBuffer(0);
-      logInfo('[DirectFileWriter]', `StreamSaver ready: ${fileName} (Sequential Write Only - Buffer Active)`);
+      logInfo('[DirectFileWriter]', `StreamSaver ready: ${fileName} (Batch Mode ON)`);
     }
   }
 
   /**
-   * 청크 데이터 쓰기
-   * 🚀 [개선] ReorderingBuffer를 통한 순서 보장
+   * 청크 데이터 쓰기 (수정됨)
+   * 🚀 비동기 큐를 사용하여 쓰기 작업의 순차적 실행 보장
    */
   public async writeChunk(packet: ArrayBuffer): Promise<void> {
+    // 큐에 새로운 작업을 추가 (이전 작업이 끝나야 실행됨)
+    this.writeQueue = this.writeQueue.then(async () => {
+      try {
+        await this.processChunkInternal(packet);
+      } catch (error: any) {
+        logError('[DirectFileWriter]', 'Write queue error:', error);
+        this.onErrorCallback?.(`Write failed: ${error.message}`);
+        throw error; // 에러 전파하여 체인 중단
+      }
+    }).catch(err => {
+      // 이미 처리된 에러는 무시하되, 체인은 유지
+      console.warn('[DirectFileWriter] Recovering from write error');
+    });
+
+    // 호출자는 큐의 완료를 기다림
+    return this.writeQueue;
+  }
+
+  /**
+   * 🚀 [신규] 실제 쓰기 로직을 분리 (내부용)
+   */
+  private async processChunkInternal(packet: ArrayBuffer): Promise<void> {
     if (this.isFinalized) return;
 
     const HEADER_SIZE = 18;
@@ -140,14 +180,21 @@ export class DirectFileWriter {
 
     // EOS 체크
     if (fileId === 0xFFFF) {
-      logInfo('[DirectFileWriter]', 'EOS received, finalizing...');
+      logInfo('[DirectFileWriter]', 'EOS received signal.');
+      await this.flushBuffer(); // 남은 데이터 모두 쓰기
       await this.finalize();
       return;
     }
 
     const size = view.getUint32(14, true);
-    // Offset 추출
     const offset = Number(view.getBigUint64(6, true));
+
+    // 🚨 [핵심 수정] 용량 초과 방지 - 버퍼 포함 총 바이트가 totalSize를 초과하면 무시
+    const totalReceived = this.totalBytesWritten + this.pendingBytesInBuffer;
+    if (this.totalSize > 0 && totalReceived >= this.totalSize) {
+      logWarn('[DirectFileWriter]', `Ignoring chunk: already reached totalSize (${this.totalSize})`);
+      return;
+    }
 
     // 패킷 무결성 검증
     if (packet.byteLength !== HEADER_SIZE + size) {
@@ -155,52 +202,66 @@ export class DirectFileWriter {
       return;
     }
 
-    if (!this.writer) {
+    if (!this.writer || !this.reorderingBuffer) {
       logError('[DirectFileWriter]', 'No writer available');
       return;
     }
 
-    try {
-      const data = new Uint8Array(packet, HEADER_SIZE, size);
+    const data = new Uint8Array(packet, HEADER_SIZE, size);
 
-      if (this.writerMode === 'file-system-access') {
-        // [Case A] File System Access: Random Access 가능
-        // 버퍼 없이 즉시 해당 위치에 씀 (가장 빠름)
-        await (this.writer as FileSystemWritableFileStream).write({
-          type: 'write',
-          position: offset,
-          data: data,
-        });
-        
-        // 주의: totalBytesWritten 계산이 비순차적일 수 있으나,
-        // 진행률 표시를 위해 대략적으로 누적
-        this.totalBytesWritten += size;
-        this.reportProgress();
-      } else {
-        // [Case B] StreamSaver: 순차 쓰기 필수
-        if (!this.reorderingBuffer) {
-          throw new Error('Buffer not initialized for StreamSaver');
-        }
+    // 1. 순서 정렬 (Reordering) - 모든 모드에서 사용
+    const chunksToWrite = this.reorderingBuffer.push(
+      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), 
+      offset
+    );
 
-        // 버퍼에 넣고 순서가 맞는 청크들만 돌려받음
-        const chunksToWrite = this.reorderingBuffer.push(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), offset);
-
-        // 반환된 순서대로 쓰기 수행
-        for (const chunk of chunksToWrite) {
-          await (this.writer as WritableStreamDefaultWriter).write(new Uint8Array(chunk));
-          this.totalBytesWritten += chunk.byteLength;
-        }
-
-        // 진행률 업데이트 (실제 기록된 바이트 기준)
-        if (chunksToWrite.length > 0) {
-          this.reportProgress();
-        }
-      }
-
-    } catch (error: any) {
-      logError('[DirectFileWriter]', 'Write error:', error);
-      this.onErrorCallback?.(`Write failed: ${error.message}`);
+    // 2. 메모리 버퍼에 적재 (Batching)
+    for (const chunk of chunksToWrite) {
+      this.writeBuffer.push(new Uint8Array(chunk));
+      this.currentBatchSize += chunk.byteLength;
+      this.pendingBytesInBuffer += chunk.byteLength; // 버퍼에 적재된 바이트 추적
     }
+
+    // 3. 임계값(8MB) 넘으면 디스크에 쓰기 (Flushing)
+    if (this.currentBatchSize >= this.BATCH_THRESHOLD) {
+      await this.flushBuffer();
+    }
+  }
+
+  /**
+   * 🚀 [핵심] 메모리에 모아둔 데이터를 한 번에 디스크로 전송
+   */
+  private async flushBuffer(): Promise<void> {
+    if (this.writeBuffer.length === 0) return;
+
+    // 1. 큰 버퍼 하나로 병합
+    const mergedBuffer = new Uint8Array(this.currentBatchSize);
+    let offset = 0;
+    for (const chunk of this.writeBuffer) {
+      mergedBuffer.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    // 2. 디스크 쓰기
+    if (this.writerMode === 'file-system-access') {
+      const fsWriter = this.writer as FileSystemWritableFileStream;
+      await fsWriter.write({
+        type: 'write',
+        position: this.totalBytesWritten, // 순차적으로 쓰므로 누적 오프셋 사용
+        data: mergedBuffer,
+      });
+    } else {
+      const streamWriter = this.writer as WritableStreamDefaultWriter;
+      await streamWriter.ready;
+      await streamWriter.write(mergedBuffer);
+    }
+
+    // 3. 상태 업데이트 및 초기화
+    this.totalBytesWritten += this.currentBatchSize;
+    this.pendingBytesInBuffer -= this.currentBatchSize; // 버퍼에서 디스크로 이동했으므로 감소
+    this.writeBuffer = [];
+    this.currentBatchSize = 0;
+    this.reportProgress();
   }
 
   /**
@@ -229,7 +290,7 @@ export class DirectFileWriter {
 
   /**
    * 전송 완료
-   * 🚀 [개선] ReorderingBuffer 정리 및 데이터 손실 경고
+   * 🚀 [개선] ReorderingBuffer 정리 및 파일 크기 Truncate
    */
   private async finalize(): Promise<void> {
     console.log('[DirectFileWriter] 🏁 finalize() called, isFinalized:', this.isFinalized);
@@ -238,6 +299,9 @@ export class DirectFileWriter {
       return;
     }
     this.isFinalized = true;
+
+    // 버퍼에 남은 잔여 데이터 강제 플러시
+    await this.flushBuffer();
 
     // 버퍼 정리 및 데이터 손실 체크
     if (this.reorderingBuffer) {
@@ -253,43 +317,28 @@ export class DirectFileWriter {
       try {
         if (this.writerMode === 'file-system-access') {
           const fsWriter = this.writer as FileSystemWritableFileStream;
+          // 🚨 [핵심 수정] 파일 크기 Truncate
+          // ZIP 사이즈 불일치 문제 해결을 위한 Truncate
           // @ts-ignore - locked 속성 체크
           if (!fsWriter.locked) {
+            await fsWriter.truncate(this.totalBytesWritten);
             await fsWriter.close();
           }
         } else {
           const streamWriter = this.writer as WritableStreamDefaultWriter;
-          // 스트림이 닫히지 않은 경우에만 닫기
-          try {
-            await streamWriter.close();
-          } catch (closeErr: any) {
-            // 이미 닫힌 경우 무시
-            if (!closeErr.message?.includes('close') && !closeErr.message?.includes('closed')) {
-              throw closeErr;
-            }
-          }
+          await streamWriter.close();
         }
-        logInfo('[DirectFileWriter]', `✅ File completed: ${this.totalBytesWritten} bytes`);
+        logInfo('[DirectFileWriter]', `✅ File saved: ${this.totalBytesWritten} bytes`);
       } catch (e: any) {
         // 이미 닫힌 스트림 에러는 무시
         if (!e.message?.includes('close') && !e.message?.includes('closed')) {
           logError('[DirectFileWriter]', 'Error closing file:', e);
-        } else {
-          logInfo('[DirectFileWriter]', `✅ File completed (stream already closed): ${this.totalBytesWritten} bytes`);
         }
       }
     }
 
     this.writer = null;
-    
-    console.log('[DirectFileWriter] 📞 Calling onCompleteCallback, exists:', !!this.onCompleteCallback);
-    if (this.onCompleteCallback) {
-      console.log('[DirectFileWriter] ✅ Executing onCompleteCallback with bytes:', this.totalBytesWritten);
-      this.onCompleteCallback(this.totalBytesWritten);
-      console.log('[DirectFileWriter] ✅ onCompleteCallback executed');
-    } else {
-      console.warn('[DirectFileWriter] ⚠️ No onCompleteCallback registered!');
-    }
+    this.onCompleteCallback?.(this.totalBytesWritten);
   }
 
   /**
@@ -313,6 +362,7 @@ export class DirectFileWriter {
    */
   public async cleanup(): Promise<void> {
     this.isFinalized = true;
+    this.writeBuffer = []; // 메모리 해제
 
     // 버퍼 정리
     if (this.reorderingBuffer) {
@@ -322,11 +372,7 @@ export class DirectFileWriter {
 
     if (this.writer) {
       try {
-        if (this.writerMode === 'file-system-access') {
-          await (this.writer as FileSystemWritableFileStream).abort();
-        } else {
-          await (this.writer as WritableStreamDefaultWriter).abort();
-        }
+        await this.writer.abort();
       } catch (e) {
         // Ignore
       }

@@ -764,7 +764,13 @@ class EnhancedWebRTCService {
         const chunk = data instanceof Uint8Array
             ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
             : data;
-        this.writer.writeChunk(chunk);
+        
+        // 🚀 [수정] Promise가 거부(Reject)되었는지 확인 (비동기 에러 캐치)
+        this.writer.writeChunk(chunk).catch(err => {
+          console.error('[WebRTC] Write failed:', err);
+          this.emit('error', 'Disk write failed: ' + err.message);
+          this.cleanup(); // 치명적 에러 발생 시 즉시 중단
+        });
     }
   }
 

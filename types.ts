@@ -25,6 +25,7 @@ export interface TransferManifest {
   rootName: string; // 최상위 폴더명 또는 대표 파일명
   files: FileNode[];
   isFolder: boolean;
+  isSizeEstimated?: boolean; // 🚨 [추가] ZIP 모드일 경우 정확한 크기를 알 수 없음
 }
 
 export interface FileMeta {

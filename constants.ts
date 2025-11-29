@@ -6,23 +6,23 @@ export const CHUNK_SIZE_MIN = 16 * 1024;      // 16KB
 export const CHUNK_SIZE_INITIAL = 64 * 1024;  // 64KB
 export const CHUNK_SIZE_MAX = 128 * 1024;     // 128KB (브라우저 한계)
 
-// 🚀 [성능 최적화] WebRTC 버퍼 설정 - 파이프라인 용량 증대
-// 16MB는 브라우저가 안정적으로 처리 가능하며, 100MB/s 이상 속도 지원
-export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024;  // 16MB (안전선)
-export const LOW_WATER_MARK = 4 * 1024 * 1024;        // 4MB (리필 시작)
-export const HIGH_WATER_MARK = 12 * 1024 * 1024;      // 12MB (리필 중단)
+// 🚀 [성능 최적화] WebRTC 버퍼 설정 - 연결 안정성 최우선
+// RTCDataChannel send queue full 에러 방지를 위해 보수적으로 설정
+export const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;   // 8MB (안전 마진 확보)
+export const LOW_WATER_MARK = 1 * 1024 * 1024;        // 1MB (리필 시작)
+export const HIGH_WATER_MARK = 4 * 1024 * 1024;       // 4MB (리필 중단 - 여유 있게)
 
 export const HEADER_SIZE = 18; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4)
 export const CONNECTION_TIMEOUT_MS = 15000;
 
-// 🚀 [성능 최적화] 적응형 배치 설정 - 파이프라인 최적화
-export const BATCH_SIZE_MIN = 16;             // 최소 배치 (8 -> 16)
-export const BATCH_SIZE_MAX = 64;             // 최대 배치 (128 -> 64, 메모리 스파이크 방지)
-export const BATCH_SIZE_INITIAL = 32;         // 초기 배치
-export const BATCH_REQUEST_SIZE = 32;         // 레거시 호환
+// 🚀 [성능 최적화] 적응형 배치 설정 - 원래 수준 복원
+export const BATCH_SIZE_MIN = 16;             // 최소 배치
+export const BATCH_SIZE_MAX = 32;             // 최대 배치
+export const BATCH_SIZE_INITIAL = 16;         // 초기 배치
+export const BATCH_REQUEST_SIZE = 16;         // 레거시 호환
 
-// 🚀 프리페치 버퍼 설정 - [Phase 3] 더 큰 버퍼
-export const PREFETCH_BUFFER_SIZE = 16 * 1024 * 1024;  // 16MB 프리페치 버퍼 (증가)
+// 🚀 프리페치 버퍼 설정 - 원래 수준 복원
+export const PREFETCH_BUFFER_SIZE = 16 * 1024 * 1024;  // 16MB 프리페치 버퍼
 export const PREFETCH_LOW_THRESHOLD = 4 * 1024 * 1024; // 4MB 이하면 프리페치 시작
 
 // 🚀 [Phase 3] 멀티 채널 설정

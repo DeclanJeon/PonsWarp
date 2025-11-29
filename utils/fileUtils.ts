@@ -48,7 +48,10 @@ export const createManifest = (scannedFiles: ScannedFile[]): { manifest: Transfe
     totalFiles: scannedFiles.length,
     rootName,
     files: fileNodes,
-    isFolder
+    isFolder,
+    // 🚨 [추가] ZIP 모드일 경우 정확한 크기를 알 수 없음
+    // Receiver는 이 플래그를 보고 StreamSaver 설정을 조정할 수 있음
+    isSizeEstimated: isFolder || scannedFiles.length > 1
   };
 
   return { manifest, files: rawFiles };

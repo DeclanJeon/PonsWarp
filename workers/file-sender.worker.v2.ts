@@ -11,12 +11,12 @@ import { Zip, ZipPassThrough } from 'fflate';
 // ============================================================================
 
 const CHUNK_SIZE_MIN = 16 * 1024;
-const CHUNK_SIZE_MAX = 128 * 1024;
+const CHUNK_SIZE_MAX = 64 * 1024;
 let CHUNK_SIZE = CHUNK_SIZE_MAX;
 
-const BUFFER_SIZE = 8 * 1024 * 1024;
-const POOL_SIZE = 128;
-const PREFETCH_BATCH = 16;
+const BUFFER_SIZE = 8 * 1024 * 1024; // 8MB sender 버퍼
+const POOL_SIZE = 128; // 풀 사이즈
+const PREFETCH_BATCH = 16; // 한 번에 프리페치하는 양
 
 // 🚀 [추가] ZIP 백프레셔 임계값
 const ZIP_QUEUE_HIGH_WATER_MARK = 32 * 1024 * 1024; // 32MB 초과 시 읽기 중단
