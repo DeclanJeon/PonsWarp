@@ -27,7 +27,6 @@
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "simple-peer": "^9.11.1",
     "socket.io-client": "^4.8.1",
     "streamsaver": "^2.0.6",
     "three": "^0.181.2",

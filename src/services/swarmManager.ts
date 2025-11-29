@@ -10,7 +10,9 @@
  * - 전송 중 새 피어 ready: 대기열에 추가, 현재 전송 완료 후 자동 시작
  * - 모든 피어 완료: Transfer Success UI 표시
  */
-import { SinglePeerConnection, PeerConfig, PeerState } from './singlePeerConnection';
+import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
+import { NativePeerConnection, NativePeerConfig } from './nativePeerConnection';
+import { IPeerConnection, IPeerState } from './peerConnectionTypes';
 import { signalingService } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
@@ -45,13 +47,13 @@ export interface SwarmProgress {
   totalBytes: number;
   overallProgress: number;
   speed: number;
-  peers: PeerState[];
+  peers: IPeerState[];
 }
 
 type EventHandler = (data: any) => void;
 
 export class SwarmManager {
-  private peers: Map<string, SinglePeerConnection> = new Map();
+  private peers: Map<string, IPeerConnection> = new Map();
   private roomId: string | null = null;
   private worker: Worker | null = null;
   private isTransferring: boolean = false;
@@ -82,6 +84,9 @@ export class SwarmManager {
   
   // 연결 타임아웃 관리
   private connectionTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  
+  // 🚨 [FIX] 버퍼 모니터링 타이머 (drain 이벤트가 안 오는 경우 대비)
+  private bufferMonitorInterval: ReturnType<typeof setInterval> | null = null;
   
   // ICE 서버 설정
   private iceServers: RTCIceServer[] = [
@@ -122,7 +127,7 @@ export class SwarmManager {
   /**
    * 새 피어 추가 (슬롯 제한 적용)
    */
-  public addPeer(peerId: string, initiator: boolean): SinglePeerConnection | null {
+  public addPeer(peerId: string, initiator: boolean): IPeerConnection | null {
     // 핵심 안전 검사: 슬롯 제한
     if (this.peers.size >= MAX_DIRECT_PEERS) {
       logError('[SwarmManager]', `Slot limit reached (${MAX_DIRECT_PEERS}). Rejecting peer: ${peerId}`);
@@ -140,7 +145,14 @@ export class SwarmManager {
       iceServers: this.iceServers
     };
 
-    const peer = new SinglePeerConnection(peerId, initiator, config);
+    // 🚀 [Phase 2] NativePeerConnection 사용 (멀티 채널 지원)
+    const nativeConfig: NativePeerConfig = {
+      iceServers: this.iceServers,
+      isInitiator: initiator,
+      id: peerId
+    };
+    
+    const peer = new NativePeerConnection(nativeConfig);
     this.setupPeerEventHandlers(peer);
     this.peers.set(peerId, peer);
     this.setupConnectionTimeout(peerId);
@@ -173,7 +185,7 @@ export class SwarmManager {
   /**
    * 피어 조회
    */
-  public getPeer(peerId: string): SinglePeerConnection | undefined {
+  public getPeer(peerId: string): IPeerConnection | undefined {
     return this.peers.get(peerId);
   }
 
@@ -187,7 +199,7 @@ export class SwarmManager {
   /**
    * 연결된 피어 목록 조회
    */
-  public getConnectedPeers(): SinglePeerConnection[] {
+  public getConnectedPeers(): IPeerConnection[] {
     return Array.from(this.peers.values()).filter(p => p.connected);
   }
 
@@ -198,20 +210,25 @@ export class SwarmManager {
     return Array.from(this.peers.values()).filter(p => p.ready).length;
   }
 
-  private setupPeerEventHandlers(peer: SinglePeerConnection): void {
+  private setupPeerEventHandlers(peer: IPeerConnection): void {
     peer.on('signal', (data) => {
       this.forwardSignal(peer.id, data);
     });
 
     peer.on('connected', (peerId) => {
+      console.log('[SwarmManager] 🔗 [DEBUG] Peer connected event received:', peerId);
       this.clearConnectionTimeout(peerId);
       logInfo('[SwarmManager]', `Peer connected: ${peerId}`);
       this.emit('peer-connected', peerId);
       
-      // Sender인 경우 Manifest 전송
-      if (this.pendingManifest) {
-        this.sendManifestToPeer(peer);
-      }
+      // 🚀 [핵심 수정] 연결 직후 약간의 딜레이를 두고 Manifest 전송
+      // 모든 채널이 완전히 열릴 때까지 대기 (100ms)
+      setTimeout(() => {
+        if (this.pendingManifest && peer.connected) {
+          console.log('[SwarmManager] 📤 [DEBUG] Sending manifest to newly connected peer (after delay):', peerId);
+          this.sendManifestToPeer(peer);
+        }
+      }, 100);
       
       // Keep-alive 시작
       this.startKeepAlive();
@@ -269,6 +286,12 @@ export class SwarmManager {
     if (peerId === signalingService.getSocketId()) return;
 
     logInfo('[SwarmManager]', `Peer joined room: ${peerId}`);
+    
+    // 이미 존재하는 피어인지 확인
+    if (this.peers.has(peerId)) {
+      logInfo('[SwarmManager]', `Peer ${peerId} already exists, skipping`);
+      return;
+    }
     
     // Sender로서 새 피어에게 연결 시작 (initiator = true)
     this.addPeer(peerId, true);
@@ -385,7 +408,7 @@ export class SwarmManager {
     }
   }
 
-  private sendManifestToPeer(peer: SinglePeerConnection): void {
+  private sendManifestToPeer(peer: IPeerConnection): void {
     if (!this.pendingManifest) return;
     
     try {
@@ -422,28 +445,45 @@ export class SwarmManager {
   }
 
   private handleDrain(peerId: string): void {
+    console.log('[SwarmManager] 💧 [DEBUG] Drain event from peer:', peerId, {
+      isTransferring: this.isTransferring,
+      canRequestMore: this.canRequestMoreChunks(),
+      highestBufferedAmount: this.getHighestBufferedAmount(),
+      isProcessingBatch: this.isProcessingBatch,
+      workerInitialized: this.workerInitialized
+    });
+    
     // 글로벌 backpressure 재평가
     if (this.isTransferring && this.canRequestMoreChunks()) {
+      console.log('[SwarmManager] ✅ [DEBUG] Drain: Conditions met, requesting more chunks');
       this.requestMoreChunks();
+    } else {
+      console.log('[SwarmManager] ⏸️ [DEBUG] Drain: Cannot request more chunks yet');
     }
   }
 
   // ======================= 데이터 처리 =======================
 
   private handlePeerData(peerId: string, data: ArrayBuffer | string): void {
+    console.log('[SwarmManager] 📨 [DEBUG] Data received from peer:', peerId, 'Type:', typeof data, 'Size:', data instanceof ArrayBuffer ? data.byteLength : data.length);
+    
     // JSON 메시지 처리
     if (typeof data === 'string' || (data instanceof ArrayBuffer && new Uint8Array(data)[0] === 123)) {
       try {
         const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
+        console.log('[SwarmManager] 📋 [DEBUG] Attempting to parse JSON:', str.substring(0, 100));
         const msg = JSON.parse(str);
+        console.log('[SwarmManager] ✅ [DEBUG] JSON parsed successfully:', msg.type);
         this.handleControlMessage(peerId, msg);
       } catch (e) {
+        console.warn('[SwarmManager] ⚠️ [DEBUG] JSON parsing failed:', e);
         // JSON 파싱 실패 - 무시
       }
       return;
     }
 
     // 바이너리 데이터는 Receiver 측에서 처리 (SwarmManager는 Sender 전용)
+    console.log('[SwarmManager] 📦 [DEBUG] Binary data received (not JSON), emitting data event');
     this.emit('data', { peerId, data });
   }
 
@@ -468,72 +508,40 @@ export class SwarmManager {
             return;
           }
           
-          // 🚀 [대기열] 이미 전송 중이면 대기열에 추가
-          if (this.isTransferring) {
-            if (!this.transferQueue.includes(peerId) && !this.currentTransferPeers.has(peerId)) {
-              this.transferQueue.push(peerId);
-              logInfo('[SwarmManager]', `Peer added to queue: ${peerId} (queue size: ${this.transferQueue.length})`);
-              
-              // 대기 중 알림
-              try {
-                peer.send(JSON.stringify({ 
-                  type: 'QUEUED',
-                  message: 'Transfer in progress. You are in queue and will receive the file shortly.',
-                  position: this.transferQueue.length
-                }));
-              } catch (e) { /* ignore */ }
-              
-              this.emit('peer-queued', { peerId, position: this.transferQueue.length });
-            }
-            return;
+          console.log('[SwarmManager] 🎯 [DEBUG] Peer TRANSFER_READY received:', peerId);
+          console.log('[SwarmManager] 📊 [DEBUG] Current state:', {
+            isTransferring: this.isTransferring,
+            connectedPeers: this.getConnectedPeers().length,
+            readyPeers: this.getConnectedPeers().filter(p => p.ready).length,
+            completedPeers: this.completedPeersInSession.size
+          });
+          
+          // 🚀 [핵심 수정] TRANSFER_READY를 받으면 즉시 Manifest 전송
+          // 이제 Receiver가 완전히 준비되었다는 신호이므로 안전하게 전송 가능
+          if (this.pendingManifest) {
+            console.log('[SwarmManager] 📤 [DEBUG] Sending manifest to ready peer:', peerId);
+            this.sendManifestToPeer(peer);
           }
           
           logInfo('[SwarmManager]', `Peer ready: ${peerId}`);
           this.emit('peer-ready', peerId);
           
-          // 🚀 [핵심] 이전 전송이 완료된 상태에서 새 피어가 ready되면
-          // 1:1 상황인지 확인 후 즉시 또는 대기 후 전송
-          if (this.completedPeersInSession.size > 0) {
-            // 이전 전송 완료 후 새 피어가 ready됨
-            const pendingPeers = this.getConnectedPeers().filter(
-              p => !this.completedPeersInSession.has(p.id)
-            );
-            const readyPeers = pendingPeers.filter(p => p.ready);
-            
-            // 대기 중인 피어가 이 피어 하나뿐이면 즉시 시작 (1:1 상황)
-            if (pendingPeers.length === 1 && readyPeers.length === 1) {
-              logInfo('[SwarmManager]', `Single waiting peer ready. Starting transfer immediately for ${peerId}`);
-              this.startTransferWithReadyPeers();
-              return;
-            }
-            
-            // 🚀 [핵심 추가] 여러 피어가 대기 중이면 10초 타이머 시작
-            if (pendingPeers.length > 1 && readyPeers.length > 0 && !this.readyTimeout) {
-              logInfo('[SwarmManager]', `Multiple pending peers. Starting ${READY_WAIT_TIME_1N/1000}s countdown...`);
-              this.emit('ready-countdown-start', { 
-                readyCount: readyPeers.length, 
-                totalCount: pendingPeers.length,
-                waitTime: READY_WAIT_TIME_1N 
-              });
-              
-              this.readyTimeout = setTimeout(() => {
-                this.readyTimeout = null;
-                if (!this.isTransferring) {
-                  const currentReadyPeers = this.getConnectedPeers().filter(
-                    p => p.ready && !this.completedPeersInSession.has(p.id)
-                  );
-                  if (currentReadyPeers.length > 0) {
-                    logInfo('[SwarmManager]', `Timeout reached. Starting with ${currentReadyPeers.length} ready peers...`);
-                    this.startTransferWithReadyPeers();
-                  }
-                }
-              }, READY_WAIT_TIME_1N);
-              return;
-            }
-          }
+          // 🚀 [핵심 수정] 즉시 전송 시작 - 대기열 로직 제거
+          // 이전 전송 완료 여부와 상관없이 ready 피어가 있으면 즉시 시작
+          const readyPeers = this.getConnectedPeers().filter(p => p.ready && !this.completedPeersInSession.has(p.id));
+          console.log('[SwarmManager] 🔍 [DEBUG] Ready peers check:', {
+            readyPeersCount: readyPeers.length,
+            readyPeerIds: readyPeers.map(p => p.id)
+          });
           
-          // 일반적인 ready 체크 로직 실행
-          this.checkAllPeersReady();
+          if (readyPeers.length > 0 && !this.isTransferring) {
+            console.log('[SwarmManager] 🚀 [DEBUG] Starting transfer immediately with', readyPeers.length, 'ready peers');
+            logInfo('[SwarmManager]', `Ready peers available, starting transfer immediately...`);
+            this.startTransferWithReadyPeers();
+            return;
+          } else if (this.isTransferring) {
+            console.log('[SwarmManager] ⏳ [DEBUG] Transfer already in progress, peer will be queued');
+          }
         }
         break;
 
@@ -679,37 +687,51 @@ export class SwarmManager {
    * Not-ready 피어는 연결 유지하되 전송에서 제외
    */
   private startTransferWithReadyPeers(): void {
-    // 이미 전송 중이면 무시
-    if (this.isTransferring) {
-      logInfo('[SwarmManager]', 'Transfer already in progress, skipping startTransferWithReadyPeers');
+    const connectedPeers = this.getConnectedPeers();
+    const readyPeers = connectedPeers.filter(p => p.ready && !this.completedPeersInSession.has(p.id));
+    
+    if (readyPeers.length === 0) {
+      logError('[SwarmManager]', 'No ready peers to start transfer');
+      this.emit('transfer-failed', 'No receivers ready');
       return;
     }
     
-    const connectedPeers = this.getConnectedPeers();
-    const readyPeers = connectedPeers.filter(p => p.ready && !this.completedPeersInSession.has(p.id));
+    // 🚀 [핵심 수정] 이미 전송 중이어도 새로운 ready 피어가 있으면 즉시 시작
+    // 기존 전송 중단하고 새로운 전송 시작
+    if (this.isTransferring) {
+      logInfo('[SwarmManager]', `Transfer already in progress, but restarting for ${readyPeers.length} new ready peers`);
+      this.isTransferring = false;
+    }
     
     // Not-ready 피어들에게 전송 시작 알림 (연결은 유지)
     const notReadyPeers = connectedPeers.filter(p => !p.ready && !this.completedPeersInSession.has(p.id));
     for (const peer of notReadyPeers) {
       try {
-        peer.send(JSON.stringify({ 
+        peer.send(JSON.stringify({
           type: 'TRANSFER_STARTED_WITHOUT_YOU',
           message: 'Transfer started with other receivers. You can start download when current transfer completes.'
         }));
       } catch (e) { /* ignore */ }
     }
 
-    if (readyPeers.length > 0) {
-      // 현재 전송 대상 피어 기록
-      this.currentTransferPeers = new Set(readyPeers.map(p => p.id));
-      
-      logInfo('[SwarmManager]', `🚀 Starting transfer to ${readyPeers.length} peer(s): ${[...this.currentTransferPeers].join(', ')}`);
-      this.emit('transfer-batch-start', { peerCount: readyPeers.length });
-      this.startTransfer();
-    } else {
-      logError('[SwarmManager]', 'No ready peers to start transfer');
-      this.emit('transfer-failed', 'No receivers ready');
+    // 현재 전송 대상 피어 기록
+    this.currentTransferPeers = new Set(readyPeers.map(p => p.id));
+    
+    logInfo('[SwarmManager]', `🚀 Starting transfer to ${readyPeers.length} peer(s): ${[...this.currentTransferPeers].join(', ')}`);
+    this.emit('transfer-batch-start', { peerCount: readyPeers.length });
+    
+    // 🚀 [핵심 수정] Manifest 전송 후 전송 시작
+    for (const peer of readyPeers) {
+      try {
+        if (this.pendingManifest) {
+          peer.send(JSON.stringify({ type: 'MANIFEST', manifest: this.pendingManifest }));
+        }
+      } catch (e) {
+        logError('[SwarmManager]', `Failed to send manifest to peer ${peer.id}:`, e);
+      }
     }
+    
+    this.startTransfer();
   }
 
   /**
@@ -851,7 +873,7 @@ export class SwarmManager {
     this.transferQueue = [];
     
     // 유효한 피어만 필터링 (연결되어 있고 ready 상태인 피어)
-    const validPeers: SinglePeerConnection[] = [];
+    const validPeers: IPeerConnection[] = [];
     for (const peerId of queuedPeerIds) {
       const peer = this.peers.get(peerId);
       if (peer && peer.connected && peer.ready && !this.completedPeersInSession.has(peerId)) {
@@ -924,8 +946,8 @@ export class SwarmManager {
 
       switch (type) {
         case 'ready':
-          console.log('[SwarmManager] ✅ [DEBUG] Worker ready, initializing with', files.length, 'files');
-          this.worker!.postMessage({ type: 'init', payload: { files, manifest } });
+          console.log('[SwarmManager] ✅ [DEBUG] Worker ready');
+          // startTransfer에서 즉시 초기화하므로 여기서는 초기화하지 않음
           break;
 
         case 'init-complete':
@@ -977,11 +999,11 @@ export class SwarmManager {
     const connectedPeers = this.getConnectedPeers();
     if (connectedPeers.length === 0) {
       logError('[SwarmManager]', '❌ [DEBUG] No connected peers, dropping batch');
+      this.isProcessingBatch = false; // 🚨 [FIX] 플래그 리셋
       return;
     }
 
     const { chunks, progressData } = payload;
-    this.isProcessingBatch = false;
 
     console.log('[SwarmManager] 📊 [DEBUG] Processing batch from worker:', {
       chunkCount: chunks.length,
@@ -989,7 +1011,8 @@ export class SwarmManager {
       connectedPeers: connectedPeers.length,
       currentTransferPeers: this.currentTransferPeers.size,
       isTransferring: this.isTransferring,
-      progress: progressData?.progress || 0
+      progress: progressData?.progress || 0,
+      isProcessingBatch: this.isProcessingBatch
     });
 
     try {
@@ -1014,6 +1037,9 @@ export class SwarmManager {
         }
       }
 
+      // 🚨 [FIX] 배치 처리 완료 - 플래그를 여기서 리셋 (다음 요청 가능하도록)
+      this.isProcessingBatch = false;
+
       // 진행률 방출
       this.emitProgress(progressData);
 
@@ -1026,10 +1052,10 @@ export class SwarmManager {
       });
       
       if (canRequestMore) {
-        console.log('[SwarmManager] ➡️ [DEBUG] Requesting more chunks');
+        console.log('[SwarmManager] ➡️ [DEBUG] Requesting more chunks immediately');
         this.requestMoreChunks();
       } else {
-        console.log('[SwarmManager] ⏸️ [DEBUG] Buffer full, pausing chunk requests');
+        console.log('[SwarmManager] ⏸️ [DEBUG] Buffer full, pausing chunk requests (will resume on drain)');
       }
     } catch (error) {
       console.error('[SwarmManager]', '❌ [DEBUG] Batch processing failed:', error);
@@ -1039,6 +1065,7 @@ export class SwarmManager {
         isProcessingBatch: this.isProcessingBatch,
         totalBytesSent: this.totalBytesSent
       });
+      this.isProcessingBatch = false; // 🚨 [FIX] 에러 시에도 플래그 리셋
       this.cleanup();
     }
   }
@@ -1088,11 +1115,49 @@ export class SwarmManager {
     });
     
     this.emit('status', 'TRANSFERRING');
-    // Worker ready 이벤트 후 requestMoreChunks가 호출됨
+    
+    // � [핵FIX] 버퍼 모니터링 시작 (drain 이벤트가 안 오는 경우 대비)
+    this.startBufferMonitoring();
+    
+    // 🚀 [핵심 수정] Worker 초기화 즉시 시작
+    if (this.worker && this.files.length > 0 && this.pendingManifest) {
+      console.log('[SwarmManager] 🚀 [DEBUG] Initializing worker immediately with', this.files.length, 'files');
+      this.worker.postMessage({ type: 'init', payload: { files: this.files, manifest: this.pendingManifest } });
+      this.workerInitialized = true;
+      
+      // 🚀 [핵심 수정] 즉시 첫 배치 요청
+      setTimeout(() => {
+        if (this.isTransferring && this.workerInitialized) {
+          this.pendingTransferStart = false;
+          logInfo('[SwarmManager]', 'Requesting first batch immediately...');
+          this.requestMoreChunks();
+        }
+      }, 100);
+    }
   }
 
   private requestMoreChunks(): void {
-    if (this.isProcessingBatch || !this.worker || !this.isTransferring) return;
+    console.log('[SwarmManager] 🔄 [DEBUG] requestMoreChunks called:', {
+      isProcessingBatch: this.isProcessingBatch,
+      hasWorker: !!this.worker,
+      isTransferring: this.isTransferring,
+      workerInitialized: this.workerInitialized
+    });
+    
+    if (this.isProcessingBatch) {
+      console.log('[SwarmManager] ⏸️ [DEBUG] Already processing batch, skipping');
+      return;
+    }
+    
+    if (!this.worker) {
+      console.log('[SwarmManager] ❌ [DEBUG] No worker available');
+      return;
+    }
+    
+    if (!this.isTransferring) {
+      console.log('[SwarmManager] ⏸️ [DEBUG] Not transferring, skipping');
+      return;
+    }
     
     // 🚨 [FIX] Worker 초기화 완료 체크 (Race Condition 방지)
     if (!this.workerInitialized) {
@@ -1100,6 +1165,7 @@ export class SwarmManager {
       return;
     }
 
+    console.log('[SwarmManager] ✅ [DEBUG] Requesting batch from worker, count:', this.currentBatchSize);
     this.isProcessingBatch = true;
     this.worker.postMessage({ type: 'process-batch', payload: { count: this.currentBatchSize } });
   }
@@ -1167,7 +1233,7 @@ export class SwarmManager {
   /**
    * 모든 피어 상태 조회
    */
-  public getPeerStates(): PeerState[] {
+  public getPeerStates(): IPeerState[] {
     return Array.from(this.peers.values()).map(p => p.getState());
   }
 
@@ -1224,6 +1290,47 @@ export class SwarmManager {
   }
   
   /**
+   * 🚨 [FIX] 버퍼 모니터링 시작
+   * drain 이벤트가 제대로 발생하지 않는 경우를 대비한 폴백 메커니즘
+   */
+  private startBufferMonitoring(): void {
+    if (this.bufferMonitorInterval) return;
+    
+    this.bufferMonitorInterval = setInterval(() => {
+      if (!this.isTransferring) {
+        this.stopBufferMonitoring();
+        return;
+      }
+      
+      const highestBuffered = this.getHighestBufferedAmount();
+      const canRequest = this.canRequestMoreChunks();
+      
+      // 버퍼가 충분히 비었는데 배치 처리 중이 아니고 전송 중이면 요청
+      if (canRequest && !this.isProcessingBatch && this.isTransferring && this.workerInitialized) {
+        console.log('[SwarmManager] 🔄 [MONITOR] Buffer cleared, requesting more chunks:', {
+          highestBuffered,
+          highWaterMark: HIGH_WATER_MARK,
+          isProcessingBatch: this.isProcessingBatch
+        });
+        this.requestMoreChunks();
+      }
+    }, 200); // 200ms마다 체크
+    
+    logInfo('[SwarmManager]', 'Buffer monitoring started');
+  }
+  
+  /**
+   * 버퍼 모니터링 중지
+   */
+  private stopBufferMonitoring(): void {
+    if (this.bufferMonitorInterval) {
+      clearInterval(this.bufferMonitorInterval);
+      this.bufferMonitorInterval = null;
+      logInfo('[SwarmManager]', 'Buffer monitoring stopped');
+    }
+  }
+  
+  /**
    * 리소스 정리
    */
   public cleanup(): void {
@@ -1235,6 +1342,9 @@ export class SwarmManager {
 
     // Keep-alive 정리
     this.stopKeepAlive();
+    
+    // 버퍼 모니터링 정리
+    this.stopBufferMonitoring();
 
     // Ready 타이머 정리
     this.clearReadyTimeout();

@@ -1,4 +1,4 @@
-import SimplePeer from 'simple-peer/simplepeer.min.js';
+import { NativePeerConnection, NativePeerConfig } from './nativePeerConnection';
 import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
@@ -29,7 +29,7 @@ interface IFileWriter {
 }
 
 class EnhancedWebRTCService {
-  private peer: SimplePeer.Instance | null = null;
+  private peer: NativePeerConnection | null = null;
   private worker: Worker | null = null;
   private writer: IFileWriter | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -120,11 +120,12 @@ class EnhancedWebRTCService {
    * 루프 내부의 await를 제거하여 JS 실행 지연을 0으로 만듭니다.
    */
   private async handleBatchFromWorker(payload: any) {
-    if (!this.peer || this.peer.destroyed) return;
+    if (!this.peer || !this.peer.connected) return;
     
-    // @ts-ignore
-    const channel = this.peer._channel as RTCDataChannel;
-    if (!channel || channel.readyState !== 'open') return;
+    // NativePeerConnection은 getBufferedAmount() 메서드를 제공
+    if (this.peer.getBufferedAmount() > MAX_BUFFERED_AMOUNT) {
+        await this.waitForBufferDrain();
+    }
 
     const { chunks, progressData } = payload;
     const batchBytes = chunks.reduce((sum: number, c: ArrayBuffer) => sum + c.byteLength, 0);
@@ -134,29 +135,23 @@ class EnhancedWebRTCService {
     try {
         // 🚨 [수정 1] 루프 진입 전 '한 번만' 버퍼 체크 (Pre-check)
         // 버퍼가 꽉 찼을 때만 여기서 대기하고, 루프 진입 후에는 멈추지 않음
-        if (channel.bufferedAmount + batchBytes > MAX_BUFFERED_AMOUNT) {
-            await this.waitForBufferDrain(channel);
-        }
+        // 이미 위에서 체크했으므로 이 부분은 제거
 
         const sendStart = performance.now();
         
         // 🚨 [수정 2] Burst Sending (루프 내 await 절대 금지)
-        if (this.useMultiChannel && this.dataChannels.length > 0) {
-            this.sendChunksMultiChannel(chunks);
-        } else {
-            // JS 루프는 1ms 이내에 완료됨 -> WebRTC 버퍼로 순식간에 이동
-            for (let i = 0; i < chunks.length; i++) {
-                try {
-                    this.peer.send(chunks[i]); // 동기 호출 (즉시 리턴)
-                    
-                    if (this.useAdaptiveControl) {
-                        this.networkController.recordSend(chunks[i].byteLength);
-                    }
-                } catch (e) {
-                    // 전송 실패 시 연결 유지를 위해 해당 청크만 포기하고 계속 진행
-                    console.warn('Chunk send glitch:', e);
-                    continue;
+        // JS 루프는 1ms 이내에 완료됨 -> WebRTC 버퍼로 순식간에 이동
+        for (let i = 0; i < chunks.length; i++) {
+            try {
+                this.peer.send(chunks[i]); // 동기 호출 (즉시 리턴)
+                
+                if (this.useAdaptiveControl) {
+                    this.networkController.recordSend(chunks[i].byteLength);
                 }
+            } catch (e) {
+                // 전송 실패 시 연결 유지를 위해 해당 청크만 포기하고 계속 진행
+                console.warn('Chunk send glitch:', e);
+                continue;
             }
         }
         
@@ -166,15 +161,15 @@ class EnhancedWebRTCService {
             networkMetrics: this.useAdaptiveControl ? this.networkController.getMetrics() : null
         });
 
-        this.updateDrainMetrics(channel, batchBytes, sendStart);
+        this.updateDrainMetrics(batchBytes, sendStart);
         
         if (this.useAdaptiveControl) {
-            this.networkController.updateBufferState(channel.bufferedAmount);
+            this.networkController.updateBufferState(this.peer.getBufferedAmount());
         }
 
         // 3. Greedy Refill (공격적 리필)
         // 루프가 순식간에 끝났으므로 즉시 워커에 다음 데이터를 요청
-        const currentBuffered = channel.bufferedAmount;
+        const currentBuffered = this.peer.getBufferedAmount();
         if (currentBuffered < HIGH_WATER_MARK) {
             this.requestMoreChunks();
         }
@@ -187,62 +182,25 @@ class EnhancedWebRTCService {
   /**
    * 🚀 [최적화] 버퍼 대기 시간 및 체크 주기 단축
    */
-  private async waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
+  private async waitForBufferDrain(): Promise<void> {
     const maxWaitTime = 5000;
     const checkInterval = 5;  // 10ms -> 5ms (반응성 향상)
     let elapsedTime = 0;
     const targetLevel = MAX_BUFFERED_AMOUNT * 0.7; // 70% 수준까지 대기
 
-    while (channel.bufferedAmount > targetLevel && elapsedTime < maxWaitTime) {
+    while (this.peer && this.peer.getBufferedAmount() > targetLevel && elapsedTime < maxWaitTime) {
       await new Promise(resolve => setTimeout(resolve, checkInterval));
       elapsedTime += checkInterval;
-      if (channel.readyState !== 'open') return;
+      if (!this.peer.connected) return;
     }
   }
   
-  /**
-   * 🚀 [Phase 3] 멀티 채널 분산 전송
-   */
-  private sendChunksMultiChannel(chunks: ArrayBuffer[]): void {
-    for (const chunk of chunks) {
-        // 버퍼 여유가 가장 많은 채널 선택
-        const channel = this.getBestChannel();
-        if (channel && channel.readyState === 'open') {
-            channel.send(chunk);
-            
-            if (this.useAdaptiveControl) {
-                this.networkController.recordSend(chunk.byteLength);
-            }
-        }
-    }
-  }
-  
-  /**
-   * 🚀 [Phase 3] 최적 채널 선택 (버퍼 여유 기반)
-   */
-  private getBestChannel(): RTCDataChannel | null {
-    if (this.dataChannels.length === 0) {
-        // @ts-ignore
-        return this.peer?._channel as RTCDataChannel;
-    }
-    
-    let bestChannel: RTCDataChannel | null = null;
-    let lowestBuffer = Infinity;
-    
-    for (const channel of this.dataChannels) {
-        if (channel.readyState === 'open' && channel.bufferedAmount < lowestBuffer) {
-            lowestBuffer = channel.bufferedAmount;
-            bestChannel = channel;
-        }
-    }
-    
-    return bestChannel;
-  }
+  // NativePeerConnection은 이미 멀티 채널을 내장하고 있으므로 이 메서드들은 필요 없음
 
   /**
    * 🚀 [Phase 1] 드레인 속도 측정 및 적응형 배치 크기 계산
    */
-  private updateDrainMetrics(channel: RTCDataChannel, batchBytes: number, sendStart: number) {
+  private updateDrainMetrics(batchBytes: number, sendStart: number) {
     const now = performance.now();
     
     if (this.lastDrainTime > 0 && this.batchSendTime > 0) {
@@ -255,7 +213,7 @@ class EnhancedWebRTCService {
           : this.drainRate * 0.7 + instantDrainRate * 0.3;
         
         // 적응형 배치 크기 계산
-        this.adjustBatchSize(channel);
+        this.adjustBatchSize();
       }
     }
     
@@ -266,8 +224,8 @@ class EnhancedWebRTCService {
   /**
    * 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 조절 (AIMD + BBR 통합)
    */
-  private adjustBatchSize(channel: RTCDataChannel) {
-    const bufferUtilization = channel.bufferedAmount / MAX_BUFFERED_AMOUNT;
+  private adjustBatchSize() {
+    const bufferUtilization = this.peer.getBufferedAmount() / MAX_BUFFERED_AMOUNT;
     const oldBatchSize = this.currentBatchSize;
     
     // 🚨 [수정] ZIP 압축률 계산 (원본 대비 전송 데이터 비율)
@@ -306,7 +264,7 @@ class EnhancedWebRTCService {
     
     if (this.drainRate > 0) {
       const optimalBatch = Math.floor(
-        (MAX_BUFFERED_AMOUNT - channel.bufferedAmount) / (CHUNK_SIZE_MAX * compressionRatio)
+        (MAX_BUFFERED_AMOUNT - this.peer.getBufferedAmount()) / (CHUNK_SIZE_MAX * compressionRatio)
       );
       
       targetBatchSize = Math.floor((targetBatchSize + optimalBatch) / 2);
@@ -435,9 +393,7 @@ class EnhancedWebRTCService {
   private waitForBufferZero(): Promise<void> {
     return new Promise((resolve) => {
       const check = () => {
-        // @ts-ignore
-        const channel = this.peer?._channel as RTCDataChannel;
-        if (!channel || channel.bufferedAmount === 0) resolve();
+        if (!this.peer || this.peer.getBufferedAmount() === 0) resolve();
         else setTimeout(check, 50);
       };
       check();
@@ -455,8 +411,7 @@ class EnhancedWebRTCService {
     }
     
     // 🚨 [핵심 수정] 이미 peer가 연결된 상태면 cleanup 건너뛰기
-    // @ts-ignore
-    const isConnected = this.peer && !this.peer.destroyed && (this.peer._connected || this.peer.connected);
+    const isConnected = this.peer && this.peer.connected;
     if (isConnected && this.roomId === roomId) {
       console.log('[Receiver] Already connected to room:', roomId);
       return;
@@ -520,7 +475,7 @@ class EnhancedWebRTCService {
       this.emit('status', 'RECEIVING');
 
       // 🚨 [핵심] 이제 송신자에게 준비 완료 신호 전송
-      if (this.peer && !this.peer.destroyed) {
+      if (this.peer && this.peer.connected) {
         this.peer.send(JSON.stringify({ type: 'TRANSFER_READY' }));
         console.log('[Receiver] TRANSFER_READY sent to sender');
       } else {
@@ -548,26 +503,20 @@ class EnhancedWebRTCService {
 
   private async createPeer(initiator: boolean) {
     try {
-        const peer = new SimplePeer({
-            initiator,
-            trickle: true,
-            config: { iceServers: this.iceServers },
-            channelConfig: {
-                ordered: true,
-                // 🚀 [핵심] Low Water Mark 설정 (배압 제어용)
-                bufferedAmountLowThreshold: LOW_WATER_MARK
-            },
-        } as any);
-
-        const forceArrayBuffer = () => {
-            // @ts-ignore
-            if (peer._channel && peer._channel.binaryType !== 'arraybuffer') {
-                // @ts-ignore
-                peer._channel.binaryType = 'arraybuffer';
-            }
+        // 🚨 [핵심 수정] Receiver는 connectedPeerId를 사용, Sender는 roomId 사용
+        const peerId = !initiator && this.connectedPeerId 
+            ? this.connectedPeerId 
+            : this.roomId || 'unknown';
+        
+        const config: NativePeerConfig = {
+            iceServers: this.iceServers,
+            isInitiator: initiator,
+            id: peerId
         };
+        
+        console.log('[WebRTC] 🔧 [DEBUG] Creating peer with ID:', peerId, 'Initiator:', initiator);
 
-        if (initiator) forceArrayBuffer();
+        const peer = new NativePeerConnection(config);
 
         peer.on('signal', data => {
             // 🚀 [Multi-Receiver] Receiver는 connectedPeerId(Sender)에게만 시그널 전송
@@ -575,25 +524,12 @@ class EnhancedWebRTCService {
             
             if (data.type === 'offer') signalingService.sendOffer(this.roomId!, data, target);
             else if (data.type === 'answer') signalingService.sendAnswer(this.roomId!, data, target);
-            else if (data.candidate) signalingService.sendCandidate(this.roomId!, data, target);
+            else if (data.type === 'candidate') signalingService.sendCandidate(this.roomId!, data, target);
         });
 
         peer.on('connect', () => {
-            forceArrayBuffer();
             console.log('[WebRTC] Channel Connected!');
             this.emit('connected', true);
-            
-            // 🚀 [핵심] DataChannel 배압 이벤트 리스너 등록
-            // @ts-ignore
-            const channel = peer._channel as RTCDataChannel;
-            if (channel) {
-                channel.onbufferedamountlow = () => {
-                    // 버퍼가 비워지면 워커에게 더 요청
-                    if (this.isTransferring) {
-                        this.requestMoreChunks();
-                    }
-                };
-            }
 
             // 🚀 [Phase 3] WebRTC 통계 수집 시작
             if (this.useAdaptiveControl && initiator) {
@@ -606,9 +542,7 @@ class EnhancedWebRTCService {
         peer.on('data', this.handleData.bind(this));
         peer.on('error', e => {
             console.error('[WebRTC] Peer Error:', e);
-            // 치명적이지 않은 에러는 무시
-            if (e.code === 'ERR_DATA_CHANNEL') return;
-            this.emit('error', e.message);
+            this.emit('error', e.message || e);
         });
         
         peer.on('close', () => {
@@ -633,7 +567,7 @@ class EnhancedWebRTCService {
             if (msg.type === 'TRANSFER_READY') {
                 console.log('[Sender] Receiver READY. Sending ACK and Starting transfer...');
                 
-                if (this.peer && !this.peer.destroyed) {
+                if (this.peer && this.peer.connected) {
                     this.peer.send(JSON.stringify({ type: 'TRANSFER_STARTED' }));
                 }
 
@@ -703,13 +637,16 @@ class EnhancedWebRTCService {
 
   // 🚨 [핵심 수정] Peer 중복 생성 방지 및 연결 안정화
   private handlePeerJoined = async () => {
+    // 🚨 [핵심] Sender 모드면 무시 (SwarmManager가 처리)
+    if (this.isSender) {
+      console.log('[WebRTC] Ignoring peer-joined (Sender uses SwarmManager)');
+      return;
+    }
+    
     // 이미 연결된 상태라면 무시 (좀비 세션 방지)
-    if (this.peer && !this.peer.destroyed) {
-        // @ts-ignore
-        if (this.peer._connected || this.peer.connected) {
-            console.warn('[WebRTC] Peer joined but we are already connected. Ignoring.');
-            return;
-        }
+    if (this.peer && this.peer.connected) {
+        console.warn('[WebRTC] Peer joined but we are already connected. Ignoring.');
+        return;
     }
 
     console.log('[WebRTC] New peer joined. Initiating connection...');
@@ -718,22 +655,27 @@ class EnhancedWebRTCService {
         this.peer = null;
     }
 
-    // Sender만 Initiator가 됨
-    if (this.isSender) {
-        await this.createPeer(true);
-    }
+    // Receiver는 Initiator가 아님
+    // (Sender가 먼저 offer를 보냄)
   };
 
   // 🚨 [핵심 수정] 연결된 피어 ID 추적
   private connectedPeerId: string | null = null;
 
   private handleOffer = async (d: any) => {
-    // 🚨 [핵심] Receiver만 offer를 처리 (Sender는 무시)
-    if (this.isSender) return;
+    // 🚨 [핵심] Sender 모드면 무시 (SwarmManager가 처리)
+    if (this.isSender) {
+      console.log('[WebRTC] Ignoring offer (Sender uses SwarmManager)');
+      return;
+    }
+    
+    // 🚨 [핵심] Receiver만 offer를 처리
+    console.log('[WebRTC] 📨 [DEBUG] Offer received from:', d.from);
     
     // 첫 번째 offer를 보낸 피어를 기억
     if (!this.connectedPeerId) {
       this.connectedPeerId = d.from;
+      console.log('[WebRTC] 🔗 [DEBUG] Connected peer ID set to:', this.connectedPeerId);
     }
     
     // 다른 피어의 offer는 무시
@@ -742,35 +684,49 @@ class EnhancedWebRTCService {
       return;
     }
     
-    if (!this.peer) await this.createPeer(false);
+    if (!this.peer) {
+      console.log('[WebRTC] 🚀 [DEBUG] Creating peer as non-initiator (Receiver)');
+      await this.createPeer(false);
+    }
     this.peer!.signal(d.offer);
   };
 
   private handleAnswer = async (d: any) => {
-    // 🚨 [핵심] Sender만 answer를 처리 (Receiver는 무시)
-    if (!this.isSender) return;
+    // 🚨 [핵심] Sender 모드면 무시 (SwarmManager가 처리)
+    if (this.isSender) {
+      console.log('[WebRTC] Ignoring answer (Sender uses SwarmManager)');
+      return;
+    }
     
-    // 피어가 없거나 파괴된 경우 무시
-    if (!this.peer || this.peer.destroyed) return;
-    
-    this.peer.signal(d.answer);
+    // Receiver는 answer를 받지 않음 (Sender가 받음)
+    console.log('[WebRTC] ⚠️ [DEBUG] Receiver received answer (unexpected)');
   };
 
   private handleIceCandidate = (d: any) => {
+    // 🚨 [핵심] Sender 모드면 무시 (SwarmManager가 처리)
+    if (this.isSender) {
+      console.log('[WebRTC] Ignoring ICE candidate (Sender uses SwarmManager)');
+      return;
+    }
+    
     // 🚨 [핵심] 연결된 피어의 ICE candidate만 처리
-    if (!this.isSender && this.connectedPeerId && d.from !== this.connectedPeerId) {
+    if (this.connectedPeerId && d.from !== this.connectedPeerId) {
       console.log('[WebRTC] Ignoring ICE candidate from different peer:', d.from);
       return;
     }
     
     // 피어가 없거나 파괴된 경우 무시
-    if (!this.peer || this.peer.destroyed) return;
+    if (!this.peer) {
+      console.log('[WebRTC] ⚠️ [DEBUG] ICE candidate received but peer not created yet');
+      return;
+    }
     
+    console.log('[WebRTC] 🧊 [DEBUG] Processing ICE candidate from:', d.from);
     this.peer.signal(d.candidate);
   };
 
   public notifyDownloadComplete() {
-    if (this.peer && !this.peer.destroyed) {
+    if (this.peer && this.peer.connected) {
       const msg = JSON.stringify({ type: 'DOWNLOAD_COMPLETE' });
       console.log('[webRTCService] 📤 Sending DOWNLOAD_COMPLETE to sender');
       
@@ -779,7 +735,7 @@ class EnhancedWebRTCService {
       for (let i = 0; i < 3; i++) {
         setTimeout(() => {
           try {
-            if (this.peer && !this.peer.destroyed) {
+            if (this.peer && this.peer.connected) {
               this.peer.send(msg);
               successCount++;
               console.log(`[webRTCService] ✅ DOWNLOAD_COMPLETE sent (${i + 1}/3)`);
@@ -792,9 +748,31 @@ class EnhancedWebRTCService {
     } else {
       console.warn('[webRTCService] ⚠️ Cannot send DOWNLOAD_COMPLETE - peer not available', {
         peerExists: !!this.peer,
-        peerDestroyed: this.peer?.destroyed
+        peerConnected: this.peer?.connected
       });
     }
+  }
+
+  // 🚀 [추가] 제어 메시지 전송을 위한 헬퍼 메서드
+  public sendControlMessage(message: string) {
+    if (this.peer && this.peer.connected) {
+      try {
+        this.peer.send(message);
+        console.log('[webRTCService] 📤 Control message sent:', message);
+      } catch (e) {
+        console.error('[webRTCService] ❌ Failed to send control message:', e);
+      }
+    } else {
+      console.warn('[webRTCService] ⚠️ Cannot send control message - peer not available', {
+        peerExists: !!this.peer,
+        peerConnected: this.peer?.connected
+      });
+    }
+  }
+
+  // 🚀 [추가] 피어 상태 조회를 위한 헬퍼 메서드
+  public getPeer() {
+    return this.peer;
   }
 
   /**
@@ -810,18 +788,15 @@ class EnhancedWebRTCService {
     
     // 500ms마다 WebRTC 통계 수집
     this.statsInterval = setInterval(async () => {
-      if (!this.peer || this.peer.destroyed || !this.isTransferring) {
+      if (!this.peer || !this.peer.connected || !this.isTransferring) {
         this.stopStatsCollection();
         return;
       }
       
+      // NativePeerConnection은 내부 RTCPeerConnection에 직접 접근할 수 없음
+      // 통계 수집 기능은 나중에 구현 필요
       try {
-        // @ts-ignore - SimplePeer 내부 접근
-        const pc = this.peer._pc as RTCPeerConnection;
-        if (pc) {
-          const stats = await pc.getStats();
-          this.networkController.updateFromWebRTCStats(stats);
-        }
+        // 통계 수집 실패 무시
       } catch (e) {
         // 통계 수집 실패 무시
       }
@@ -881,7 +856,7 @@ class EnhancedWebRTCService {
     return {
       adaptiveControl: this.useAdaptiveControl,
       multiChannel: this.useMultiChannel,
-      channelCount: this.dataChannels.length,
+      channelCount: MULTI_CHANNEL_COUNT, // NativePeerConnection은 항상 멀티 채널을 사용
       currentBatchSize: this.currentBatchSize,
       drainRate: this.drainRate,
       networkController: this.networkController.getDebugInfo()
@@ -902,8 +877,7 @@ class EnhancedWebRTCService {
     // 🚀 [Phase 3] 추가 정리
     this.stopStatsCollection();
     this.networkController.reset();
-    this.dataChannels.forEach(ch => ch.close());
-    this.dataChannels = [];
+    // NativePeerConnection은 내부적으로 채널을 관리하므로 이 부분은 필요 없음
   }
 }
 

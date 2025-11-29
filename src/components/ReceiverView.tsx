@@ -323,6 +323,26 @@ const ReceiverView: React.FC = () => {
       await transferService.startReceiving(manifest);
       console.log('[ReceiverView] ✅ Receiver initialization complete');
       
+      // 🚀 [핵심 수정] TRANSFER_READY 전송 후 즉시 상태 확인
+      // 송신자의 응답을 기다리지 않고 즉시 전송 시작 가능 여부 확인
+      setTimeout(() => {
+        if (statusRef.current === 'RECEIVING' && isWaitingForSender) {
+          console.log('[ReceiverView] Checking if sender responded...');
+          
+          // 🚀 [핵심] 추가 대기 없이 즉시 TRANSFER_READY 재전송
+          try {
+            console.log('[ReceiverView] Resending TRANSFER_READY to ensure sender receives it');
+            // webRTCService를 통해 직접 메시지 전송
+            const peer = transferService.getPeer();
+            if (peer && peer.connected) {
+              peer.send(JSON.stringify({ type: 'TRANSFER_READY' }));
+            }
+          } catch (e) {
+            console.error('[ReceiverView] Failed to resend TRANSFER_READY:', e);
+          }
+        }
+      }, 1000); // 1초 후 재전송 시도
+      
       // 다운로드 시작 후 새로운 타임아웃 설정 (송신자 응답 대기)
       connectionTimeoutRef.current = setTimeout(() => {
         if (statusRef.current === 'RECEIVING' && isWaitingForSender) {
@@ -332,7 +352,7 @@ const ReceiverView: React.FC = () => {
           setIsWaitingForSender(false);
           transferService.cleanup();
         }
-      }, 10000); // 10초 타임아웃
+      }, 15000); // 15초로 타임아웃 증가
       
     } catch (e: any) {
       console.error('[ReceiverView] startDirectDownload error:', e);

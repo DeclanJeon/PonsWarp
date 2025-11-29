@@ -25,8 +25,8 @@ export const BATCH_REQUEST_SIZE = 64;         // 레거시 호환
 export const PREFETCH_BUFFER_SIZE = 32 * 1024 * 1024;  // 32MB
 export const PREFETCH_LOW_THRESHOLD = 8 * 1024 * 1024; // 8MB
 
-// 🚀 [Phase 3] 멀티 채널 설정
-export const MULTI_CHANNEL_COUNT = 3;                  // 기본 데이터 채널 수
+// 🚀 [Phase 2] 멀티 채널 설정
+export const MULTI_CHANNEL_COUNT = 4;                  // 4채널 병렬 전송 (가장 효율적인 기본값)
 export const MULTI_CHANNEL_MIN = 1;                    // 최소 채널 수
 export const MULTI_CHANNEL_MAX = 4;                    // 최대 채널 수
 export const CHANNEL_BUFFER_THRESHOLD = 512 * 1024;    // 채널별 버퍼 임계값

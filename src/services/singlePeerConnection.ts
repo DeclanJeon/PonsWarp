@@ -1,18 +1,15 @@
 /**
- * SinglePeerConnection - 단일 피어와의 WebRTC 연결 캡슐화
- * 
- * 각 피어 연결을 독립적으로 관리하며, 자체 상태와 이벤트를 가짐.
- * SwarmManager에서 여러 인스턴스를 생성하여 1:N 연결 관리.
+ * SinglePeerConnection (Native WebRTC Implementation)
+ * * simple-peer 라이브러리를 제거하고 Native RTCPeerConnection으로 대체했습니다.
+ * Multi-Channel(병렬 전송)을 지원하며, SwarmManager와의 호환성을 유지합니다.
  */
-import SimplePeer from 'simple-peer/simplepeer.min.js';
-import { LOW_WATER_MARK } from '../utils/constants';
-import { logInfo, logError } from '../utils/logger';
+import { LOW_WATER_MARK, MULTI_CHANNEL_COUNT } from '../utils/constants';
+import { logInfo, logError, logWarn } from '../utils/logger';
 
 type EventHandler = (data: any) => void;
 
 export interface PeerConfig {
   iceServers: RTCIceServer[];
-  channelConfig?: RTCDataChannelInit;
 }
 
 export interface PeerState {
@@ -27,15 +24,237 @@ export class SinglePeerConnection {
   public connected: boolean = false;
   public ready: boolean = false;
   
-  private pc: SimplePeer.Instance | null = null;
-  private destroyed: boolean = false;
-  private drainEmitted: boolean = false;
+  private pc: RTCPeerConnection | null = null;
+  private dataChannels: RTCDataChannel[] = [];
   private eventListeners: Record<string, EventHandler[]> = {};
+  private isInitiator: boolean;
+  private config: PeerConfig;
+  private isDestroyed: boolean = false;
+
+  // Round-Robin 로드 밸런싱 인덱스
+  private nextChannelIndex = 0;
 
   constructor(peerId: string, initiator: boolean, config: PeerConfig) {
     this.id = peerId;
-    this.initializePeer(initiator, config);
+    this.isInitiator = initiator;
+    this.config = config;
+    this.initialize();
   }
+
+  private initialize() {
+    logInfo(`[NativePeer ${this.id}]`, `Initializing (Initiator: ${this.isInitiator})`);
+
+    try {
+      this.pc = new RTCPeerConnection({
+        iceServers: this.config.iceServers,
+        iceTransportPolicy: 'all',
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
+      });
+
+      // 1. ICE Candidate 핸들링
+      this.pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          // simple-peer 호환 시그널 포맷
+          this.emit('signal', { candidate: event.candidate });
+        }
+      };
+
+      // 2. 연결 상태 모니터링
+      this.pc.onconnectionstatechange = () => {
+        const state = this.pc?.connectionState;
+        logInfo(`[NativePeer ${this.id}]`, `Connection State: ${state}`);
+        
+        if (state === 'connected') {
+          if (!this.connected) {
+            this.connected = true;
+            // Receiver는 채널이 열릴 때까지 대기하므로 여기서 이벤트를 발생시키지 않음
+            if (this.isInitiator) {
+               this.emit('connected', this.id);
+            }
+          }
+        } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+          this.handleClose();
+        }
+      };
+
+      this.pc.oniceconnectionstatechange = () => {
+        const state = this.pc?.iceConnectionState;
+        logInfo(`[NativePeer ${this.id}]`, `ICE State: ${state}`);
+        if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+          this.handleClose();
+        }
+      };
+
+      // 3. Sender: 데이터 채널 생성
+      if (this.isInitiator) {
+        this.createDataChannels();
+        this.createOffer();
+      } else {
+        // 4. Receiver: 데이터 채널 수신 대기
+        this.pc.ondatachannel = (event) => {
+          this.setupChannel(event.channel);
+          
+          // 첫 번째 채널이 연결되면 'connected'로 간주 (SwarmManager 호환성)
+          if (this.dataChannels.length === 1 && !this.connected) {
+            this.connected = true;
+            this.emit('connected', this.id);
+          }
+        };
+      }
+
+    } catch (error) {
+      logError(`[NativePeer ${this.id}]`, 'Initialization failed', error);
+      this.emit('error', error);
+    }
+  }
+
+  /**
+   * 🚀 [Multi-Channel] 병렬 데이터 채널 생성
+   */
+  private createDataChannels() {
+    if (!this.pc) return;
+
+    for (let i = 0; i < MULTI_CHANNEL_COUNT; i++) {
+      const label = `warp-ch-${i}`;
+      try {
+        const channel = this.pc.createDataChannel(label, {
+          ordered: true, // 파일 전송 순서 보장을 위해 true (추후 최적화 가능)
+        });
+        this.setupChannel(channel);
+      } catch (e) {
+        logError(`[NativePeer ${this.id}]`, `Failed to create channel ${i}`, e);
+      }
+    }
+  }
+
+  private setupChannel(channel: RTCDataChannel) {
+    channel.binaryType = 'arraybuffer';
+    // Backpressure 제어를 위한 임계값
+    channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
+
+    channel.onopen = () => {
+      logInfo(`[NativePeer ${this.id}]`, `Channel ${channel.label} OPEN`);
+    };
+
+    channel.onmessage = (event) => {
+      this.emit('data', event.data);
+    };
+
+    channel.onerror = (event) => {
+      logError(`[NativePeer ${this.id}]`, `Channel ${channel.label} Error`, event);
+    };
+
+    channel.onclose = () => {
+      logWarn(`[NativePeer ${this.id}]`, `Channel ${channel.label} Closed`);
+      this.dataChannels = this.dataChannels.filter(c => c !== channel);
+    };
+
+    // Flow Control: 버퍼 드레인 이벤트
+    channel.onbufferedamountlow = () => {
+      this.emit('drain', this.id);
+    };
+
+    this.dataChannels.push(channel);
+  }
+
+  // === Signaling Logic ===
+
+  private async createOffer() {
+    if (!this.pc) return;
+    try {
+      const offer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+      // simple-peer 호환 포맷
+      this.emit('signal', { type: 'offer', sdp: offer.sdp });
+    } catch (e) {
+      this.emit('error', e);
+    }
+  }
+
+  /**
+   * 외부 시그널 데이터 처리
+   */
+  public async signal(data: any) {
+    if (this.isDestroyed || !this.pc) return;
+
+    try {
+      if (data.type === 'offer' || data.type === 'answer') {
+        const desc = new RTCSessionDescription({
+          type: data.type,
+          sdp: data.sdp
+        });
+        await this.pc.setRemoteDescription(desc);
+
+        if (data.type === 'offer') {
+          const answer = await this.pc.createAnswer();
+          await this.pc.setLocalDescription(answer);
+          this.emit('signal', { type: 'answer', sdp: answer.sdp });
+        }
+      } else if (data.candidate) {
+        await this.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    } catch (e) {
+      logError(`[NativePeer ${this.id}]`, 'Signaling Error', e);
+    }
+  }
+
+  // === Data Transmission ===
+
+  /**
+   * 🚀 [Load Balancing] 데이터 전송
+   * 버퍼가 가장 비어있는 채널을 찾아 전송합니다.
+   */
+  public send(data: ArrayBuffer | string): void {
+    if (this.dataChannels.length === 0) return;
+
+    // 1. 가장 여유로운 채널 찾기
+    let bestChannel: RTCDataChannel | null = null;
+    let minBuffer = Infinity;
+
+    for (const ch of this.dataChannels) {
+      if (ch.readyState === 'open') {
+        if (ch.bufferedAmount < minBuffer) {
+          minBuffer = ch.bufferedAmount;
+          bestChannel = ch;
+        }
+      }
+    }
+
+    // 2. 전송 (모든 채널이 닫혀있거나 꽉 찼으면 실패)
+    if (bestChannel) {
+      try {
+        bestChannel.send(data as any);
+      } catch (e) {
+        logError(`[NativePeer ${this.id}]`, 'Send failed', e);
+      }
+    } else {
+      // 대안: Round Robin 시도 (혹시 모르니)
+      const rrChannel = this.dataChannels[this.nextChannelIndex % this.dataChannels.length];
+      this.nextChannelIndex++;
+      if (rrChannel?.readyState === 'open') {
+        rrChannel.send(data as any);
+      }
+    }
+  }
+
+  /**
+   * 전체 채널의 총 버퍼량 조회
+   */
+  public getBufferedAmount(): number {
+    return this.dataChannels.reduce((acc, ch) => acc + ch.bufferedAmount, 0);
+  }
+
+  public getState(): PeerState {
+    return {
+      id: this.id,
+      connected: this.connected,
+      bufferedAmount: this.getBufferedAmount(),
+      ready: this.ready
+    };
+  }
+
+  // === Event Emitter ===
 
   public on(event: string, handler: EventHandler): void {
     if (!this.eventListeners[event]) this.eventListeners[event] = [];
@@ -55,161 +274,31 @@ export class SinglePeerConnection {
     this.eventListeners = {};
   }
 
-  private initializePeer(initiator: boolean, config: PeerConfig): void {
-    try {
-      this.pc = new SimplePeer({
-        initiator,
-        trickle: true,
-        config: { iceServers: config.iceServers },
-        channelConfig: {
-          ordered: true,
-          bufferedAmountLowThreshold: LOW_WATER_MARK,
-          ...config.channelConfig
-        }
-      } as any);
+  // === Cleanup ===
 
-      this.setupEventHandlers();
-      logInfo(`[Peer ${this.id}]`, `Created (initiator: ${initiator})`);
-    } catch (error) {
-      logError(`[Peer ${this.id}]`, 'Failed to create SimplePeer:', error);
-      throw error;
-    }
-  }
-
-  private setupEventHandlers(): void {
-    if (!this.pc) return;
-
-    // binaryType 강제 설정
-    const forceArrayBuffer = () => {
-      // @ts-ignore
-      if (this.pc?._channel && this.pc._channel.binaryType !== 'arraybuffer') {
-        // @ts-ignore
-        this.pc._channel.binaryType = 'arraybuffer';
-      }
-    };
-
-    this.pc.on('signal', (data: SimplePeer.SignalData) => {
-      this.emit('signal', data);
-    });
-
-    this.pc.on('connect', () => {
-      forceArrayBuffer();
-      this.connected = true;
-      this.drainEmitted = false;
-      logInfo(`[Peer ${this.id}]`, 'Connected');
-      this.emit('connected', this.id);
-      this.setupChannelEvents();
-    });
-
-    this.pc.on('data', (data: any) => {
-      // Uint8Array -> ArrayBuffer 변환
-      const buffer = data instanceof Uint8Array
-        ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
-        : data;
-      this.emit('data', buffer);
-    });
-
-    this.pc.on('error', (error: Error) => {
-      logError(`[Peer ${this.id}]`, 'Error:', error);
-      this.emit('error', error);
-    });
-
-    this.pc.on('close', () => {
-      logInfo(`[Peer ${this.id}]`, 'Closed');
+  private handleClose() {
+    if (this.connected) {
       this.connected = false;
-      this.emit('close');
-    });
-  }
-
-  private setupChannelEvents(): void {
-    // @ts-ignore
-    const channel = this.pc?._channel as RTCDataChannel;
-    if (!channel) return;
-
-    channel.onbufferedamountlow = () => {
-      if (!this.drainEmitted && this.connected) {
-        this.drainEmitted = true;
-        this.emit('drain', this.id);
-        // 다음 drain 이벤트를 위해 리셋
-        setTimeout(() => { this.drainEmitted = false; }, 0);
-      }
-    };
-  }
-
-  /**
-   * 시그널링 데이터 처리 (offer/answer/ice-candidate)
-   */
-  public signal(data: SimplePeer.SignalData): void {
-    if (this.destroyed || !this.pc) {
-      logError(`[Peer ${this.id}]`, 'Cannot signal: peer destroyed');
-      return;
+      this.emit('close', null);
     }
-    this.pc.signal(data);
   }
 
-  /**
-   * 데이터 전송 (connected 상태일 때만)
-   */
-  public send(data: ArrayBuffer | string): void {
-    if (!this.connected || this.destroyed || !this.pc) {
-      // 연결되지 않은 상태에서는 조용히 무시 (throw하지 않음)
-      return;
-    }
-    
-    // @ts-ignore
-    const channel = this.pc._channel as RTCDataChannel;
-    if (!channel || channel.readyState !== 'open') {
-      return;
-    }
-
-    this.pc.send(data);
-  }
-
-  /**
-   * 현재 버퍼 크기 조회
-   */
-  public getBufferedAmount(): number {
-    if (!this.pc || this.destroyed) return 0;
-    // @ts-ignore
-    const channel = this.pc._channel as RTCDataChannel;
-    return channel?.bufferedAmount ?? 0;
-  }
-
-  /**
-   * 피어 상태 조회
-   */
-  public getState(): PeerState {
-    return {
-      id: this.id,
-      connected: this.connected,
-      bufferedAmount: this.getBufferedAmount(),
-      ready: this.ready
-    };
-  }
-
-  /**
-   * 피어 연결 정리
-   */
   public destroy(): void {
-    if (this.destroyed) return;
-    
-    this.destroyed = true;
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
     this.connected = false;
     this.ready = false;
-    
-    if (this.pc) {
-      this.pc.destroy();
-      this.pc = null;
-    }
-    
-    this.removeAllListeners();
-    logInfo(`[Peer ${this.id}]`, 'Destroyed');
-  }
 
-  /**
-   * 파괴 여부 확인
-   */
-  public isDestroyed(): boolean {
-    return this.destroyed;
+    try {
+      this.dataChannels.forEach(ch => ch.close());
+      this.pc?.close();
+    } catch (e) {
+      // ignore
+    }
+
+    this.pc = null;
+    this.dataChannels = [];
+    this.removeAllListeners();
+    logInfo(`[NativePeer ${this.id}]`, 'Destroyed');
   }
 }
