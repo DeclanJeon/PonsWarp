@@ -48,7 +48,9 @@ export class DirectFileWriter {
   // 🚀 [속도 개선] 배치 버퍼 설정 (메모리에 모았다가 한 번에 쓰기)
   private writeBuffer: Uint8Array[] = [];
   private currentBatchSize = 0;
-  private readonly BATCH_THRESHOLD = 2 * 1024 * 1024; // 2MB 단위로 디스크 기록 (안정성 우선)
+  // 🚀 [최적화] 디스크 I/O 배치 크기 상향
+  // 송신 측의 HIGH_WATER_MARK(12MB)에 맞춰 효율적인 쓰기 수행 (Context Switch 최소화)
+  private readonly BATCH_THRESHOLD = 8 * 1024 * 1024; // 8MB
   
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
   private pendingBytesInBuffer = 0;

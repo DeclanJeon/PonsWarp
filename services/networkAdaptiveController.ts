@@ -47,11 +47,11 @@ export interface TransferMetrics {
 
 export class NetworkAdaptiveController {
   private congestionState: CongestionState = {
-    mode: 'slow_start',
-    cwnd: 1024 * 1024,           // 🚀 초기 1MB로 증가 (더 공격적)
-    ssthresh: 8 * 1024 * 1024,   // 🚀 8MB로 증가
+    mode: 'congestion_avoidance', // 🚨 [수정] slow_start 건너뛰기
+    cwnd: MAX_BUFFERED_AMOUNT,    // 🚀 [수정] 초기 윈도우를 최대(16MB)로 설정 -> 4MB/s 제한 해제
+    ssthresh: MAX_BUFFERED_AMOUNT,
     estimatedBw: 0,
-    estimatedRtt: 50              // 🚀 초기 추정 50ms (낙관적)
+    estimatedRtt: 5               // 🚀 [수정] LAN 환경 가정 (5ms)
   };
 
   private metrics: TransferMetrics = {
@@ -68,9 +68,9 @@ export class NetworkAdaptiveController {
 
   private adaptiveParams: AdaptiveParams = {
     chunkSize: CHUNK_SIZE_MAX,
-    batchSize: 16,
+    batchSize: 128,              // 🚀 [수정] 배치를 처음부터 최대(128개, 약 16MB)로 고정
     sendRate: 0,
-    bufferTarget: MAX_BUFFERED_AMOUNT / 2
+    bufferTarget: MAX_BUFFERED_AMOUNT
   };
 
   private startTime = 0;
@@ -92,7 +92,7 @@ export class NetworkAdaptiveController {
   public start(): void {
     this.startTime = performance.now();
     this.lastUpdateTime = this.startTime;
-    logInfo('[NetworkController]', 'Started');
+    logInfo('[NetworkController]', 'Started (Aggressive Mode)');
   }
 
   public recordSend(bytes: number): void {
@@ -168,62 +168,31 @@ export class NetworkAdaptiveController {
   }
 
 
+  // 🚀 [핵심] 혼잡 제어 로직을 "LAN 환경"에 맞게 관대하게 변경
   private updateCongestionControl(bufferedAmount: number): void {
-    const utilization = bufferedAmount / MAX_BUFFERED_AMOUNT;
-    const { mode, cwnd, ssthresh } = this.congestionState;
+    const { lossRate } = this.metrics;
+    const { estimatedRtt } = this.congestionState;
 
-    if (utilization > 0.9) {
-      this.congestionState.ssthresh = Math.max(cwnd / 2, 256 * 1024);
-      this.congestionState.cwnd = this.congestionState.ssthresh;
-      this.congestionState.mode = 'congestion_avoidance';
-      this.consecutiveIncreases = 0;
-      logInfo('[NetworkController]', `Congestion: cwnd ${(cwnd/1024).toFixed(0)}KB -> ${(this.congestionState.cwnd/1024).toFixed(0)}KB`);
+    // 패킷 손실이 감지되어도 LAN에서는 무시하거나 아주 조금만 줄임
+    // 🚨 [수정] RTT가 200ms 이상 튀지 않는 한 윈도우를 줄이지 않음
+    if (estimatedRtt > 200) { // 아주 심각할 때만 90%로 축소 (기존 50% 축소 로직 제거)
+      this.congestionState.cwnd = Math.max(this.congestionState.cwnd * 0.9, 8 * 1024 * 1024);
       return;
     }
 
-    if (utilization < 0.5) {
-      if (mode === 'slow_start') {
-        if (cwnd < ssthresh) {
-          // 🚀 더 공격적인 Slow Start (2배 증가)
-          this.congestionState.cwnd = Math.min(cwnd * 2, ssthresh);
-        } else {
-          this.congestionState.mode = 'congestion_avoidance';
-        }
-      } else {
-        // 🚀 더 빠른 증가 (매번 증가, 128KB씩)
-        this.consecutiveIncreases++;
-        if (this.consecutiveIncreases >= 2) {
-          this.congestionState.cwnd = Math.min(cwnd + 128 * 1024, MAX_BUFFERED_AMOUNT * 2);
-          this.consecutiveIncreases = 0;
-        }
-      }
-    }
-
-    // 🚀 CWND 범위 확대 (최대 4MB까지)
-    this.congestionState.cwnd = Math.max(512 * 1024, Math.min(MAX_BUFFERED_AMOUNT * 2, this.congestionState.cwnd));
+    // 기본적으로 항상 최대 윈도우 유지 시도 (Speed Limit 해제)
+    this.congestionState.cwnd = MAX_BUFFERED_AMOUNT;
   }
 
   private updateAdaptiveParams(): void {
-    const { cwnd, estimatedRtt } = this.congestionState;
-
-    if (estimatedRtt < 50) {
-      this.adaptiveParams.chunkSize = CHUNK_SIZE_MAX;
-    } else if (estimatedRtt < 150) {
-      this.adaptiveParams.chunkSize = 64 * 1024;
-    } else {
-      this.adaptiveParams.chunkSize = 32 * 1024;
-    }
-
-    const optimalBatch = Math.floor(cwnd / this.adaptiveParams.chunkSize);
-    this.adaptiveParams.batchSize = Math.max(
-      BATCH_SIZE_MIN,
-      Math.min(BATCH_SIZE_MAX, optimalBatch)
-    );
+    // 🚀 [수정] 배치 사이즈 동적 계산 무시하고 항상 최대값 유지
+    this.adaptiveParams.chunkSize = CHUNK_SIZE_MAX;
+    this.adaptiveParams.batchSize = 128; // 128개 * 128KB = 16MB 배치
 
     this.adaptiveParams.sendRate = this.congestionState.estimatedBw > 0 
       ? this.congestionState.estimatedBw 
       : this.metrics.throughput;
-    this.adaptiveParams.bufferTarget = cwnd * 0.5;
+    this.adaptiveParams.bufferTarget = this.congestionState.cwnd * 0.8;
   }
 
   public canSend(currentBuffered: number): boolean {
@@ -244,11 +213,11 @@ export class NetworkAdaptiveController {
 
   public reset(): void {
     this.congestionState = {
-      mode: 'slow_start',
-      cwnd: 1024 * 1024,           // 🚀 초기 1MB
-      ssthresh: 8 * 1024 * 1024,   // 🚀 8MB
+      mode: 'congestion_avoidance',
+      cwnd: MAX_BUFFERED_AMOUNT,
+      ssthresh: MAX_BUFFERED_AMOUNT,
       estimatedBw: 0,
-      estimatedRtt: 50              // 🚀 초기 추정 50ms
+      estimatedRtt: 5
     };
 
     this.metrics = {
@@ -265,9 +234,9 @@ export class NetworkAdaptiveController {
 
     this.adaptiveParams = {
       chunkSize: CHUNK_SIZE_MAX,
-      batchSize: 16,
+      batchSize: 128,
       sendRate: 0,
-      bufferTarget: MAX_BUFFERED_AMOUNT / 2
+      bufferTarget: MAX_BUFFERED_AMOUNT
     };
 
     this.startTime = 0;

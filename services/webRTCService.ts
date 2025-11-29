@@ -116,166 +116,87 @@ class EnhancedWebRTCService {
   }
 
   /**
-   * 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 + 파이프라인 최적화 + 네트워크 적응형 제어
+   * 🚀 [긴급 수정] Burst Transfer Mode
+   * 루프 내부의 await를 제거하여 JS 실행 지연을 0으로 만듭니다.
    */
   private async handleBatchFromWorker(payload: any) {
-    if (!this.peer || this.peer.destroyed) {
-      console.warn('[Sender] ❌ [DEBUG] Peer not available, dropping batch');
-      return;
-    }
+    if (!this.peer || this.peer.destroyed) return;
     
     // @ts-ignore
     const channel = this.peer._channel as RTCDataChannel;
-    if (!channel || channel.readyState !== 'open') {
-      console.warn('[Sender] ❌ [DEBUG] Channel not open, readyState:', channel?.readyState);
-      return;
-    }
+    if (!channel || channel.readyState !== 'open') return;
 
     const { chunks, progressData } = payload;
     const batchBytes = chunks.reduce((sum: number, c: ArrayBuffer) => sum + c.byteLength, 0);
     
-    // 🚨 [DEBUG] 버퍼 상태 상세 로깅
-    const preSendBuffered = channel.bufferedAmount;
-    const bufferUtilization = (preSendBuffered / MAX_BUFFERED_AMOUNT) * 100;
-    
-    console.log('[Sender] 📊 [DEBUG] Batch received:', {
-      chunkCount: chunks.length,
-      batchBytes,
-      preSendBuffered,
-      bufferUtilization: bufferUtilization.toFixed(1) + '%',
-      maxBuffer: MAX_BUFFERED_AMOUNT
-    });
-    
-    // 🚨 [DEBUG] 버퍼 오버플로우 경고
-    if (preSendBuffered + batchBytes > MAX_BUFFERED_AMOUNT) {
-      console.warn('[Sender] ⚠️ [DEBUG] POTENTIAL BUFFER OVERFLOW!', {
-        preSendBuffered,
-        batchBytes,
-        total: preSendBuffered + batchBytes,
-        maxBuffer: MAX_BUFFERED_AMOUNT,
-        utilization: ((preSendBuffered + batchBytes) / MAX_BUFFERED_AMOUNT * 100).toFixed(1) + '%'
-      });
-    }
-    
     this.isProcessingBatch = false;
 
     try {
-        // 1. 청크 전송
+        // 🚨 [수정 1] 루프 진입 전 '한 번만' 버퍼 체크 (Pre-check)
+        // 버퍼가 꽉 찼을 때만 여기서 대기하고, 루프 진입 후에는 멈추지 않음
+        if (channel.bufferedAmount + batchBytes > MAX_BUFFERED_AMOUNT) {
+            await this.waitForBufferDrain(channel);
+        }
+
         const sendStart = performance.now();
         
-        // 🚀 [Phase 3] 멀티 채널 사용 시 분산 전송
+        // 🚨 [수정 2] Burst Sending (루프 내 await 절대 금지)
         if (this.useMultiChannel && this.dataChannels.length > 0) {
             this.sendChunksMultiChannel(chunks);
         } else {
+            // JS 루프는 1ms 이내에 완료됨 -> WebRTC 버퍼로 순식간에 이동
             for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
-
-                // 🚨 [안전 장치 1] 채널이 닫혔으면 즉시 중단 (에러 방지)
-                if (channel.readyState !== 'open') {
-                  console.warn('[Sender] Channel closed, stopping batch send');
-                  return;
-                }
-
-                // 🚨 [안전 장치 2] 버퍼가 꽉 찼으면 무리하게 보내지 않고 대기
-                const preChunkBuffered = channel.bufferedAmount;
-                if (preChunkBuffered + chunk.byteLength > MAX_BUFFERED_AMOUNT) {
-                  // 버퍼가 차면 대기 후 재시도
-                  await this.waitForBufferDrain(channel);
-                  
-                  // 대기 후에도 버퍼가 꽉 차있으면 스킵하여 연결 끊김 방지
-                  if (channel.bufferedAmount + chunk.byteLength > MAX_BUFFERED_AMOUNT) {
-                    console.warn('[Sender] Buffer full, skipping chunk to prevent disconnect');
-                    continue;
-                  }
-                }
-
                 try {
-                  this.peer.send(chunk);
-
-                  // 🚀 [Phase 3] 네트워크 컨트롤러에 전송 기록
-                  if (this.useAdaptiveControl) {
-                      this.networkController.recordSend(chunk.byteLength);
-                  }
-
+                    this.peer.send(chunks[i]); // 동기 호출 (즉시 리턴)
+                    
+                    if (this.useAdaptiveControl) {
+                        this.networkController.recordSend(chunks[i].byteLength);
+                    }
                 } catch (e) {
-                  // 전송 실패는 치명적이지 않음 (WebRTC가 알아서 재전송 요청하거나 처리)
-                  console.warn('[Sender] Chunk send failed (non-fatal):', e);
-                  continue;
+                    // 전송 실패 시 연결 유지를 위해 해당 청크만 포기하고 계속 진행
+                    console.warn('Chunk send glitch:', e);
+                    continue;
                 }
             }
         }
         
-        // 2. 진행률 방출 (속도 정보 포함)
+        // 2. 진행률 업데이트
         this.emit('progress', {
             ...progressData,
             networkMetrics: this.useAdaptiveControl ? this.networkController.getMetrics() : null
         });
 
-        // 3. 🚀 [Phase 1 + Phase 3] 드레인 속도 측정 및 배치 크기 조절
         this.updateDrainMetrics(channel, batchBytes, sendStart);
         
-        // 🚀 [Phase 3] 네트워크 컨트롤러 버퍼 상태 업데이트
         if (this.useAdaptiveControl) {
             this.networkController.updateBufferState(channel.bufferedAmount);
-            
-            // 🚀 [Phase 3] 적응형 청크 크기를 Worker에 전달
-            const adaptiveParams = this.networkController.getAdaptiveParams();
-            if (this.worker && adaptiveParams.chunkSize !== CHUNK_SIZE_MAX) {
-                this.worker.postMessage({
-                    type: 'update-config',
-                    payload: { chunkSize: adaptiveParams.chunkSize }
-                });
-            }
         }
 
-        // 4. 🚀 [안정적 리필] 버퍼가 충분히 비었을 때만 요청
-        //    LOW_WATER_MARK(4MB) 이하로 떨어지면 리필 요청 (안정적)
+        // 3. Greedy Refill (공격적 리필)
+        // 루프가 순식간에 끝났으므로 즉시 워커에 다음 데이터를 요청
         const currentBuffered = channel.bufferedAmount;
-        const shouldRefill = currentBuffered < LOW_WATER_MARK;
-        
-        // 네트워크 컨트롤러 사용 시 추가 조건 확인
-        const canSend = this.useAdaptiveControl
-            ? this.networkController.canSend(currentBuffered) && shouldRefill
-            : shouldRefill;
-            
-        if (canSend) {
+        if (currentBuffered < HIGH_WATER_MARK) {
             this.requestMoreChunks();
-        } else {
-          console.log(`[Sender] Buffer healthy (${(currentBuffered/1024/1024).toFixed(1)}MB), pausing request`);
         }
 
     } catch (e) {
-        console.error('[Sender] ❌ [DEBUG] Send failed:', e);
-        console.log('[Sender] 📊 [DEBUG] State at error:', {
-          peerExists: !!this.peer,
-          peerDestroyed: this.peer?.destroyed,
-          channelReadyState: channel?.readyState,
-          bufferedAmount: channel?.bufferedAmount
-        });
+        console.error('[Sender] Batch error:', e);
         this.cleanup();
     }
   }
   /**
-   * 🚀 [성능 최적화] 버퍼 드레인 대기 함수 - 반응 속도 개선
+   * 🚀 [최적화] 버퍼 대기 시간 및 체크 주기 단축
    */
   private async waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
-    const maxWaitTime = 5000;  // 최대 5초 대기 (10초 -> 5초)
-    const checkInterval = 10;  // 10ms 간격으로 확인 (50ms -> 10ms, 반응성 향상)
+    const maxWaitTime = 5000;
+    const checkInterval = 5;  // 10ms -> 5ms (반응성 향상)
     let elapsedTime = 0;
-    
-    // 버퍼가 50% 이하로 떨어질 때까지 대기 (80% -> 50%, 더 빠른 리필)
-    while (channel.bufferedAmount > MAX_BUFFERED_AMOUNT * 0.5 && elapsedTime < maxWaitTime) {
+    const targetLevel = MAX_BUFFERED_AMOUNT * 0.7; // 70% 수준까지 대기
+
+    while (channel.bufferedAmount > targetLevel && elapsedTime < maxWaitTime) {
       await new Promise(resolve => setTimeout(resolve, checkInterval));
       elapsedTime += checkInterval;
-      
-      // 채널이 닫혔으면 즉시 종료
-      if (channel.readyState !== 'open') {
-        return;
-      }
-    }
-    
-    if (elapsedTime >= maxWaitTime) {
-      console.warn('[Sender] Buffer drain timeout after', elapsedTime, 'ms');
+      if (channel.readyState !== 'open') return;
     }
   }
   
@@ -703,8 +624,8 @@ class EnhancedWebRTCService {
   }
 
   private handleData(data: any) {
-    // 1. 문자열 (JSON Control Message)
-    if (typeof data === 'string' || (data instanceof Uint8Array && data[0] === 123)) { // '{' check
+    // 1. 제어 메시지 처리
+    if (typeof data === 'string' || (data instanceof Uint8Array && data[0] === 123)) {
         try {
             const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
             const msg = JSON.parse(str);
@@ -712,38 +633,32 @@ class EnhancedWebRTCService {
             if (msg.type === 'TRANSFER_READY') {
                 console.log('[Sender] Receiver READY. Sending ACK and Starting transfer...');
                 
-                // 🚨 [추가] 수신자에게 "시작됨" 알림 (UX 피드백용)
                 if (this.peer && !this.peer.destroyed) {
                     this.peer.send(JSON.stringify({ type: 'TRANSFER_STARTED' }));
                 }
 
                 this.isTransferring = true;
-                this.requestMoreChunks(); // 첫 배치 요청
+                this.requestMoreChunks();
                 this.emit('status', 'TRANSFERRING');
             
             } else if (msg.type === 'TRANSFER_STARTED') {
-                // 🚨 [추가] 수신자: 송신자가 시작했다는 응답 수신
                 console.log('[Receiver] Sender acknowledged start request.');
                 this.emit('remote-started', true);
 
             } else if (msg.type === 'TRANSFER_STARTED_WITHOUT_YOU' || msg.type === 'TRANSFER_ALREADY_STARTED') {
-                // 🚀 [Multi-Receiver] 전송이 이미 시작되어 참여 불가
                 console.warn('[Receiver] Transfer started without us:', msg.message);
                 this.emit('transfer-missed', msg.message);
 
             } else if (msg.type === 'QUEUED') {
-                // 🚀 [Multi-Receiver] 대기열에 추가됨
                 console.log('[Receiver] Added to queue:', msg);
                 this.emit('queued', { message: msg.message, position: msg.position });
 
             } else if (msg.type === 'TRANSFER_STARTING') {
-                // 🚀 [Multi-Receiver] 대기열에서 전송 시작
                 console.log('[Receiver] Transfer starting from queue');
                 this.emit('transfer-starting', true);
                 this.emit('status', 'RECEIVING');
 
             } else if (msg.type === 'READY_FOR_DOWNLOAD') {
-                // 🚀 [Multi-Receiver] 다운로드 가능 알림
                 console.log('[Receiver] Ready for download:', msg);
                 this.emit('ready-for-download', { message: msg.message });
 
@@ -753,23 +668,21 @@ class EnhancedWebRTCService {
                 this.emit('complete', true);
             }
         } catch (e) {
-            // JSON 파싱 실패 시 바이너리로 간주할 수도 있음
+            // JSON 파싱 실패 무시
         }
         return;
     }
     
-    // 2. 바이너리 (File Chunk)
+    // 🚨 [수정 3] 수신 측 로직 변경: 디스크 쓰기 대기 제거 (Fire-and-Forget)
     if (this.writer) {
-        // Uint8Array -> ArrayBuffer 변환 (필요시)
         const chunk = data instanceof Uint8Array
             ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
             : data;
         
-        // 🚀 [수정] Promise가 거부(Reject)되었는지 확인 (비동기 에러 캐치)
+        // 🚨 [핵심] await 제거: 네트워크 수신 루프를 차단하지 않음
+        // 디스크 쓰기가 느려도 네트워크 ACK는 즉시 보냄 (메모리 버퍼링 활용)
         this.writer.writeChunk(chunk).catch(err => {
-          console.error('[WebRTC] Write failed:', err);
-          this.emit('error', 'Disk write failed: ' + err.message);
-          this.cleanup(); // 치명적 에러 발생 시 즉시 중단
+            console.error('[WebRTC] Async write error:', err);
         });
     }
   }

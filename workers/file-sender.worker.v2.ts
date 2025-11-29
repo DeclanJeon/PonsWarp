@@ -435,7 +435,7 @@ async function createNextChunk(): Promise<ArrayBuffer | null> {
 }
 
 async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
-  if (state.files.length === 0) return null; // 방어 코드
+  if (state.files.length === 0) return null;
   const file = state.files[0];
   
   if (state.currentFileOffset >= file.size) {
@@ -447,11 +447,20 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   const start = state.currentFileOffset;
   const end = Math.min(start + currentChunkSize, file.size);
 
+  // 🚀 [핵심 수정] 오프셋 업데이트를 '먼저' 수행하여 Race Condition 방지
+  // 기존에는 await 뒤에 있어서, await 동안 다른 작업이 동일한 offset을 읽어버림
+  state.currentFileOffset = end;
+
   try {
     const blob = file.slice(start, end);
     const buffer = await blob.arrayBuffer();
+    
+    // 🚨 [안전 장치] 읽은 데이터가 없으면 종료 처리
+    if (buffer.byteLength === 0) {
+      return null;
+    }
+    
     const packet = createPacket(new Uint8Array(buffer), buffer.byteLength);
-    state.currentFileOffset = end;
     return packet;
   } catch (e) {
     console.error('[Worker] Single chunk error:', e);
@@ -522,6 +531,26 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
 }
 
 function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
+  // 🚨 [추가] 총 전송량이 전체 크기를 초과하려고 하면 차단 (Single Mode일 때만)
+  if (state.mode === 'single' && state.manifest) {
+    if (state.totalBytesSent >= state.manifest.totalSize) {
+      console.warn('[Worker] Blocking packet: already reached totalSize');
+      return new ArrayBuffer(0);
+    }
+    
+    // 마지막 청크가 크기를 초과하는 경우 잘라내기 (Truncate)
+    if (state.totalBytesSent + dataSize > state.manifest.totalSize) {
+      const remaining = state.manifest.totalSize - state.totalBytesSent;
+      if (remaining <= 0) {
+        console.warn('[Worker] Blocking packet: no remaining bytes');
+        return new ArrayBuffer(0);
+      }
+      console.warn(`[Worker] Truncating packet: ${dataSize} -> ${remaining} bytes`);
+      data = data.subarray(0, remaining);
+      dataSize = remaining;
+    }
+  }
+
   const packet = chunkPool.acquire();
   const view = new DataView(packet.buffer);
 
