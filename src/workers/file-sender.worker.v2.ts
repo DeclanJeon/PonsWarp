@@ -1,13 +1,30 @@
 /// <reference lib="webworker" />
 declare const self: DedicatedWorkerGlobalScope;
 
-import { Zip, ZipPassThrough } from 'fflate';
+// 🚀 [Step 4] WASM 모듈 import
+// 🚀 [Step 4] WASM 모듈 import
+// 동적 import를 사용하여 워커 환경에서의 모듈 로딩 문제 해결
+let initWasm: any;
+let ZipEngineClass: any;
+let init_wasm: any;
+
+async function loadWasmModule() {
+  try {
+    const wasmModule = await import('../wasm-pkg/ponswarp_wasm.js') as any;
+    initWasm = wasmModule.default;
+    ZipEngineClass = wasmModule.ZipEngine;
+    init_wasm = wasmModule.init_wasm;
+    console.log('[Worker] WASM module loaded successfully');
+  } catch (error) {
+    console.error('[Worker] Failed to load WASM module:', error);
+    throw error;
+  }
+}
 
 // ============================================================================
-// 🚀 Sender Worker V2 (Final Optimized)
-// - Race Condition 방지: init 완료 전 요청 무시
-// - Packet Flooding 방지: 64KB 이상 모아서 전송 (Aggregation)
-// - Memory Protection: ZIP Backpressure 구현 (High/Low Water Mark)
+// 🚀 Sender Worker V3 (WASM Powered)
+// - Core: Rust-based ZipEngine (No fflate)
+// - Features: Zero-copy flushing, Aggregation, Backpressure
 // ============================================================================
 
 const CHUNK_SIZE_MIN = 16 * 1024;
@@ -16,11 +33,11 @@ let CHUNK_SIZE = CHUNK_SIZE_MAX;
 
 const BUFFER_SIZE = 8 * 1024 * 1024; // 8MB sender 버퍼
 const POOL_SIZE = 128; // 풀 사이즈
-const PREFETCH_BATCH = 16; // 한 번에 프리페치하는 양
+const PREFETCH_BATCH = 16; 
 
-// 🚀 [추가] ZIP 백프레셔 임계값
-const ZIP_QUEUE_HIGH_WATER_MARK = 32 * 1024 * 1024; // 32MB 초과 시 읽기 중단
-const ZIP_QUEUE_LOW_WATER_MARK = 8 * 1024 * 1024;   // 8MB 미만 시 읽기 재개
+// ZIP 백프레셔 임계값
+const ZIP_QUEUE_HIGH_WATER_MARK = 32 * 1024 * 1024; 
+const ZIP_QUEUE_LOW_WATER_MARK = 8 * 1024 * 1024;   
 
 interface AdaptiveConfig {
   chunkSize: number;
@@ -28,6 +45,7 @@ interface AdaptiveConfig {
   enableAdaptive: boolean;
 }
 
+// --- ChunkPool & DoubleBuffer (기존 로직 유지) ---
 class ChunkPool {
   private pool: Uint8Array[] = [];
   private readonly chunkSize: number;
@@ -140,6 +158,8 @@ interface WorkerState {
   startTime: number;
   isInitialized: boolean;
   isCompleted: boolean;
+  // 🚀 WASM 엔진 추가
+  zipEngine: any | null;
 }
 
 const state: WorkerState = {
@@ -153,7 +173,8 @@ const state: WorkerState = {
   totalBytesSent: 0,
   startTime: 0,
   isInitialized: false,
-  isCompleted: false
+  isCompleted: false,
+  zipEngine: null
 };
 
 const adaptiveConfig: AdaptiveConfig = {
@@ -167,7 +188,7 @@ const doubleBuffer = new DoubleBuffer(BUFFER_SIZE);
 let isTransferActive = false;
 let prefetchPromise: Promise<void> | null = null;
 
-// 🚀 [추가] 백프레셔 상태 변수
+// 백프레셔 상태 변수
 let isZipPaused = false;
 let resolveZipResume: (() => void) | null = null;
 let currentZipQueueSize = 0;
@@ -205,7 +226,6 @@ function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
 }
 
 async function initWorker(payload: { files: File[]; manifest: any }) {
-  // 상태 초기화
   resetWorker();
   
   state.files = payload.files;
@@ -213,7 +233,7 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   state.chunkSequence = 0;
   state.totalBytesSent = 0;
   state.startTime = 0;
-  state.isInitialized = true; // 플래그 설정
+  state.isInitialized = true;
   state.isCompleted = false;
   state.currentFileOffset = 0;
 
@@ -224,13 +244,24 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   const fileCount = state.files.length;
   console.log('[Worker] Initializing for', fileCount, 'files');
 
+  // 🚀 WASM 초기화
+  try {
+    await loadWasmModule();
+    await initWasm();
+    init_wasm();
+    console.log('[Worker] WASM module loaded');
+  } catch (e) {
+    console.error('[Worker] WASM load failed:', e);
+    self.postMessage({ type: 'error', payload: { message: 'WASM load failed' } });
+    return;
+  }
+
   if (fileCount === 1) {
     state.mode = 'single';
   } else {
     state.mode = 'zip';
     try {
       await initZipStream();
-      // ZIP 모드 초기 프리패치 (데이터 준비)
       await prefetchBatch();
     } catch (error: any) {
       console.error('[Worker] ZIP init failed:', error);
@@ -246,45 +277,39 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
 // ZIP 소스 읽기 진행률
 let zipSourceBytesRead = 0;
 
+/**
+ * 🚀 [Core] Rust ZipEngine 기반 스트리밍
+ */
 async function initZipStream() {
-  // 상태 초기화
   zipSourceBytesRead = 0;
   currentZipQueueSize = 0;
   isZipPaused = false;
   resolveZipResume = null;
 
-  const zip = new Zip();
-  let zipFinalized = false;
-  let hasError = false;
+  // WASM 엔진 생성
+  state.zipEngine = new ZipEngineClass();
+  
   const zipDataQueue: Uint8Array[] = [];
   let resolveDataAvailable: (() => void) | null = null;
-  
-  zip.ondata = (err, data, final) => {
-    if (err) {
-      console.error('[Worker] ZIP error:', err);
-      hasError = true;
-      return;
-    }
-    if (data && data.length > 0) {
+  let zipFinalized = false;
+  let hasError = false;
+
+  // 헬퍼: 압축 데이터를 큐에 넣고 알림
+  const pushToQueue = (data: Uint8Array) => {
+    if (data.length > 0) {
       zipDataQueue.push(data);
-      currentZipQueueSize += data.length; // 큐 크기 증가
-      if (resolveDataAvailable) {
-        resolveDataAvailable();
-        resolveDataAvailable = null;
-      }
-    }
-    if (final) {
-      console.log('[Worker] ZIP stream finalized');
-      zipFinalized = true;
+      currentZipQueueSize += data.length;
       if (resolveDataAvailable) {
         resolveDataAvailable();
         resolveDataAvailable = null;
       }
     }
   };
-  
-  // 🚀 [백프레셔 적용] 파일 처리 루프
+
+  // 파일 처리 루프 (Rust Engine 사용)
   const processFilesAsync = async () => {
+    if (!state.zipEngine) return;
+
     try {
       for (let i = 0; i < state.files.length; i++) {
         if (!isTransferActive) break;
@@ -295,13 +320,13 @@ async function initZipStream() {
             filePath = state.manifest.files[i].path;
         }
         
-        const entry = new ZipPassThrough(filePath);
-        zip.add(entry);
+        // 1. Rust에 새 파일 시작 알림
+        state.zipEngine.start_file(filePath);
         
         const reader = file.stream().getReader();
         try {
           while (true) {
-            // 🚨 High Water Mark 초과 시 파일 읽기 일시 중지
+            // Backpressure 체크
             if (currentZipQueueSize > ZIP_QUEUE_HIGH_WATER_MARK) {
               isZipPaused = true;
               await new Promise<void>(resolve => { resolveZipResume = resolve; });
@@ -310,32 +335,55 @@ async function initZipStream() {
 
             const { done, value } = await reader.read();
             if (done) break;
+            
             zipSourceBytesRead += value.length;
-            entry.push(value, false);
+            
+            // 2. Rust에 데이터 주입
+            state.zipEngine.write_data(value);
+            
+            // 3. 압축된 데이터 회수 (Streaming Flush)
+            const compressedChunk = state.zipEngine.flush();
+            pushToQueue(compressedChunk);
           }
-          entry.push(new Uint8Array(0), true);
-        } catch (e) {
-          console.error('[Worker] File read error:', filePath, e);
-          try { entry.push(new Uint8Array(0), true); } catch(err) {}
         } finally {
           reader.releaseLock();
         }
       }
-      zip.end();
+      
+      // 4. 모든 파일 처리 후 마무리 (Central Directory)
+      if (isTransferActive && state.zipEngine) {
+        const finalChunk = state.zipEngine.finish();
+        pushToQueue(finalChunk);
+        
+        console.log('[Worker] ZIP stream finalized (WASM)');
+        zipFinalized = true;
+        
+        // 엔진 메모리 해제
+        state.zipEngine.free();
+        state.zipEngine = null;
+        
+        if (resolveDataAvailable) {
+          resolveDataAvailable();
+          resolveDataAvailable = null;
+        }
+      }
     } catch (e) {
       console.error('[Worker] Fatal ZIP error:', e);
       hasError = true;
+      if (state.zipEngine) {
+        state.zipEngine.free();
+        state.zipEngine = null;
+      }
     }
   };
   
+  // ReadableStream 생성 (Consumer용)
   state.zipStream = new ReadableStream({
     async pull(controller) {
-      // 큐에서 데이터 소비 시 크기 감소 및 Resume 체크 함수
       const consumeAndCheckResume = (chunk: Uint8Array) => {
         currentZipQueueSize -= chunk.length;
         controller.enqueue(chunk);
         
-        // 🚨 Low Water Mark 도달 시 읽기 재개
         if (isZipPaused && currentZipQueueSize < ZIP_QUEUE_LOW_WATER_MARK) {
           if (resolveZipResume) {
             resolveZipResume();
@@ -370,17 +418,13 @@ async function initZipStream() {
   });
   
   state.zipReader = state.zipStream.getReader();
-  console.log('[Worker] ✅ ZIP stream reader created with Backpressure');
   processFilesAsync();
   
-  // 🚀 [성능 최적화] 초기 대기 로직 개선 - 50ms -> 1ms로 단축
-  // 데이터가 준비될 때까지 기다리되, 반응 속도 극대화
+  // 초기 데이터 대기 (Fast Start)
   const waitStart = Date.now();
   while (zipDataQueue.length === 0 && !zipFinalized && !hasError && (Date.now() - waitStart) < 2000) {
-    // 1ms 대기는 이벤트 루프를 한 텀 쉬게 하여 CPU 독점을 막으면서도 빠르게 실행
     await new Promise(resolve => setTimeout(resolve, 1));
   }
-  console.log('[Worker] ✅ ZIP stream ready, initial queue size:', zipDataQueue.length);
 }
 
 function resetWorker() {
@@ -389,8 +433,15 @@ function resetWorker() {
     state.zipReader.cancel();
     state.zipReader = null;
   }
+  
+  // 🚀 WASM 엔진 메모리 정리
+  if (state.zipEngine) {
+    try {
+        state.zipEngine.free();
+    } catch(e) {}
+    state.zipEngine = null;
+  }
 
-  // 백프레셔 초기화
   if (resolveZipResume) {
     resolveZipResume();
     resolveZipResume = null;
@@ -400,8 +451,8 @@ function resetWorker() {
 
   state.isInitialized = false;
   state.isCompleted = false;
-  
   state.files = [];
+  
   chunkPool.clear();
   doubleBuffer.clear();
   zipBuffer = null;
@@ -447,28 +498,21 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   const start = state.currentFileOffset;
   const end = Math.min(start + currentChunkSize, file.size);
 
-  // 🚀 [핵심 수정] 오프셋 업데이트를 '먼저' 수행하여 Race Condition 방지
-  // 기존에는 await 뒤에 있어서, await 동안 다른 작업이 동일한 offset을 읽어버림
   state.currentFileOffset = end;
 
   try {
     const blob = file.slice(start, end);
     const buffer = await blob.arrayBuffer();
     
-    // 🚨 [안전 장치] 읽은 데이터가 없으면 종료 처리
-    if (buffer.byteLength === 0) {
-      return null;
-    }
+    if (buffer.byteLength === 0) return null;
     
-    const packet = createPacket(new Uint8Array(buffer), buffer.byteLength);
-    return packet;
+    return createPacket(new Uint8Array(buffer), buffer.byteLength);
   } catch (e) {
     console.error('[Worker] Single chunk error:', e);
     return null;
   }
 }
 
-// 🚀 [핵심] ZIP 청크 병합 (Aggregation)
 let zipBuffer: Uint8Array | null = null;
 
 async function createZipChunk(): Promise<ArrayBuffer | null> {
@@ -479,7 +523,6 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
 
   const targetChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
 
-  // 1. 버퍼에 데이터가 충분하면 바로 반환
   if (zipBuffer && zipBuffer.length >= targetChunkSize) {
     const chunkData = zipBuffer.slice(0, targetChunkSize);
     const remaining = zipBuffer.slice(targetChunkSize);
@@ -487,13 +530,11 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
     return createPacket(chunkData, chunkData.length);
   }
 
-  // 2. 버퍼가 부족하면 스트림에서 읽어서 채움 (Aggregation)
   while (true) {
     try {
       const { done, value } = await state.zipReader.read();
 
       if (done) {
-        // 스트림 끝: 남은 버퍼 털어내기
         if (zipBuffer && zipBuffer.length > 0) {
           const chunkData = zipBuffer;
           zipBuffer = null;
@@ -504,7 +545,6 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
       }
 
       if (value && value.length > 0) {
-        // 데이터 병합
         if (zipBuffer) {
           const newBuffer = new Uint8Array(zipBuffer.length + value.length);
           newBuffer.set(zipBuffer);
@@ -514,7 +554,6 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
           zipBuffer = value;
         }
 
-        // 목표 크기 도달 확인
         if (zipBuffer.length >= targetChunkSize) {
           const chunkData = zipBuffer.slice(0, targetChunkSize);
           const remaining = zipBuffer.slice(targetChunkSize);
@@ -531,21 +570,12 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
 }
 
 function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
-  // 🚨 [추가] 총 전송량이 전체 크기를 초과하려고 하면 차단 (Single Mode일 때만)
+  // Single File 모드 크기 제한 체크
   if (state.mode === 'single' && state.manifest) {
-    if (state.totalBytesSent >= state.manifest.totalSize) {
-      console.warn('[Worker] Blocking packet: already reached totalSize');
-      return new ArrayBuffer(0);
-    }
-    
-    // 마지막 청크가 크기를 초과하는 경우 잘라내기 (Truncate)
+    if (state.totalBytesSent >= state.manifest.totalSize) return new ArrayBuffer(0);
     if (state.totalBytesSent + dataSize > state.manifest.totalSize) {
       const remaining = state.manifest.totalSize - state.totalBytesSent;
-      if (remaining <= 0) {
-        console.warn('[Worker] Blocking packet: no remaining bytes');
-        return new ArrayBuffer(0);
-      }
-      console.warn(`[Worker] Truncating packet: ${dataSize} -> ${remaining} bytes`);
+      if (remaining <= 0) return new ArrayBuffer(0);
       data = data.subarray(0, remaining);
       dataSize = remaining;
     }
@@ -563,7 +593,6 @@ function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
   packet.set(data, 18);
   state.totalBytesSent += dataSize;
 
-  // Transferable 복사본 생성
   const result = new ArrayBuffer(18 + dataSize);
   new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
   chunkPool.release(packet);
@@ -572,24 +601,20 @@ function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
 }
 
 function processBatch(requestedCount: number) {
-  // 🚨 [FIX] 초기화되지 않았으면 처리하지 않음 (Race Condition 방지)
-  if (!state.isInitialized) {
-    console.warn('[Worker] Ignored process-batch request: Worker not initialized');
-    return;
-  }
+  if (!state.isInitialized) return;
 
   if (state.startTime === 0) state.startTime = Date.now();
   if (doubleBuffer.getActiveSize() === 0) doubleBuffer.swap();
 
   const chunks = doubleBuffer.takeFromActive(requestedCount);
   
-  // 진행률 계산
   const elapsed = (Date.now() - state.startTime) / 1000;
   const speed = elapsed > 0 ? state.totalBytesSent / elapsed : 0;
   let progress = 0;
   const totalSize = state.manifest?.totalSize || 0;
   
   if (state.mode === 'zip') {
+    // ZIP 모드는 소스 읽기 기준으로 진행률 추정 (압축률 변동성 보정)
     progress = totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
   } else {
     progress = totalSize > 0 ? Math.min(100, (state.totalBytesSent / totalSize) * 100) : 0;
@@ -623,7 +648,6 @@ function processBatch(requestedCount: number) {
 }
 
 async function createAndSendImmediate(count: number) {
-  // 🚨 [FIX] 초기화 체크
   if (!state.isInitialized) return;
 
   const chunks: ArrayBuffer[] = [];

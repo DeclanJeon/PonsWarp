@@ -61,7 +61,10 @@ export default defineConfig(({ mode }) => {
       },
       worker: {
         format: 'es',
-        plugins: () => [wasm(), topLevelAwait()] // 워커 내부에서도 WASM 사용 가능하도록 설정
+        plugins: () => [wasm(), topLevelAwait()], // 워커 내부에서도 WASM 사용 가능하도록 설정
+        rollupOptions: {
+          external: ['../wasm-pkg/ponswarp_wasm']
+        }
       },
       optimizeDeps: {
         exclude: ['ponswarp-wasm'], // 🚀 WASM 패키지는 최적화 제외
