@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
       publicDir: 'public',
       build: {
         rollupOptions: {
-          input: path.resolve(__dirname, 'src/index.html')
+          input: path.resolve(__dirname, 'index.html')
         }
       },
       server: {

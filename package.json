@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "npm run build:wasm && vite",
     "build": "npm run build:wasm && vite build",
-    "build:wasm": "cd wasm && wasm-pack build --target web --out-dir ../src/wasm-pkg",
+    "build:wasm": "cd ../wasm && wasm-pack build --target web --out-dir ../ponswarp/src/wasm-pkg",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
