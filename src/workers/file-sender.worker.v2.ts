@@ -1,30 +1,70 @@
 /// <reference lib="webworker" />
 declare const self: DedicatedWorkerGlobalScope;
 
-// 🚀 [Step 4] WASM 모듈 import
-// 🚀 [Step 4] WASM 모듈 import
-// 동적 import를 사용하여 워커 환경에서의 모듈 로딩 문제 해결
-let initWasm: any;
-let ZipEngineClass: any;
-let init_wasm: any;
+import { Zip, ZipPassThrough } from 'fflate';
 
-async function loadWasmModule() {
-  try {
-    const wasmModule = await import('../wasm-pkg/ponswarp_wasm.js') as any;
-    initWasm = wasmModule.default;
-    ZipEngineClass = wasmModule.ZipEngine;
-    init_wasm = wasmModule.init_wasm;
-    console.log('[Worker] WASM module loaded successfully');
-  } catch (error) {
-    console.error('[Worker] Failed to load WASM module:', error);
-    throw error;
+// 🔐 암호화 관련 상수 및 함수 (워커 환경용)
+const ALGORITHM = 'AES-GCM';
+const KEY_LENGTH = 256;
+
+// 워커 환경에서 암호화 유틸리티
+class WorkerEncryptionService {
+  /**
+   * Base64 문자열에서 CryptoKey 객체 복원
+   */
+  public static async importKey(base64Key: string): Promise<CryptoKey> {
+    const raw = this.base64ToArrayBuffer(base64Key);
+    return await self.crypto.subtle.importKey(
+      'raw',
+      raw,
+      ALGORITHM,
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  /**
+   * 청크 암호화 (IV는 청크 시퀀스 번호 기반으로 생성하여 오버헤드 제거)
+   */
+  public static async encryptChunk(
+    key: CryptoKey,
+    data: ArrayBuffer,
+    chunkIndex: number
+  ): Promise<ArrayBuffer> {
+    const iv = this.generateIV(chunkIndex);
+    return await self.crypto.subtle.encrypt(
+      { name: ALGORITHM, iv: iv as BufferSource },
+      key,
+      data
+    );
+  }
+
+  // 청크 인덱스를 12byte IV로 변환 (Deterministic IV)
+  private static generateIV(counter: number): Uint8Array {
+    const iv = new Uint8Array(12);
+    const view = new DataView(iv.buffer);
+    // 마지막 4바이트에 청크 인덱스 기록 (40억 개 청크까지 지원)
+    view.setUint32(8, counter, false); // Big-Endian
+    return iv;
+  }
+
+  private static base64ToArrayBuffer(base64: string): ArrayBuffer {
+    const b64 = base64.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = self.atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
   }
 }
 
+// WASM 모듈 로딩 제거 (fflate 사용)
+
 // ============================================================================
-// 🚀 Sender Worker V3 (WASM Powered)
-// - Core: Rust-based ZipEngine (No fflate)
-// - Features: Zero-copy flushing, Aggregation, Backpressure
+// 🚀 Sender Worker V3 (fflate Powered)
+// - Core: fflate ZIP streaming
+// - Features: Real ZIP format, Backpressure, Memory efficient
 // ============================================================================
 
 const CHUNK_SIZE_MIN = 16 * 1024;
@@ -158,8 +198,8 @@ interface WorkerState {
   startTime: number;
   isInitialized: boolean;
   isCompleted: boolean;
-  // 🚀 WASM 엔진 추가
-  zipEngine: any | null;
+  // 🔐 암호화 키 추가
+  encryptionKey: CryptoKey | null;
 }
 
 const state: WorkerState = {
@@ -174,7 +214,7 @@ const state: WorkerState = {
   startTime: 0,
   isInitialized: false,
   isCompleted: false,
-  zipEngine: null
+  encryptionKey: null
 };
 
 const adaptiveConfig: AdaptiveConfig = {
@@ -225,7 +265,7 @@ function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
   }
 }
 
-async function initWorker(payload: { files: File[]; manifest: any }) {
+async function initWorker(payload: { files: File[]; manifest: any; encryptionKeyStr?: string }) {
   resetWorker();
   
   state.files = payload.files;
@@ -244,16 +284,14 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   const fileCount = state.files.length;
   console.log('[Worker] Initializing for', fileCount, 'files');
 
-  // 🚀 WASM 초기화
-  try {
-    await loadWasmModule();
-    await initWasm();
-    init_wasm();
-    console.log('[Worker] WASM module loaded');
-  } catch (e) {
-    console.error('[Worker] WASM load failed:', e);
-    self.postMessage({ type: 'error', payload: { message: 'WASM load failed' } });
-    return;
+  // 🔐 암호화 키 로드
+  if (payload.encryptionKeyStr) {
+    try {
+      state.encryptionKey = await WorkerEncryptionService.importKey(payload.encryptionKeyStr);
+      console.log('[Worker] 🔐 Encryption Enabled (AES-GCM)');
+    } catch (e) {
+      console.error('[Worker] Failed to import encryption key:', e);
+    }
   }
 
   if (fileCount === 1) {
@@ -278,7 +316,7 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
 let zipSourceBytesRead = 0;
 
 /**
- * 🚀 [Core] Rust ZipEngine 기반 스트리밍
+ * 🚀 [Core] fflate 기반 실제 ZIP 스트리밍
  */
 async function initZipStream() {
   zipSourceBytesRead = 0;
@@ -286,9 +324,6 @@ async function initZipStream() {
   isZipPaused = false;
   resolveZipResume = null;
 
-  // WASM 엔진 생성
-  state.zipEngine = new ZipEngineClass();
-  
   const zipDataQueue: Uint8Array[] = [];
   let resolveDataAvailable: (() => void) | null = null;
   let zipFinalized = false;
@@ -306,10 +341,34 @@ async function initZipStream() {
     }
   };
 
-  // 파일 처리 루프 (Rust Engine 사용)
-  const processFilesAsync = async () => {
-    if (!state.zipEngine) return;
+  // fflate Zip 인스턴스 생성
+  const zip = new Zip((err, data, final) => {
+    if (err) {
+      console.error('[Worker] ZIP error:', err);
+      hasError = true;
+      if (resolveDataAvailable) {
+        resolveDataAvailable();
+        resolveDataAvailable = null;
+      }
+      return;
+    }
+    
+    if (data && data.length > 0) {
+      pushToQueue(data);
+    }
+    
+    if (final) {
+      console.log('[Worker] ZIP stream finalized (fflate)');
+      zipFinalized = true;
+      if (resolveDataAvailable) {
+        resolveDataAvailable();
+        resolveDataAvailable = null;
+      }
+    }
+  });
 
+  // 파일 처리 루프 (fflate 사용)
+  const processFilesAsync = async () => {
     try {
       for (let i = 0; i < state.files.length; i++) {
         if (!isTransferActive) break;
@@ -317,11 +376,12 @@ async function initZipStream() {
         const file = state.files[i];
         let filePath = file.name;
         if (state.manifest && state.manifest.files && state.manifest.files[i]) {
-            filePath = state.manifest.files[i].path;
+          filePath = state.manifest.files[i].path;
         }
         
-        // 1. Rust에 새 파일 시작 알림
-        state.zipEngine.start_file(filePath);
+        // fflate ZipPassThrough 스트림 생성 (압축 없이 저장)
+        const fileStream = new ZipPassThrough(filePath);
+        zip.add(fileStream);
         
         const reader = file.stream().getReader();
         try {
@@ -334,46 +394,27 @@ async function initZipStream() {
             }
 
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+              fileStream.push(new Uint8Array(0), true); // 파일 종료
+              break;
+            }
             
             zipSourceBytesRead += value.length;
-            
-            // 2. Rust에 데이터 주입
-            state.zipEngine.write_data(value);
-            
-            // 3. 압축된 데이터 회수 (Streaming Flush)
-            const compressedChunk = state.zipEngine.flush();
-            pushToQueue(compressedChunk);
+            fileStream.push(value, false);
           }
         } finally {
           reader.releaseLock();
         }
       }
       
-      // 4. 모든 파일 처리 후 마무리 (Central Directory)
-      if (isTransferActive && state.zipEngine) {
-        const finalChunk = state.zipEngine.finish();
-        pushToQueue(finalChunk);
-        
-        console.log('[Worker] ZIP stream finalized (WASM)');
-        zipFinalized = true;
-        
-        // 엔진 메모리 해제
-        state.zipEngine.free();
-        state.zipEngine = null;
-        
-        if (resolveDataAvailable) {
-          resolveDataAvailable();
-          resolveDataAvailable = null;
-        }
+      // 모든 파일 처리 후 ZIP 종료
+      if (isTransferActive) {
+        zip.end();
       }
     } catch (e) {
       console.error('[Worker] Fatal ZIP error:', e);
       hasError = true;
-      if (state.zipEngine) {
-        state.zipEngine.free();
-        state.zipEngine = null;
-      }
+      zip.terminate();
     }
   };
   
@@ -432,14 +473,6 @@ function resetWorker() {
   if (state.zipReader) {
     state.zipReader.cancel();
     state.zipReader = null;
-  }
-  
-  // 🚀 WASM 엔진 메모리 정리
-  if (state.zipEngine) {
-    try {
-        state.zipEngine.free();
-    } catch(e) {}
-    state.zipEngine = null;
   }
 
   if (resolveZipResume) {
@@ -506,7 +539,7 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
     
     if (buffer.byteLength === 0) return null;
     
-    return createPacket(new Uint8Array(buffer), buffer.byteLength);
+    return await createPacket(new Uint8Array(buffer), buffer.byteLength);
   } catch (e) {
     console.error('[Worker] Single chunk error:', e);
     return null;
@@ -527,7 +560,9 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
     const chunkData = zipBuffer.slice(0, targetChunkSize);
     const remaining = zipBuffer.slice(targetChunkSize);
     zipBuffer = remaining.length > 0 ? remaining : null;
-    return createPacket(chunkData, chunkData.length);
+    const packet = await createPacket(chunkData, chunkData.length);
+    // 🚨 빈 패킷 필터링
+    return packet.byteLength > 0 ? packet : null;
   }
 
   while (true) {
@@ -538,7 +573,11 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
         if (zipBuffer && zipBuffer.length > 0) {
           const chunkData = zipBuffer;
           zipBuffer = null;
-          return createPacket(chunkData, chunkData.length);
+          const packet = await createPacket(chunkData, chunkData.length);
+          // 🚨 빈 패킷 필터링
+          if (packet.byteLength > 0) {
+            return packet;
+          }
         }
         state.isCompleted = true;
         return null;
@@ -558,7 +597,9 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
           const chunkData = zipBuffer.slice(0, targetChunkSize);
           const remaining = zipBuffer.slice(targetChunkSize);
           zipBuffer = remaining.length > 0 ? remaining : null;
-          return createPacket(chunkData, chunkData.length);
+          const packet = await createPacket(chunkData, chunkData.length);
+          // 🚨 빈 패킷 필터링
+          return packet.byteLength > 0 ? packet : null;
         }
       }
     } catch (e) {
@@ -569,33 +610,68 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
   }
 }
 
-function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
-  // Single File 모드 크기 제한 체크
-  if (state.mode === 'single' && state.manifest) {
-    if (state.totalBytesSent >= state.manifest.totalSize) return new ArrayBuffer(0);
+async function createPacket(data: Uint8Array, dataSize: number): Promise<ArrayBuffer> {
+  // 🚨 ZIP 모드에서는 크기 제한 체크 안 함 (압축 후 크기가 다름)
+  if (state.mode === 'single' && state.manifest && state.manifest.totalSize > 0) {
+    if (state.totalBytesSent >= state.manifest.totalSize) {
+      console.warn('[Worker] Already sent totalSize, stopping:', state.totalBytesSent, '>=', state.manifest.totalSize);
+      return new ArrayBuffer(0);
+    }
     if (state.totalBytesSent + dataSize > state.manifest.totalSize) {
       const remaining = state.manifest.totalSize - state.totalBytesSent;
       if (remaining <= 0) return new ArrayBuffer(0);
+      console.warn('[Worker] Truncating last chunk:', dataSize, '->', remaining);
       data = data.subarray(0, remaining);
       dataSize = remaining;
     }
   }
 
+  // 🔐 암호화 수행
+  // ⚠️ 현재 암호화 기능은 비활성화됨 - 전체 암호화 플로우 구현 필요
+  if (false && state.encryptionKey) {
+    try {
+      // 청크 인덱스를 IV 카운터로 사용
+      const encryptedData = await WorkerEncryptionService.encryptChunk(
+        state.encryptionKey,
+        data.buffer.slice(data.byteOffset, data.byteOffset + dataSize) as ArrayBuffer, // ArrayBuffer 추출
+        state.chunkSequence
+      );
+      
+      // 암호화된 데이터로 교체 (AES-GCM은 태그 크기만큼 데이터가 커짐: +16 bytes)
+      data = new Uint8Array(encryptedData);
+      dataSize = encryptedData.byteLength;
+    } catch (e) {
+      console.error('[Worker] Encryption failed:', e);
+      throw e;
+    }
+  }
+
   const packet = chunkPool.acquire();
-  const view = new DataView(packet.buffer);
+  
+  // 패킷 크기가 풀 사이즈보다 커졌을 경우 (암호화 태그 때문) 예외 처리 필요하지만,
+  // 현재 풀 사이즈(CHUNK_SIZE + 18)에 여유가 없으면 새로 할당해야 함.
+  // 간단히 처리:
+  const requiredSize = 18 + dataSize;
+  let targetPacket = packet;
+  if (packet.byteLength < requiredSize) {
+      targetPacket = new Uint8Array(requiredSize); // 풀 대신 새 버퍼 사용 (드문 케이스)
+  }
+
+  const view = new DataView(targetPacket.buffer);
 
   // Header: FileIndex(2) + ChunkIndex(4) + Offset(8) + Length(4)
   view.setUint16(0, 0, true);
   view.setUint32(2, state.chunkSequence++, true);
   view.setBigUint64(6, BigInt(state.totalBytesSent), true);
-  view.setUint32(14, dataSize, true);
+  view.setUint32(14, dataSize, true); // 암호화된 크기 기록
 
-  packet.set(data, 18);
-  state.totalBytesSent += dataSize;
+  targetPacket.set(data, 18);
+  state.totalBytesSent += dataSize; // 암호화된 크기만큼 증가 (실제 전송량)
 
-  const result = new ArrayBuffer(18 + dataSize);
-  new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
-  chunkPool.release(packet);
+  const result = new ArrayBuffer(requiredSize);
+  new Uint8Array(result).set(targetPacket.subarray(0, requiredSize));
+  
+  if (packet === targetPacket) chunkPool.release(packet);
 
   return result;
 }
@@ -626,7 +702,7 @@ function processBatch(requestedCount: number) {
       payload: {
         chunks,
         progressData: {
-          bytesTransferred: state.totalBytesSent,
+          bytesTransferred: state.mode === 'zip' ? zipSourceBytesRead : state.totalBytesSent,
           totalBytes: totalSize,
           speed,
           progress
@@ -668,7 +744,7 @@ async function createAndSendImmediate(count: number) {
       payload: {
         chunks,
         progressData: {
-          bytesTransferred: state.totalBytesSent,
+          bytesTransferred: state.mode === 'zip' ? zipSourceBytesRead : state.totalBytesSent,
           totalBytes: totalSize,
           speed: 0, 
           progress

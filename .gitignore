@@ -7,6 +7,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# WASM build artifacts (removed)
+src/wasm-pkg/
+
 # Environment variables
 .env
 .env.local

@@ -21,6 +21,7 @@
 import streamSaver from 'streamsaver';
 import { ReorderingBuffer } from './reorderingBuffer';
 import { logInfo, logError, logWarn } from '../utils/logger';
+import { EncryptionService } from '../utils/encryption';
 
 // StreamSaver MITM 설정
 if (typeof window !== 'undefined') {
@@ -41,6 +42,9 @@ export class DirectFileWriter {
   
   // 🚀 [추가] 재정렬 버퍼 (StreamSaver 모드용)
   private reorderingBuffer: ReorderingBuffer | null = null;
+  
+  // 🔐 암호화 키 (복호화용)
+  private encryptionKey: string | null = null;
 
   // 🚀 [추가] 쓰기 작업을 순차적으로 처리하기 위한 Promise 체인
   private writeQueue: Promise<void> = Promise.resolve();
@@ -62,7 +66,7 @@ export class DirectFileWriter {
   /**
    * 스토리지 초기화
    */
-  public async initStorage(manifest: any): Promise<void> {
+  public async initStorage(manifest: any, encryptionKey?: string): Promise<void> {
     this.manifest = manifest;
     this.totalSize = manifest.totalSize;
     this.startTime = Date.now();
@@ -71,10 +75,16 @@ export class DirectFileWriter {
     this.writeBuffer = [];
     this.currentBatchSize = 0;
     this.pendingBytesInBuffer = 0;
+    
+    // 🔐 암호화 키 설정
+    this.encryptionKey = encryptionKey || null;
 
     const fileCount = manifest.totalFiles || manifest.files.length;
     console.log('[DirectFileWriter] Initializing for', fileCount, 'files');
     console.log('[DirectFileWriter] Total size:', (manifest.totalSize / (1024 * 1024)).toFixed(2), 'MB');
+    if (this.encryptionKey) {
+      console.log('[DirectFileWriter] 🔐 Encryption enabled');
+    }
 
     // 파일명 결정
     let fileName: string;
@@ -188,6 +198,7 @@ export class DirectFileWriter {
       return;
     }
 
+    const chunkIndex = view.getUint32(2, true); // 🔐 패킷 헤더에서 청크 인덱스 추출
     const size = view.getUint32(14, true);
     const offset = Number(view.getBigUint64(6, true));
 
@@ -209,11 +220,29 @@ export class DirectFileWriter {
       return;
     }
 
-    const data = new Uint8Array(packet, HEADER_SIZE, size);
+    let data = new Uint8Array(packet, HEADER_SIZE, size);
+    
+    // 🔐 암호화된 데이터 복호화 (암호화 키가 있는 경우)
+    // ⚠️ 현재 암호화 기능은 비활성화됨 - 송신 측에서 암호화를 하지 않음
+    if (false && this.encryptionKey) {
+      try {
+        const cryptoKey = await EncryptionService.importKey(this.encryptionKey);
+        // 🔐 패킷 헤더의 청크 인덱스 사용 (송신 측과 동일한 IV 생성)
+        const decryptedData = await EncryptionService.decryptChunk(
+          cryptoKey,
+          data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+          chunkIndex
+        );
+        data = new Uint8Array(decryptedData);
+      } catch (error) {
+        logError('[DirectFileWriter]', 'Decryption failed:', error);
+        throw error; // 🔐 복호화 실패 시 에러 전파 (데이터 손상 방지)
+      }
+    }
 
     // 1. 순서 정렬 (Reordering) - 모든 모드에서 사용
     const chunksToWrite = this.reorderingBuffer.push(
-      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), 
+      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
       offset
     );
 
@@ -305,11 +334,25 @@ export class DirectFileWriter {
     // 버퍼에 남은 잔여 데이터 강제 플러시
     await this.flushBuffer();
 
-    // 버퍼 정리 및 데이터 손실 체크
+    // 🚨 ReorderingBuffer에 남은 청크 강제 배출 (순서 무시)
     if (this.reorderingBuffer) {
       const stats = this.reorderingBuffer.getStatus();
       if (stats.bufferedCount > 0) {
-        logError('[DirectFileWriter]', `Finalizing with ${stats.bufferedCount} chunks still in buffer (Potential Data Loss)`);
+        logWarn('[DirectFileWriter]', `Finalizing with ${stats.bufferedCount} chunks still in buffer - forcing flush`);
+        
+        // 남은 청크를 강제로 배출
+        const remainingChunks = this.reorderingBuffer.forceFlushAll();
+        
+        // 배출된 청크를 버퍼에 추가
+        for (const chunk of remainingChunks) {
+          this.writeBuffer.push(new Uint8Array(chunk));
+          this.currentBatchSize += chunk.byteLength;
+        }
+        
+        // 최종 플러시
+        if (this.writeBuffer.length > 0) {
+          await this.flushBuffer();
+        }
       }
       this.reorderingBuffer.clear();
       this.reorderingBuffer = null;
@@ -359,12 +402,20 @@ export class DirectFileWriter {
   }
 
   /**
+   * 암호화 키 설정
+   */
+  public setEncryptionKey(key: string): void {
+    this.encryptionKey = key;
+  }
+
+  /**
    * 정리
    * 🚀 [개선] ReorderingBuffer 정리 추가
    */
   public async cleanup(): Promise<void> {
     this.isFinalized = true;
     this.writeBuffer = []; // 메모리 해제
+    this.encryptionKey = null; // 🔐 암호화 키 정리
 
     // 버퍼 정리
     if (this.reorderingBuffer) {

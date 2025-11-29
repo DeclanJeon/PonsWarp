@@ -14,7 +14,7 @@ import { SinglePeerConnection } from './singlePeerConnection';
 type EventHandler = (data: any) => void;
 
 interface IFileWriter {
-  initStorage(manifest: any): Promise<void>;
+  initStorage(manifest: any, encryptionKey?: string): Promise<void>;
   writeChunk(packet: ArrayBuffer): Promise<void>;
   cleanup(): Promise<void>;
   onProgress(cb: (progress: any) => void): void;
@@ -217,10 +217,10 @@ class EnhancedWebRTCService {
     this.writer.onError((err) => this.emit('error', err));
   }
 
-  public async startReceiving(manifest: any) {
+  public async startReceiving(manifest: any, encryptionKeyStr?: string) {
     if (!this.writer) return;
     try {
-      await this.writer.initStorage(manifest);
+      await this.writer.initStorage(manifest, encryptionKeyStr);
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
       this.peer?.send(JSON.stringify({ type: 'TRANSFER_READY' }));

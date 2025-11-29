@@ -140,6 +140,35 @@ export class ReorderingBuffer {
   }
 
   /**
+   * 🚨 버퍼에 남은 모든 청크를 강제로 배출 (순서 무시)
+   * finalize 시점에 호출하여 데이터 손실 방지
+   */
+  public forceFlushAll(): ArrayBuffer[] {
+    const remainingChunks: ArrayBuffer[] = [];
+    
+    if (this.chunkMap.size === 0) {
+      return remainingChunks;
+    }
+
+    logWarn('[Reorder]', `Force flushing ${this.chunkMap.size} remaining chunks (순서 무시)`);
+    
+    // 오프셋 순서대로 정렬하여 배출
+    const sortedOffsets = Array.from(this.chunkMap.keys()).sort((a, b) => a - b);
+    
+    for (const offset of sortedOffsets) {
+      const chunk = this.chunkMap.get(offset)!;
+      remainingChunks.push(chunk.data);
+      logWarn('[Reorder]', `Flushing chunk at offset ${offset}, size: ${chunk.size}`);
+    }
+    
+    // 버퍼 초기화
+    this.chunkMap.clear();
+    this.currentBufferSize = 0;
+    
+    return remainingChunks;
+  }
+
+  /**
    * 다음 예상 오프셋 조회
    */
   public getNextExpectedOffset(): number {

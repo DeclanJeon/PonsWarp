@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus, AlertTriangle, Users } from 'lucide-react';
+import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus, AlertTriangle, Users, Lock } from 'lucide-react';
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { scanFiles, processInputFiles } from '../utils/fileScanner';
 import { motion } from 'framer-motion';
 import { AppMode } from '../types/types';
 import { useTransferStore } from '../store/transferStore';
+import { EncryptionService } from '../utils/encryption';
 
 interface SenderViewProps {
   onComplete?: () => void;
 }
 
 const SenderView: React.FC<SenderViewProps> = () => {
-  const { setStatus: setGlobalStatus } = useTransferStore();
+  const { setStatus: setGlobalStatus, setEncryptionKey } = useTransferStore();
   const [manifest, setManifest] = useState<any>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
@@ -220,6 +221,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const processScannedFiles = async (scannedFiles: any[]) => {
     if (scannedFiles.length === 0) return;
     
+    // 🔐 암호화 키 생성
+    const encryptionKey = await EncryptionService.generateKey();
+    setEncryptionKey(encryptionKey);
+    
     // Manifest 생성
     const { manifest, files } = createManifest(scannedFiles);
     setManifest(manifest);
@@ -240,13 +245,16 @@ const SenderView: React.FC<SenderViewProps> = () => {
     
     const id = Math.random().toString(36).substring(2, 8).toUpperCase();
     setRoomId(id);
-    setShareLink(`${window.location.origin}/receive/${id}`);
+    // 🔐 암호화 키를 URL 해시에 포함
+    setShareLink(`${window.location.origin}/receive/${id}#${encryptionKey}`);
     
     console.log('[SenderView] 🏠 [DEBUG] Room created:', id);
+    console.log('[SenderView] 🔐 [DEBUG] Encryption key generated and added to URL hash');
     
     try {
       console.log('[SenderView] 🚀 [DEBUG] Initializing SwarmManager...');
-      await swarmManagerRef.current?.initSender(manifest, files, id);
+      // 암호화 키를 워커에 전달
+      await swarmManagerRef.current?.initSender(manifest, files, id, encryptionKey);
       console.log('[SenderView] ✅ [DEBUG] SwarmManager initialized successfully');
       
       // 초기화 완료 후 WAITING 상태로 전환
@@ -351,6 +359,13 @@ const SenderView: React.FC<SenderViewProps> = () => {
       {status === 'WAITING' && roomId && shareLink && (
         <motion.div className="bg-black/60 backdrop-blur-xl p-8 rounded-3xl border border-cyan-500/30 flex flex-col items-center max-w-md w-full">
           <h3 className="text-xl mb-4 font-bold tracking-widest text-cyan-400">READY TO WARP</h3>
+          
+          {/* 🔐 암호화 활성화 표시 */}
+          <div className="flex items-center gap-2 mb-4 bg-green-900/20 px-3 py-2 rounded-lg border border-green-500/30">
+            <Lock className="w-4 h-4 text-green-400" />
+            <span className="text-sm text-green-400">End-to-End Encrypted</span>
+          </div>
+          
           <div className="bg-white p-4 rounded-xl mb-6 shadow-[0_0_20px_rgba(6,182,212,0.3)]">
             <QRCodeSVG value={shareLink} size={180} />
           </div>

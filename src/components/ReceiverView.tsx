@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw, Radio } from 'lucide-react';
+import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw, Radio, Lock } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../utils/constants';
 import { DirectFileWriter } from '../services/directFileWriter';
@@ -8,11 +8,22 @@ import { useTransferStore } from '../store/transferStore';
 
 const ReceiverView: React.FC = () => {
   // 전역 상태 사용
-  const { roomId, setRoomId, status, setStatus, progress, manifest, setManifest, updateProgress } = useTransferStore();
+  const { roomId, setRoomId, status, setStatus, progress, manifest, setManifest, updateProgress, setEncryptionKey } = useTransferStore();
   
   const [errorMsg, setErrorMsg] = useState('');
   const [actualSize, setActualSize] = useState<number>(0);
   const [progressData, setProgressData] = useState({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
+  
+  // 🔐 URL에서 암호화 키 추출
+  useEffect(() => {
+    // URL 해시에서 키 추출
+    const hash = window.location.hash;
+    if (hash && hash.startsWith('#')) {
+      const encryptionKey = hash.substring(1); // # 제거
+      setEncryptionKey(encryptionKey);
+      console.log('[ReceiverView] 🔐 Encryption key extracted from URL hash');
+    }
+  }, [setEncryptionKey]);
   
   // 🚨 [추가] 송신자 응답 대기 상태 변수
   const [isWaitingForSender, setIsWaitingForSender] = useState(false);
@@ -320,7 +331,9 @@ const ReceiverView: React.FC = () => {
 
       // 🚨 [핵심] 수신 시작 - 이 함수가 완료되어야 TRANSFER_READY가 전송됨
       console.log('[ReceiverView] Starting receiver initialization...');
-      await transferService.startReceiving(manifest);
+      // 🔐 암호화 키를 transferService에 전달
+      const { encryptionKeyStr } = useTransferStore.getState();
+      await transferService.startReceiving(manifest, encryptionKeyStr);
       console.log('[ReceiverView] ✅ Receiver initialization complete');
       
       // 🚀 [핵심 수정] TRANSFER_READY 전송 후 즉시 상태 확인
@@ -431,6 +444,13 @@ const ReceiverView: React.FC = () => {
           <div className="text-center relative z-10">
             <Archive className="w-20 h-20 text-cyan-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
             <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">INCOMING TRANSMISSION</h2>
+            
+            {/* 🔐 암호화 활성화 표시 */}
+            <div className="flex items-center gap-2 mb-4 bg-green-900/20 px-3 py-2 rounded-lg border border-green-500/30">
+              <Lock className="w-4 h-4 text-green-400" />
+              <span className="text-sm text-green-400">End-to-End Encrypted</span>
+            </div>
+            
             <p className="text-cyan-400/80 text-sm mb-6 font-mono">
               {manifest?.totalFiles === 1 ? manifest?.files[0]?.name : `${manifest?.totalFiles} files`}
             </p>

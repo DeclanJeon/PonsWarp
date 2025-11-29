@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ZIP Test</title>
+  <script type="module">
+    import { Zip, ZipPassThrough } from './node_modules/fflate/esm/browser.js';
+    
+    async function testZip() {
+      console.log('🧪 Testing fflate ZIP generation...');
+      
+      const chunks = [];
+      
+      // ZIP 생성
+      const zip = new Zip((err, data, final) => {
+        if (err) {
+          console.error('❌ ZIP error:', err);
+          return;
+        }
+        
+        if (data && data.length > 0) {
+          console.log('📦 Received chunk:', data.length, 'bytes');
+          chunks.push(data);
+        }
+        
+        if (final) {
+          console.log('✅ ZIP finalized');
+          
+          // 모든 청크를 하나로 합치기
+          const totalSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+          const zipData = new Uint8Array(totalSize);
+          let offset = 0;
+          for (const chunk of chunks) {
+            zipData.set(chunk, offset);
+            offset += chunk.length;
+          }
+          
+          console.log('📊 Total ZIP size:', zipData.length, 'bytes');
+          
+          // ZIP 파일 다운로드
+          const blob = new Blob([zipData], { type: 'application/zip' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'test.zip';
+          a.click();
+          
+          console.log('💾 ZIP file downloaded. Try to extract it!');
+        }
+      });
+      
+      // 테스트 파일 1
+      const file1 = new ZipPassThrough('test1.txt');
+      zip.add(file1);
+      file1.push(new TextEncoder().encode('Hello from file 1!\n'), false);
+      file1.push(new TextEncoder().encode('This is a test.\n'), false);
+      file1.push(new Uint8Array(0), true); // 파일 종료
+      
+      // 테스트 파일 2
+      const file2 = new ZipPassThrough('folder/test2.txt');
+      zip.add(file2);
+      file2.push(new TextEncoder().encode('Hello from file 2!\n'), false);
+      file2.push(new TextEncoder().encode('Inside a folder.\n'), false);
+      file2.push(new Uint8Array(0), true); // 파일 종료
+      
+      // ZIP 종료
+      zip.end();
+    }
+    
+    window.testZip = testZip;
+    console.log('✅ Test ready. Run: testZip()');
+  </script>
+</head>
+<body>
+  <h1>ZIP Test</h1>
+  <button onclick="testZip()">Generate Test ZIP</button>
+  <p>Open console and click the button. A ZIP file will be downloaded.</p>
+  <p>Try to extract it with your system's ZIP tool.</p>
+</body>
+</html>

@@ -913,7 +913,7 @@ export class SwarmManager {
   /**
    * Sender 초기화
    */
-  public async initSender(manifest: TransferManifest, files: File[], roomId: string): Promise<void> {
+  public async initSender(manifest: TransferManifest, files: File[], roomId: string, encryptionKeyStr?: string): Promise<void> {
     logInfo('[SwarmManager]', 'Initializing sender...');
     this.cleanup();
     
@@ -933,12 +933,12 @@ export class SwarmManager {
 
     // Worker 초기화
     this.worker = getSenderWorkerV1();
-    this.setupWorkerHandlers(files, manifest);
+    this.setupWorkerHandlers(files, manifest, encryptionKeyStr);
 
     this.emit('status', 'WAITING_FOR_PEER');
   }
 
-  private setupWorkerHandlers(files: File[], manifest: TransferManifest): void {
+  private setupWorkerHandlers(files: File[], manifest: TransferManifest, encryptionKeyStr?: string): void {
     if (!this.worker) return;
 
     this.worker.onmessage = (e) => {
@@ -987,7 +987,7 @@ export class SwarmManager {
           console.log('[SwarmManager] ❓ [DEBUG] Unknown worker message type:', type);
       }
     };
-    
+
     this.worker.onerror = (error) => {
       console.error('[SwarmManager] ❌ [DEBUG] Worker fatal error:', error);
       this.emit('error', 'Worker crashed: ' + (error.message || 'Unknown error'));

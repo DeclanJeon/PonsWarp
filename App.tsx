@@ -1,18 +1,19 @@
 import React, { useEffect } from 'react';
 import { Send, Download, ArrowRight } from 'lucide-react';
-import SpaceField from './components/SpaceField';
-import SenderView from './components/SenderView';
-import ReceiverView from './components/ReceiverView';
-import { AppMode } from './types/types';
+import SpaceField from './src/components/SpaceField.js';
+import SenderView from './src/components/SenderView.js';
+import ReceiverView from './src/components/ReceiverView.js';
+import { AppMode } from './src/types/types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { signalingService } from './services/signaling';
-import { MagneticButton } from './components/ui/MagneticButton';
-import { TransferProgressBar } from './components/ui/TransferProgressBar';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { ToastContainer } from './components/ui/ToastContainer';
-import { StatusOverlay } from './components/ui/StatusOverlay';
-import { useTransferStore } from './store/transferStore';
-import { toast } from './store/toastStore';
+import { signalingService } from './src/services/signaling';
+import { MagneticButton } from './src/components/ui/MagneticButton.js';
+import { TransferProgressBar } from './src/components/ui/TransferProgressBar.js';
+import { ErrorBoundary } from './src/components/ErrorBoundary.js';
+import { ToastContainer } from './src/components/ui/ToastContainer.js';
+import { StatusOverlay } from './src/components/ui/StatusOverlay.js';
+import { useTransferStore } from './src/store/transferStore';
+import { toast } from './src/store/toastStore';
+// import initWasm, { init_wasm, add_numbers } from './wasm-pkg/ponswarp_wasm';
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)

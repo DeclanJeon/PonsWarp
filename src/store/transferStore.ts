@@ -53,6 +53,9 @@ interface TransferState {
   currentTransferPeerCount: number;
   waitingPeersCount: number;
   
+  // 🔐 암호화 키 상태
+  encryptionKeyStr: string | null;
+  
   // 액션
   setMode: (mode: AppMode) => void;
   setRoomId: (id: string | null) => void;
@@ -60,6 +63,7 @@ interface TransferState {
   setStatus: (status: TransferState['status']) => void;
   setError: (error: string | null) => void;
   setManifest: (manifest: TransferManifest | null) => void;
+  setEncryptionKey: (key: string | null) => void;
   
   // 드래그/전송 상태 헬퍼
   startDragging: () => void;
@@ -113,6 +117,7 @@ const initialState = {
   readyCountdown: null,
   currentTransferPeerCount: 0,
   waitingPeersCount: 0,
+  encryptionKeyStr: null,
 };
 
 export const useTransferStore = create<TransferState>()(
@@ -126,6 +131,7 @@ export const useTransferStore = create<TransferState>()(
     setStatus: (status) => set({ status }),
     setError: (error) => set({ error }),
     setManifest: (manifest) => set({ manifest }),
+    setEncryptionKey: (key) => set({ encryptionKeyStr: key }),
     
     // 🚀 진행률 업데이트 (성능 최적화: 필요한 필드만 업데이트)
     updateProgress: (data) => set((state) => ({
@@ -196,6 +202,7 @@ export const useTransferStore = create<TransferState>()(
       readyCountdown: null,
       currentTransferPeerCount: 0,
       waitingPeersCount: 0,
+      encryptionKeyStr: null,
     }),
   }))
 );
