@@ -8,7 +8,7 @@
  */
 
 import { create } from 'zustand';
-import { subscribeWithSelector } from 'zustand/middleware';
+import { subscribeWithSelector, persist } from 'zustand/middleware';
 import { TransferManifest, AppMode } from '../types/types';
 
 // 피어 상태 인터페이스
@@ -121,8 +121,9 @@ const initialState = {
 };
 
 export const useTransferStore = create<TransferState>()(
-  subscribeWithSelector((set, get) => ({
-    ...initialState,
+  persist(
+    subscribeWithSelector((set, get) => ({
+      ...initialState,
     
     // 기본 setter
     setMode: (mode) => set({ mode }),
@@ -204,7 +205,17 @@ export const useTransferStore = create<TransferState>()(
       waitingPeersCount: 0,
       encryptionKeyStr: null,
     }),
-  }))
+  })),
+  {
+    name: 'ponswarp-transfer-storage',
+    // 🚀 새로고침 시 복원할 상태만 선택 (mode는 제외 - 항상 INTRO로 시작)
+    partialize: (state) => ({
+      roomId: state.roomId,
+      manifest: state.manifest,
+      encryptionKeyStr: state.encryptionKeyStr,
+      progress: state.progress,
+    }),
+  })
 );
 
 // 🚀 성능 최적화: 스로틀된 진행률 업데이트 함수

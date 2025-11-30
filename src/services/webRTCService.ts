@@ -2,14 +2,17 @@ import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
 import { logInfo, logError } from '../utils/logger';
-import { 
-  HEADER_SIZE, 
-  MAX_BUFFERED_AMOUNT, 
+import {
+  HEADER_SIZE,
+  MAX_BUFFERED_AMOUNT,
   HIGH_WATER_MARK,
   BATCH_SIZE_MAX
 } from '../utils/constants';
-import { NetworkAdaptiveController } from './networkAdaptiveController';
+import { networkController } from './networkAdaptiveController';
 import { SinglePeerConnection } from './singlePeerConnection';
+import { setStatus } from './storeConnector'; // 🚀 Store 직접 제어
+import { toast } from '../store/toastStore'; // 🚀 Toast 기능
+import { formatBytes } from '../utils/fileUtils'; // 🚀 Import formatBytes
 
 type EventHandler = (data: any) => void;
 
@@ -35,12 +38,13 @@ class EnhancedWebRTCService {
   // Backpressure 제어 변수
   private isProcessingBatch = false;
   private pendingManifest: TransferManifest | null = null;
+  private lastProgressSaveTime: number = 0;
   
-  // 🚀 [Step 12] 고정 배치 사이즈 (최대 성능)
-  private readonly FIXED_BATCH_SIZE = BATCH_SIZE_MAX; // 128 (약 8MB)
+  // 🚀 [적응형 제어] 컨트롤러 연결
+  private networkController = networkController;
   
-  // Metrics Controller (단순 계측용)
-  private networkController = new NetworkAdaptiveController();
+  // 파일 저장
+  private files: File[] = []; // initSender에서 받은 파일 저장
   
   private iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' }
@@ -70,6 +74,7 @@ class EnhancedWebRTCService {
     this.cleanup();
     this.isSender = true;
     this.roomId = roomId;
+    this.files = files; // 🚀 파일 저장
     
     // Metrics 초기화
     this.networkController.start(manifest.totalSize);
@@ -101,7 +106,12 @@ class EnhancedWebRTCService {
 
   // 🚀 [Step 12] 단순화된 배치 처리
   private async handleBatchFromWorker(payload: any) {
-    if (!this.peer || !this.peer.connected) return;
+    // 🚀 [추가] 연결 중이거나 피어가 없으면 데이터 즉시 폐기 (CPU 절약)
+    if (!this.peer || !this.peer.connected || this.peer.getBufferedAmount() > MAX_BUFFERED_AMOUNT) {
+        // console.log('[Sender] 🗑️ Dropping batch (No peer or congestion)');
+        this.isProcessingBatch = false;
+        return;
+    }
     
     const { chunks } = payload;
     const batchBytes = chunks.reduce((sum: number, c: ArrayBuffer) => sum + c.byteLength, 0);
@@ -159,8 +169,17 @@ class EnhancedWebRTCService {
     if (this.isProcessingBatch || !this.worker || !this.isTransferring) return;
     
     this.isProcessingBatch = true;
-    // 항상 최대 배치 크기로 요청 (Adaptive 제거)
-    this.worker.postMessage({ type: 'process-batch', payload: { count: this.FIXED_BATCH_SIZE } });
+    
+    // 🚀 [적응형 제어] 컨트롤러가 계산한 최적의 배치 크기 요청
+    const nextBatchSize = this.networkController.getRecommendedBatchSize();
+    
+    // 로그가 너무 많으면 제거하세요 (디버깅용)
+    // console.log(`[Sender] Requesting dynamic batch: ${nextBatchSize}`);
+    
+    this.worker.postMessage({
+        type: 'process-batch',
+        payload: { count: nextBatchSize }
+    });
   }
 
   private async finishTransfer() {
@@ -208,21 +227,55 @@ class EnhancedWebRTCService {
     this.writer = writerInstance;
 
     this.writer.onProgress((progressData) => {
-      this.emit('progress', typeof progressData === 'object' ? progressData : { progress: progressData });
+      const data = typeof progressData === 'object' ? progressData : { progress: progressData };
+      this.emit('progress', data);
+      
     });
     this.writer.onComplete((actualSize) => {
       this.emit('complete', { actualSize });
       this.notifyDownloadComplete();
     });
     this.writer.onError((err) => this.emit('error', err));
+    
+    // 🚀 [신규] NACK 이벤트 핸들링 (Writer -> Service -> Peer)
+    // DirectFileWriter가 ReorderingBuffer의 onNack을 노출해야 함
+    if ('onNack' in writerInstance) {
+        (writerInstance as any).onNack((nack: any) => {
+            console.warn('[Receiver] 🚨 Sending NACK for offset:', nack.offset);
+            this.peer?.send(JSON.stringify({
+                type: 'NACK',
+                offset: nack.offset
+            }));
+        });
+    }
   }
 
+  // ======================= RECEIVER LOGIC =======================
+
+  // Manifest 수신 시 호출됨 (기존 handleData 내부 로직 대체/보강)
+  private async handleMetadata(manifest: TransferManifest) {
+    console.log('[webRTCService] 📋 Metadata received:', {
+      transferId: manifest.transferId,
+      totalSize: manifest.totalSize,
+      isSender: this.isSender
+    });
+    
+    this.emit('metadata', manifest);
+    this.pendingManifest = manifest;
+    
+    console.log('[webRTCService] ✨ Starting fresh transfer');
+  }
+
+  /**
+   * 수신 시작
+   */
   public async startReceiving(manifest: any, encryptionKeyStr?: string) {
     if (!this.writer) return;
     try {
       await this.writer.initStorage(manifest, encryptionKeyStr);
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
+      
       this.peer?.send(JSON.stringify({ type: 'TRANSFER_READY' }));
     } catch (error: any) {
       this.emit('error', error.message);
@@ -234,6 +287,25 @@ class EnhancedWebRTCService {
       const response: TurnConfigResponse = await signalingService.requestTurnConfig(roomId);
       if (response.success && response.data) this.iceServers = response.data.iceServers;
     } catch (error) {}
+  }
+
+  // ======================= SENDER LOGIC =======================
+
+  private startWorkerTransfer() {
+      if (!this.worker || !this.pendingManifest) return;
+      
+      // 워커에게 초기화 명령 전달
+      this.worker.postMessage({
+          type: 'init',
+          payload: {
+              files: this.files,
+              manifest: this.pendingManifest
+          }
+      });
+      
+      this.isTransferring = true;
+      this.requestMoreChunks();
+      this.emit('status', 'TRANSFERRING');
   }
 
   // ======================= PEER HANDLING =======================
@@ -253,11 +325,32 @@ class EnhancedWebRTCService {
             else if (data.candidate) signalingService.sendCandidate(this.roomId!, data, target);
         });
 
+        // 🚀 [신규] 재연결 이벤트 핸들링
+        peer.on('reconnecting', () => {
+            console.log('[WebRTC] Network handover detected. Reconnecting...');
+            setStatus('CONNECTING'); // UI를 '연결 중' 상태로 변경
+            // 사용자에게 토스트 알림 (선택)
+            // toast.info('Network changed. Reconnecting...');
+        });
+
         peer.on('connected', () => {
             logInfo('[WebRTC]', 'Channel Connected!');
             this.emit('connected', true);
             
-            // 🚀 [Step 12] Native Backpressure Event
+            // 재연결 성공 시 상태 복구
+            if (this.isTransferring) {
+                setStatus('TRANSFERRING');
+                // 재연결 후 전송이 멈춰있을 수 있으므로
+                // 즉시 drain 이벤트를 트리거하여 전송 재개 시도
+                if (this.isSender) {
+                    this.requestMoreChunks();
+                }
+            } else {
+                // 전송 중이 아니었다면 WAITING (Receiver) or READY (Sender)
+                setStatus('WAITING');
+            }
+            
+            // 🚀 [적응형 제어] Native Backpressure Event
             // 버퍼가 비워졌다는 이벤트를 받으면 즉시 다음 배치를 요청합니다.
             // polling(waitForBufferDrain)보다 훨씬 반응성이 좋고 CPU를 덜 씁니다.
             peer.on('drain', () => {
@@ -291,16 +384,23 @@ class EnhancedWebRTCService {
             const msg = JSON.parse(str);
             
             if (msg.type === 'TRANSFER_READY') {
-                this.peer?.send(JSON.stringify({ type: 'TRANSFER_STARTED' }));
-                this.isTransferring = true;
-                this.requestMoreChunks();
-                this.emit('status', 'TRANSFERRING');
-            } else if (msg.type === 'TRANSFER_STARTED') {
+                // 처음부터 시작
+                this.startWorkerTransfer();
+            }
+            else if (msg.type === 'TRANSFER_STARTED') {
                 this.emit('remote-started', true);
             } else if (msg.type === 'MANIFEST') {
-                this.emit('metadata', msg.manifest);
+                this.handleMetadata(msg.manifest);
             } else if (msg.type === 'DOWNLOAD_COMPLETE') {
                 this.emit('complete', true);
+            }
+            // 🚀 [신규] NACK 수신 처리
+            else if (msg.type === 'NACK') {
+                console.warn('[Sender] 🚨 Received NACK for offset:', msg.offset);
+                this.worker?.postMessage({
+                    type: 'resend-request',
+                    payload: { offset: msg.offset }
+                });
             }
             // 그 외 메시지 (Queue 등)
             else if (msg.type === 'QUEUED' || msg.type === 'TRANSFER_STARTING' || msg.type === 'READY_FOR_DOWNLOAD') {
@@ -331,15 +431,7 @@ class EnhancedWebRTCService {
     if (!this.connectedPeerId) this.connectedPeerId = d.from;
     if (d.from !== this.connectedPeerId) return;
     
-    console.log('[WebRTC] 🔍 Received offer data:', {
-      hasOffer: !!d.offer,
-      offerType: typeof d.offer,
-      offerKeys: d.offer ? Object.keys(d.offer) : [],
-      offerContent: JSON.stringify(d.offer),
-      hasType: !!d.offer?.type,
-      hasSdp: !!d.offer?.sdp,
-      sdpPreview: d.offer?.sdp?.substring(0, 50)
-    });
+    logInfo('[WebRTC]', `Received offer from ${d.from}`);
     
     if (!this.peer) await this.createPeer(false);
     this.peer!.signal(d.offer);
@@ -348,12 +440,7 @@ class EnhancedWebRTCService {
   private handleAnswer = async (d: any) => {
     if (!this.isSender || !this.peer) return;
     
-    console.log('[WebRTC] 🔍 Received answer data:', {
-      hasAnswer: !!d.answer,
-      answerType: typeof d.answer,
-      answerKeys: d.answer ? Object.keys(d.answer) : [],
-      answerContent: d.answer
-    });
+    logInfo('[WebRTC]', `Received answer from ${d.from}`);
     
     this.peer.signal(d.answer);
   };

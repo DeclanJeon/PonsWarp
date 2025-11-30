@@ -24,9 +24,23 @@ const App: React.FC = () => {
     const match = path.match(/^\/receive\/([A-Z0-9]{6})$/);
     
     if (match) {
-      const roomId = match[1];
-      setRoomId(roomId);
-      setMode(AppMode.RECEIVER);
+      // 🚨 새로고침 감지: sessionStorage를 사용하여 초기 진입인지 확인
+      const isInitialEntry = !sessionStorage.getItem('ponswarp-session-active');
+      
+      if (isInitialEntry) {
+        // 첫 진입: 정상적으로 수신 모드로 전환
+        const roomId = match[1];
+        setRoomId(roomId);
+        setMode(AppMode.RECEIVER);
+        sessionStorage.setItem('ponswarp-session-active', 'true');
+      } else {
+        // 새로고침: 홈으로 리다이렉트
+        console.log('[App] Refresh detected - redirecting to home');
+        sessionStorage.removeItem('ponswarp-session-active');
+        window.history.pushState({}, '', '/');
+        setMode(AppMode.INTRO);
+        toast.info('Session reset. Please reconnect.');
+      }
     }
     
     // 글로벌 에러 핸들러
@@ -80,7 +94,8 @@ const App: React.FC = () => {
           className="absolute top-0 left-0 p-8 z-50 flex items-center gap-4 cursor-pointer hover:opacity-80 transition-opacity"
           onClick={() => { 
             setMode(AppMode.INTRO); 
-            window.history.pushState({}, '', '/'); 
+            window.history.pushState({}, '', '/');
+            sessionStorage.removeItem('ponswarp-session-active');
           }}
         >
           <div className="w-12 h-12 border-2 border-cyan-500 rounded-full flex items-center justify-center backdrop-blur-sm bg-black/20 shadow-[0_0_15px_rgba(6,182,212,0.5)]">
@@ -168,8 +183,10 @@ const App: React.FC = () => {
                     <TransferProgressBar />
                   </div>
                 )}
-                <button 
-                  onClick={() => setMode(AppMode.SELECTION)} 
+                <button
+                  onClick={() => {
+                    setMode(AppMode.SELECTION);
+                  }}
                   className="absolute bottom-10 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs"
                 >
                   Abort Mission

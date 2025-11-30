@@ -32,6 +32,7 @@ const ReceiverView: React.FC = () => {
   const [queuePosition, setQueuePosition] = useState<number>(0);
   const [queueMessage, setQueueMessage] = useState<string>('');
   
+  
   // 🚨 [추가] 연결 타임아웃 관리용 Ref
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
@@ -47,7 +48,7 @@ const ReceiverView: React.FC = () => {
   const UI_UPDATE_INTERVAL = 100; // 100ms마다 한 번만 UI 업데이트
 
   // 🚀 [핵심] 이벤트 핸들러들을 useCallback으로 메모이제이션하여 안정성 확보
-  const handleMetadata = useCallback((m: any) => {
+  const handleMetadata = useCallback(async (m: any) => {
     // 🚨 [수정] 메타데이터 수신 시 타임아웃 해제 및 에러 상태 초기화
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
@@ -55,6 +56,14 @@ const ReceiverView: React.FC = () => {
     }
     setErrorMsg(''); // 이전 에러 메시지 초기화
     setManifest(m);
+    
+    console.log('[ReceiverView] 📋 Metadata received:', {
+      transferId: m.transferId,
+      totalSize: m.totalSize,
+      totalFiles: m.totalFiles
+    });
+    
+    console.log('[ReceiverView] ✨ No resume data found, starting fresh');
     
     // 🚀 [Multi-Receiver] QUEUED 상태에서 manifest를 다시 받으면 
     // 대기열에서 전송이 시작된 것이므로 RECEIVING으로 전환
@@ -185,6 +194,46 @@ const ReceiverView: React.FC = () => {
 
     try {
       await transferService.initReceiver(id.toUpperCase());
+      
+      // 🚀 [추가] 연결 촉구 핑 (Poke) 보내기
+      // Socket 연결 직후 Sender에게 "내가 왔으니 연결해라"라고 신호 보냄
+      setTimeout(() => {
+          const currentStatus = statusRef.current;
+          if (currentStatus === 'CONNECTING') {
+              console.log('[ReceiverView] 📢 Poking sender to initiate connection...');
+              // signalingService를 통해 peer-joined 이벤트를 강제로 다시 발생시키는 효과
+              // 또는 join-room을 다시 호출하여 존재감 알림
+              transferService.joinRoom(id.toUpperCase());
+          }
+      }, 2000); // 2초 뒤에도 연결 안되면 실행
+      
+      // 🚀 [수정] room-users 이벤트 리스너 추가하여 빈 방 상황 감지
+      const { signalingService } = await import('../services/signaling');
+      
+      // room-users 이벤트 리스너
+      const handleRoomUsers = (users: string[]) => {
+        console.log('[ReceiverView] 🏠 [DEBUG] Room users received:', users);
+        
+        if (users.length === 0) {
+          console.warn('[ReceiverView] ⚠️ [DEBUG] Room is empty! Sender may not be in the room.');
+          
+          // 5초 후에도 빈 방이면 경고 메시지 표시
+          setTimeout(() => {
+            if (statusRef.current === 'CONNECTING') {
+              setErrorMsg('Sender is not in the room. Please check the room ID or try again.');
+              setStatus('ERROR');
+            }
+          }, 5000);
+        }
+      };
+      
+      signalingService.on('room-users', handleRoomUsers);
+      
+      // 10초 후에 room-users 이벤트 리스너 제거
+      setTimeout(() => {
+        signalingService.off('room-users', handleRoomUsers);
+      }, 10000);
+      
     } catch (e) {
       if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
       console.error('[ReceiverView] Init failed:', e);
@@ -241,6 +290,9 @@ const ReceiverView: React.FC = () => {
     }
   }, []);
 
+
+
+
   // 🚀 [핵심 수정] 이벤트 리스너 등록 Effect (한 번만 실행)
   useEffect(() => {
     // 리스너 등록
@@ -274,9 +326,10 @@ const ReceiverView: React.FC = () => {
   useEffect(() => {
     if (roomId && !isInitializedRef.current) {
       isInitializedRef.current = true;
+      
       handleJoin(roomId);
     }
-  }, [roomId, handleJoin]);
+  }, [roomId, handleJoin, manifest, progress.bytesTransferred]);
 
   // 🚀 [핵심 수정] 컴포넌트 실제 언마운트 시에만 cleanup 실행
   // React StrictMode에서 useEffect가 두 번 실행되는 문제 방지
@@ -475,6 +528,7 @@ const ReceiverView: React.FC = () => {
           </div>
         </div>
       )}
+
 
       {/* 4. RECEIVING (REVERSE WARP VISIBLE) */}
       {status === 'RECEIVING' && (

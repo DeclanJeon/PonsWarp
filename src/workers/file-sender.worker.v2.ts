@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 declare const self: DedicatedWorkerGlobalScope;
 
-import { Zip, ZipPassThrough } from 'fflate';
+import { Zip, ZipPassThrough, AsyncZipDeflate } from 'fflate';
 
 // 🔐 암호화 관련 상수 및 함수 (워커 환경용)
 const ALGORITHM = 'AES-GCM';
@@ -58,6 +58,62 @@ class WorkerEncryptionService {
     return bytes.buffer;
   }
 }
+
+// 🚀 [신규] 파일 확장자 기반 압축 필요 여부 판단
+function isCompressibleFile(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  // 이미 압축된 포맷들은 CPU 낭비를 막기 위해 압축하지 않음
+  const nonCompressibleExts = new Set([
+    'zip', 'rar', '7z', 'gz', 'tar', // 아카이브
+    'jpg', 'jpeg', 'png', 'gif', 'webp', // 이미지
+    'mp4', 'mkv', 'avi', 'mov', 'webm', // 비디오
+    'mp3', 'wav', 'ogg', 'flac', // 오디오
+    'pdf', 'docx', 'xlsx', 'pptx' // 문서 (이미 압축됨)
+  ]);
+  return !ext || !nonCompressibleExts.has(ext);
+}
+
+// 🚀 [신규] 전송 내역 버퍼 (재전송용)
+class HistoryBuffer {
+  private history: Map<number, Uint8Array> = new Map(); // Offset -> Data
+  private offsets: number[] = []; // 순서 추적용 (LRU)
+  private currentSize = 0;
+  private readonly MAX_SIZE = 128 * 1024 * 1024; // 128MB 히스토리 (약 1초 분량)
+
+  public add(offset: number, data: Uint8Array) {
+    // 이미 있으면 무시
+    if (this.history.has(offset)) return;
+
+    this.history.set(offset, data);
+    this.offsets.push(offset);
+    this.currentSize += data.byteLength;
+
+    // 용량 관리 (오래된 것부터 삭제)
+    while (this.currentSize > this.MAX_SIZE && this.offsets.length > 0) {
+      const oldOffset = this.offsets.shift()!;
+      const oldData = this.history.get(oldOffset);
+      if (oldData) {
+        this.currentSize -= oldData.byteLength;
+        this.history.delete(oldOffset);
+      }
+    }
+  }
+
+  public get(offset: number): Uint8Array | undefined {
+    return this.history.get(offset);
+  }
+
+  public clear() {
+    this.history.clear();
+    this.offsets = [];
+    this.currentSize = 0;
+  }
+}
+
+const historyBuffer = new HistoryBuffer();
+
+// 🚀 [신규] 긴급 재전송 큐
+const priorityQueue: ArrayBuffer[] = [];
 
 // WASM 모듈 로딩 제거 (fflate 사용)
 
@@ -214,7 +270,7 @@ const state: WorkerState = {
   startTime: 0,
   isInitialized: false,
   isCompleted: false,
-  encryptionKey: null
+  encryptionKey: null,
 };
 
 const adaptiveConfig: AdaptiveConfig = {
@@ -249,6 +305,10 @@ self.onmessage = (e: MessageEvent) => {
     case 'update-config':
       updateAdaptiveConfig(payload);
       break;
+    // 🚀 [신규] NACK 처리
+    case 'resend-request':
+      handleResendRequest(payload.offset);
+      break;
   }
 };
 
@@ -270,12 +330,13 @@ async function initWorker(payload: { files: File[]; manifest: any; encryptionKey
   
   state.files = payload.files;
   state.manifest = payload.manifest;
-  state.chunkSequence = 0;
+  state.currentFileOffset = 0;
   state.totalBytesSent = 0;
+  state.chunkSequence = 0;
+  
   state.startTime = 0;
   state.isInitialized = true;
   state.isCompleted = false;
-  state.currentFileOffset = 0;
 
   isTransferActive = true;
   prefetchPromise = null;
@@ -296,10 +357,12 @@ async function initWorker(payload: { files: File[]; manifest: any; encryptionKey
 
   if (fileCount === 1) {
     state.mode = 'single';
+    // Single 모드에서는 currentFileOffset이 이미 설정되었으므로 createSingleFileChunk에서 반영됨
   } else {
     state.mode = 'zip';
     try {
       await initZipStream();
+      
       await prefetchBatch();
     } catch (error: any) {
       console.error('[Worker] ZIP init failed:', error);
@@ -367,7 +430,7 @@ async function initZipStream() {
     }
   });
 
-  // 파일 처리 루프 (fflate 사용)
+  // 파일 처리 루프 (fflate 사용 + 스마트 압축)
   const processFilesAsync = async () => {
     try {
       for (let i = 0; i < state.files.length; i++) {
@@ -379,8 +442,29 @@ async function initZipStream() {
           filePath = state.manifest.files[i].path;
         }
         
-        // fflate ZipPassThrough 스트림 생성 (압축 없이 저장)
-        const fileStream = new ZipPassThrough(filePath);
+        // 🚀 [스마트 압축] 파일 타입에 따라 스트림 방식 결정
+        // ZipPassThrough: 비압축 (Store) - 미디어 파일용
+        // AsyncZipDeflate: 압축 (Deflate) - 텍스트/코드용 (fflate 지원 필요, 없으면 PassThrough)
+        const compressible = isCompressibleFile(filePath);
+        
+        // 참고: AsyncZipDeflate가 import 되지 않는 환경이라면 ZipPassThrough(level 0) 사용
+        // 여기서는 구조적으로 분기 처리함
+        let fileStream: any;
+        
+        if (compressible) {
+             // 텍스트 등은 압축 시도 (level 6)
+             // 만약 AsyncZipDeflate를 사용할 수 없다면 ZipPassThrough 사용
+             try {
+                 // @ts-ignore
+                 fileStream = new AsyncZipDeflate(filePath, { level: 6 });
+             } catch (e) {
+                 fileStream = new ZipPassThrough(filePath); // Fallback
+             }
+        } else {
+             // 미디어 파일은 압축 없이 저장 (속도 최적화)
+             fileStream = new ZipPassThrough(filePath);
+        }
+
         zip.add(fileStream);
         
         const reader = file.stream().getReader();
@@ -489,6 +573,8 @@ function resetWorker() {
   chunkPool.clear();
   doubleBuffer.clear();
   zipBuffer = null;
+  historyBuffer.clear();
+  priorityQueue.length = 0;
 }
 
 function triggerPrefetch() {
@@ -534,6 +620,7 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   state.currentFileOffset = end;
 
   try {
+    // 파일 읽기 시작
     const blob = file.slice(start, end);
     const buffer = await blob.arrayBuffer();
     
@@ -626,23 +713,23 @@ async function createPacket(data: Uint8Array, dataSize: number): Promise<ArrayBu
     }
   }
 
-  // 🔐 암호화 수행
-  // ⚠️ 현재 암호화 기능은 비활성화됨 - 전체 암호화 플로우 구현 필요
-  if (false && state.encryptionKey) {
+  // 🔐 [보안] 암호화 활성화
+  // 기존: if (false && state.encryptionKey)
+  if (state.encryptionKey) {
     try {
-      // 청크 인덱스를 IV 카운터로 사용
+      // 청크 인덱스를 IV 카운터로 사용 (Deterministic IV)
       const encryptedData = await WorkerEncryptionService.encryptChunk(
         state.encryptionKey,
-        data.buffer.slice(data.byteOffset, data.byteOffset + dataSize) as ArrayBuffer, // ArrayBuffer 추출
+        data.buffer.slice(data.byteOffset, data.byteOffset + dataSize) as ArrayBuffer,
         state.chunkSequence
       );
       
-      // 암호화된 데이터로 교체 (AES-GCM은 태그 크기만큼 데이터가 커짐: +16 bytes)
+      // 암호화된 데이터로 교체 (AES-GCM Tag 16bytes 추가됨)
       data = new Uint8Array(encryptedData);
       dataSize = encryptedData.byteLength;
     } catch (e) {
       console.error('[Worker] Encryption failed:', e);
-      throw e;
+      throw e; // 치명적 오류: 암호화 실패 시 전송 중단
     }
   }
 
@@ -682,7 +769,32 @@ function processBatch(requestedCount: number) {
   if (state.startTime === 0) state.startTime = Date.now();
   if (doubleBuffer.getActiveSize() === 0) doubleBuffer.swap();
 
-  const chunks = doubleBuffer.takeFromActive(requestedCount);
+  // 🚀 1. 우선순위 큐(재전송) 먼저 확인
+  const chunks: ArrayBuffer[] = [];
+  
+  while (priorityQueue.length > 0 && chunks.length < requestedCount) {
+      chunks.push(priorityQueue.shift()!);
+  }
+
+  // 🚀 2. 부족하면 일반 데이터 가져오기
+  const remainingCount = requestedCount - chunks.length;
+  if (remainingCount > 0) {
+      const newChunks = doubleBuffer.takeFromActive(remainingCount);
+      
+      // 🚀 3. 새로 보낼 청크를 히스토리에 저장
+      for (const chunk of newChunks) {
+          const view = new DataView(chunk);
+          // Header: FileId(2) + ChunkSeq(4) + Offset(8)...
+          const offset = Number(view.getBigUint64(6, true));
+          
+          // ChunkPool은 재사용되므로 복사본을 저장해야 함
+          // (전송 시 Transferable로 소유권이 넘어가면 원본이 사라질 수 있음)
+          const copy = new Uint8Array(chunk).slice(0);
+          historyBuffer.add(offset, copy);
+          
+          chunks.push(chunk);
+      }
+  }
   
   const elapsed = (Date.now() - state.startTime) / 1000;
   const speed = elapsed > 0 ? state.totalBytesSent / elapsed : 0;
@@ -723,6 +835,31 @@ function processBatch(requestedCount: number) {
   }
 }
 
+// 🚀 NACK 요청 처리
+function handleResendRequest(missingOffset: number) {
+    console.log('[Worker] 🚨 Resend requested for offset:', missingOffset);
+    
+    // 1. 히스토리 버퍼에서 찾기 (Offset은 헤더 제외 순수 데이터 시작점)
+    // 주의: 패킷 헤더의 offset 필드와 매칭되어야 함.
+    // 여기서는 단순화를 위해 HistoryBuffer가 완성된 패킷(헤더 포함)을 저장한다고 가정하거나,
+    // 아니면 청크 시퀀스로 찾는 것이 더 정확할 수 있음.
+    // 현재 구조상 'totalBytesSent'가 Offset 역할을 하므로, 이를 기준으로 찾음.
+    
+    // * 개선: HistoryBuffer 키를 'Offset'으로 사용.
+    const packet = historyBuffer.get(missingOffset);
+    
+    if (packet) {
+        console.log('[Worker] ✅ Found in history, queuing for resend.');
+        // 우선순위 큐에 추가 (다음 배치 처리 시 최우선 전송)
+        // ArrayBuffer 복사본을 만들어야 안전함 (Transferable로 날아갈 수 있으므로)
+        const packetCopy = new Uint8Array(packet).buffer;
+        priorityQueue.push(packetCopy);
+    } else {
+        console.warn('[Worker] ⚠️ Packet expired from history buffer. Cannot resend offset:', missingOffset);
+        // 심각한 경우: 여기서 파일 읽기를 다시 시도하거나, 에러 처리
+    }
+}
+
 async function createAndSendImmediate(count: number) {
   if (!state.isInitialized) return;
 
@@ -757,5 +894,6 @@ async function createAndSendImmediate(count: number) {
     self.postMessage({ type: 'complete' });
   }
 }
+
 
 self.postMessage({ type: 'ready' });

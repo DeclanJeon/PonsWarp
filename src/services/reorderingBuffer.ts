@@ -8,37 +8,48 @@ interface BufferedChunk {
   size: number;
 }
 
+// NACK 요청 타입
+export interface NackRequest {
+  offset: number;     // 예상되는 시작 오프셋
+  missingCount: number; // 누락된 것으로 추정되는 청크 수 (추정치)
+}
+
 /**
- * 🚀 High-Performance Reordering Buffer
- * * Multi-Channel로 인해 뒤섞여 들어오는 패킷을 순서대로 정렬합니다.
- * - Map: O(1) 접근으로 "다음 순서 패킷"을 즉시 찾음.
- * - PriorityQueue: 버퍼 내부의 가장 오래된(오프셋 기준) 패킷을 추적하여 상태 모니터링.
+ * 🚀 High-Performance Reordering Buffer (Unordered Mode 대응)
+ * 순서가 뒤섞여 들어오는 패킷들을 메모리에서 재조립합니다.
  */
 export class ReorderingBuffer {
-  // 빠른 조회를 위한 Map (Offset -> Chunk)
   private chunkMap: Map<number, BufferedChunk> = new Map();
-  
-  // (선택적) 힙은 복잡한 갭 관리가 필요할 때 사용하지만, 
-  // 여기서는 Map의 성능이 압도적이므로 메타데이터 추적용으로만 활용하거나
-  // 순수 Map + Offset 추적으로 최적화합니다.
   
   private nextExpectedOffset: number = 0;
   private totalProcessedBytes: number = 0;
   private currentBufferSize: number = 0;
   
-  // 🚀 메모리 보호 설정
-  private readonly MAX_BUFFER_SIZE = 64 * 1024 * 1024; // 64MB (기존 유지)
-  private readonly CHUNK_TTL = 30000; // 30초
+  // 🚀 [최적화] Unordered Mode를 위해 버퍼 사이즈 증대
+  // 갭이 발생하면 그 사이의 데이터를 모두 들고 있어야 하므로 넉넉해야 함
+  private readonly MAX_BUFFER_SIZE = 128 * 1024 * 1024; // 128MB (기존 64MB에서 2배 증대)
+  private readonly CHUNK_TTL = 60000; // 60초 (네트워크 지연 고려하여 연장)
   private cleanupInterval: NodeJS.Timeout | null = null;
 
-  // 디버깅용: 갭 통계
+  // 🚀 NACK 제어 변수
+  private nackCallback: ((nack: NackRequest) => void) | null = null;
+  private nackTimer: NodeJS.Timeout | null = null;
+  private readonly INITIAL_NACK_DELAY = 100; // 초기 대기 100ms
+  private isNackPending = false;
+  private nackRetryCount = 0; // 💡 재시도 횟수 추적
+
+  // 디버깅 통계
   private maxGapDetected = 0;
+  private outOfOrderCount = 0;
 
   constructor(startOffset: number = 0) {
     this.nextExpectedOffset = startOffset;
-    
-    // 주기적 청소 (메모리 누수 방지)
     this.cleanupInterval = setInterval(() => this.cleanupStaleChunks(), 5000);
+  }
+
+  // 외부에서 NACK 핸들러 등록
+  public onNack(callback: (nack: NackRequest) => void) {
+    this.nackCallback = callback;
   }
 
   /**
@@ -48,30 +59,34 @@ export class ReorderingBuffer {
     const chunkLen = chunk.byteLength;
     const orderedChunks: ArrayBuffer[] = [];
 
-    // 1. 이미 처리된 패킷 (중복/지연 도착) -> 무시
+    // 1. 이미 처리된 패킷 (중복 도착) -> 무시
     if (offset < this.nextExpectedOffset) {
-      // logWarn('[Reorder]', `Duplicate or late chunk ignored. Offset: ${offset}, Expected: ${this.nextExpectedOffset}`);
+      // logDebug('[Reorder]', `Duplicate packet ignored. Offset: ${offset}`);
       return [];
     }
 
-    // 2. 버퍼 용량 초과 체크 (Drop Strategy)
+    // 2. 버퍼 용량 초과 체크 (Flow Control)
+    // 갭이 너무 커서 버퍼가 꽉 찬 경우
     if (this.currentBufferSize + chunkLen > this.MAX_BUFFER_SIZE) {
-      logError('[Reorder]', `Buffer overflow! Dropping chunk ${offset}. Buffer: ${(this.currentBufferSize/1024/1024).toFixed(2)}MB`);
-      // 🚨 치명적 상황: 여기서 드랍하면 파일이 깨짐. 
-      // 실제 프로덕션에선 여기서 "재전송 요청"을 보내야 함.
-      // 현재는 보호를 위해 드랍.
+      // 🚨 심각: 버퍼 오버플로우.
+      // 실제로는 여기서 Drop하면 안되고 Sender를 멈춰야 하지만(Backpressure),
+      // 일단 보호를 위해 가장 오래된(Offset이 가장 큰) 청크를 Drop 하거나 현재 청크를 Drop.
+      logError('[Reorder]', `Buffer overflow! Dropping chunk ${offset}. Buffer usage: ${(this.currentBufferSize/1024/1024).toFixed(2)}MB`);
       return [];
     }
 
-    // 3. Fast Path: 정확히 기다리던 순서면 바로 배출
+    // 3. Fast Path: 정확히 기다리던 순서 (갭이 채워짐)
     if (offset === this.nextExpectedOffset) {
       orderedChunks.push(chunk);
       this.advanceOffset(chunkLen);
-      
-      // 4. 연속된 다음 청크들이 버퍼에 있는지 확인 (Drain)
       this.drainMap(orderedChunks);
+      
+      // 구멍이 메워졌으므로 NACK 예약 취소
+      if (this.isNackPending && !this.chunkMap.has(this.nextExpectedOffset)) {
+         this.clearNackTimer();
+      }
     } else {
-      // 5. 순서가 아니면 버퍼링 (Out-of-Order)
+      // 4. 순서가 아님 (Out-of-Order) -> 버퍼링
       if (!this.chunkMap.has(offset)) {
         this.chunkMap.set(offset, {
           data: chunk,
@@ -80,12 +95,20 @@ export class ReorderingBuffer {
           size: chunkLen
         });
         this.currentBufferSize += chunkLen;
+        this.outOfOrderCount++;
         
-        // 갭 크기 모니터링 (디버깅)
+        // 🚀 [신규] Gap이 처음 감지되면 NACK 타이머 시작
+        if (!this.isNackPending && offset > this.nextExpectedOffset) {
+            this.scheduleNack();
+        }
+        
         const gap = offset - this.nextExpectedOffset;
         if (gap > this.maxGapDetected) {
           this.maxGapDetected = gap;
-          // logDebug('[Reorder]', `New Max Gap: ${gap} bytes`);
+          // 갭이 클 때만 로그 출력 (노이즈 감소)
+          if (gap > 10 * 1024 * 1024) {
+             logDebug('[Reorder]', `Huge Gap detected: ${(gap/1024/1024).toFixed(2)}MB`);
+          }
         }
       }
     }
@@ -97,6 +120,9 @@ export class ReorderingBuffer {
    * Map에서 연속된 청크를 찾아 배출
    */
   private drainMap(outputList: ArrayBuffer[]): void {
+    let drainedCount = 0;
+    
+    // Map에서 nextExpectedOffset에 해당하는 청크가 있는지 확인
     while (this.chunkMap.has(this.nextExpectedOffset)) {
       const chunkObj = this.chunkMap.get(this.nextExpectedOffset)!;
       
@@ -105,7 +131,67 @@ export class ReorderingBuffer {
       this.chunkMap.delete(this.nextExpectedOffset);
       this.currentBufferSize -= chunkObj.size;
       this.advanceOffset(chunkObj.size);
+      drainedCount++;
     }
+    
+    if (drainedCount > 10) {
+      // 한 번에 많은 패킷이 풀렸다면 HOL Blocking이 해소된 것임
+      // logDebug('[Reorder]', `🚀 Burst drain: ${drainedCount} chunks reassembled instantly`);
+    }
+  }
+
+  // 🚀 [수정] 지수 백오프가 적용된 NACK 스케줄링
+  private scheduleNack() {
+    if (this.nackTimer) clearTimeout(this.nackTimer);
+    this.isNackPending = true;
+    
+    // 재시도 횟수에 따라 대기 시간 증가 (1.5배씩 증가)
+    // 1회차: 100ms, 2회차: 150ms, 3회차: 225ms ... 최대 1초
+    const delay = Math.min(1000, this.INITIAL_NACK_DELAY * Math.pow(1.5, this.nackRetryCount));
+    
+    this.nackTimer = setTimeout(() => {
+        // 타이머가 터졌는데 여전히 다음 오프셋이 비어있다면 NACK 전송
+        if (!this.chunkMap.has(this.nextExpectedOffset)) {
+            
+            // 너무 많이 시도했으면 포기하거나 로그 레벨을 낮춤
+            if (this.nackRetryCount > 20) {
+               logError('[Reorder]', `Critical: Offset ${this.nextExpectedOffset} missing after 20 retries.`);
+               // 여기서 멈추지 않고 계속 시도하거나, 치명적 에러로 처리
+            }
+
+            logWarn('[Reorder]', `Gap at ${this.nextExpectedOffset} (Retry: ${this.nackRetryCount + 1}, Delay: ${delay.toFixed(0)}ms). Requesting retransmission.`);
+            
+            this.nackCallback?.({
+                offset: this.nextExpectedOffset,
+                missingCount: 1
+            });
+            
+            this.nackRetryCount++; // 카운트 증가
+            this.scheduleNack();   // 다음 타이머 예약
+        } else {
+            this.isNackPending = false;
+        }
+    }, delay);
+  }
+
+  // 🚀 [신규] 즉시 NACK 전송 (긴급 상황용)
+  public sendImmediateNack(offset: number) {
+    if (this.nackCallback) {
+      logWarn('[Reorder]', `Immediate NACK sent for offset: ${offset}`);
+      this.nackCallback({
+        offset,
+        missingCount: 1
+      });
+    }
+  }
+
+  private clearNackTimer() {
+      if (this.nackTimer) {
+          clearTimeout(this.nackTimer);
+          this.nackTimer = null;
+      }
+      this.isNackPending = false;
+      this.nackRetryCount = 0; // 💡 성공 시 카운트 리셋
   }
 
   private advanceOffset(len: number) {
@@ -134,8 +220,8 @@ export class ReorderingBuffer {
       bufferedCount: this.chunkMap.size,
       bufferedBytes: this.currentBufferSize,
       nextExpected: this.nextExpectedOffset,
-      processedBytes: this.totalProcessedBytes,
-      maxGap: this.maxGapDetected
+      maxGap: this.maxGapDetected,
+      outOfOrderCount: this.outOfOrderCount
     };
   }
 
@@ -145,26 +231,17 @@ export class ReorderingBuffer {
    */
   public forceFlushAll(): ArrayBuffer[] {
     const remainingChunks: ArrayBuffer[] = [];
-    
-    if (this.chunkMap.size === 0) {
-      return remainingChunks;
-    }
+    if (this.chunkMap.size === 0) return remainingChunks;
 
-    logWarn('[Reorder]', `Force flushing ${this.chunkMap.size} remaining chunks (순서 무시)`);
-    
-    // 오프셋 순서대로 정렬하여 배출
+    logWarn('[Reorder]', `Force flushing ${this.chunkMap.size} chunks. Final gap check.`);
     const sortedOffsets = Array.from(this.chunkMap.keys()).sort((a, b) => a - b);
     
     for (const offset of sortedOffsets) {
       const chunk = this.chunkMap.get(offset)!;
       remainingChunks.push(chunk.data);
-      logWarn('[Reorder]', `Flushing chunk at offset ${offset}, size: ${chunk.size}`);
     }
     
-    // 버퍼 초기화
-    this.chunkMap.clear();
-    this.currentBufferSize = 0;
-    
+    this.clear();
     return remainingChunks;
   }
 
@@ -183,15 +260,12 @@ export class ReorderingBuffer {
   }
 
   public clear(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
+    this.clearNackTimer(); // 타이머 정리 추가
+    if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     this.chunkMap.clear();
     this.currentBufferSize = 0;
     this.nextExpectedOffset = 0;
-    this.totalProcessedBytes = 0;
-    this.maxGapDetected = 0;
+    this.outOfOrderCount = 0;
   }
 
   /**

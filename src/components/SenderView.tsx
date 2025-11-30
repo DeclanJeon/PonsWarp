@@ -52,6 +52,13 @@ const SenderView: React.FC<SenderViewProps> = () => {
     
     swarmManager.on('error', (errorMsg: string) => {
       console.error('[SenderView] SwarmManager error:', errorMsg);
+      
+      // 🚀 [수정] 치명적인 에러가 아니면 IDLE로 리셋하지 않음
+      if (errorMsg.includes('disconnected') || errorMsg.includes('closed')) {
+          // 단순 연결 끊김은 무시 (재접속 대기)
+          return;
+      }
+      
       alert(`Transfer error: ${errorMsg}\n\nPlease try again.`);
       setStatus('IDLE');
     });
@@ -64,6 +71,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
     swarmManager.on('peer-disconnected', ({ peerId }: { peerId: string }) => {
       setConnectedPeers((prev: string[]) => prev.filter((id: string) => id !== peerId));
       setReadyPeers((prev: string[]) => prev.filter((id: string) => id !== peerId));
+      
+      // 🚀 [수정] 피어가 끊겨도 IDLE로 가지 않음!
+      // 전송 중이었다면, 잠시 멈추고 기다리는 상태 유지
+      if (status === 'TRANSFERRING') {
+          console.log('[SenderView] Peer disconnected during transfer. Waiting for reconnection...');
+          // 상태를 굳이 IDLE로 바꾸지 않음.
+          // 필요하다면 사용자에게 "재접속 대기 중..." 토스트 메시지 표시
+      }
     });
 
     swarmManager.on('peer-ready', (peerId: string) => {
@@ -221,6 +236,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const processScannedFiles = async (scannedFiles: any[]) => {
     if (scannedFiles.length === 0) return;
     
+    // 신규 전송 로직
     // 🔐 암호화 키 생성
     const encryptionKey = await EncryptionService.generateKey();
     setEncryptionKey(encryptionKey);
@@ -309,7 +325,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
              <div className="mb-8">
                 <div className="w-20 h-20 bg-cyan-900/20 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                    <Upload className="w-10 h-10 text-cyan-400" />
+                     <Upload className="w-10 h-10 text-cyan-400" />
                 </div>
                 <h2 className="text-3xl font-bold mb-2">Drag & Drop</h2>
                 <p className="text-cyan-200/60 text-lg">Files or Folders</p>
@@ -506,7 +522,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 <AlertTriangle className="w-6 h-6 text-yellow-500 flex-shrink-0" />
                 <div className="text-sm text-gray-300">
                     <p className="font-bold text-white mb-1">Do NOT close this window.</p>
-                    <p>The receivers are currently saving the files. The connection must remain open until they finish downloading.</p>
+                    <p>The receivers are currently saving files. The connection must remain open until they finish downloading.</p>
                 </div>
             </div>
         </motion.div>
@@ -525,7 +541,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             
             <h2 className="text-2xl font-bold text-white mb-2">Transfer Batch Complete</h2>
             <p className="text-gray-400 mb-4">
-              {completedPeers.length} receiver(s) have successfully downloaded the files.
+              {completedPeers.length} receiver(s) have successfully downloaded files.
             </p>
             
             {/* 피어 상태 표시 */}
@@ -591,8 +607,8 @@ const SenderView: React.FC<SenderViewProps> = () => {
           <h2 className="text-3xl font-bold mb-2">Transfer Successful!</h2>
           <p className="text-gray-400 mb-8">
             {connectedPeers.length > 1 
-              ? `All ${connectedPeers.length} receivers have successfully saved the files.`
-              : 'The receiver has successfully saved the files.'}
+              ? `All ${connectedPeers.length} receivers have successfully saved files.`
+              : 'The receiver has successfully saved files.'}
           </p>
           <button
             onClick={() => window.location.reload()}

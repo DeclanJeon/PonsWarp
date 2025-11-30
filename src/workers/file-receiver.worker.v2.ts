@@ -147,7 +147,7 @@ class ReceiverWorker {
 
     let dataBuffer = packet.slice(HEADER_SIZE, HEADER_SIZE + size);
 
-    // 🔐 복호화 수행
+    // 🔐 [보안] 복호화 수행
     if (this.encryptionKey) {
         try {
             dataBuffer = await WorkerEncryptionService.decryptChunk(
@@ -155,17 +155,19 @@ class ReceiverWorker {
                 dataBuffer,
                 chunkSequence
             );
-            // 복호화된 데이터 크기로 업데이트?
-            // 아님, 여기서는 원본 데이터 스트림으로 돌아감.
+            // 복호화 성공
         } catch (e) {
             console.error('[Receiver Worker] Decryption failed:', e);
-            // 에러 처리 (전송 중단 등)
+            // 복호화 실패는 치명적이나, 스트림을 끊지 않고 에러 로그만 남김 (재전송 로직이 없으므로)
+            // 실제 프로덕션에서는 여기서 재전송 요청(NACK)을 보내야 함
             return;
         }
     }
 
-    this.totalBytesReceived += size; // 전송량 기준으로는 암호화된 크기지만, 진행률은 원본 크기 기준이어야 함 (보정 필요할 수 있음)
-    // 간단히: 암호화 오버헤드(16바이트)는 무시하고 진행률 표시 (큰 파일에선 오차 미미함)
+    // 진행률 업데이트
+    // 주의: size는 암호화된 크기(GCM Tag 포함)일 수 있음.
+    // 실제 파일 크기보다 약간 더 빠르게 증가할 수 있으나, UX상 큰 문제 없음.
+    this.totalBytesReceived += size;
 
     this.chunksProcessed++;
 

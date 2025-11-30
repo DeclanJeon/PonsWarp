@@ -1,8 +1,4 @@
-/**
- * 🚀 [Step 12] Simple Transfer Metrics
- * 복잡한 혼잡 제어 로직을 제거하고, 순수하게 전송 속도와 통계만 측정합니다.
- * 실제 흐름 제어는 WebRTC DataChannel의 Backpressure에 맡깁니다.
- */
+import { BATCH_SIZE_MIN, BATCH_SIZE_MAX, BATCH_SIZE_INITIAL, HIGH_WATER_MARK, LOW_WATER_MARK } from '../utils/constants';
 
 export interface TransferMetrics {
   bytesSent: number;
@@ -12,6 +8,7 @@ export interface TransferMetrics {
   progress: number;     // 0-100
   elapsedTime: number;  // seconds
   remainingTime: number;// seconds
+  currentBatchSize: number; // 🚀 현재 적용 중인 배치 크기 (디버깅용)
 }
 
 export class NetworkAdaptiveController {
@@ -21,7 +18,11 @@ export class NetworkAdaptiveController {
   private totalBytes = 0;
   private totalBytesSent = 0;
   
-  // 이동 평균 속도 계산용 (부드러운 UI 표시)
+  // 🚀 [적응형 제어 변수]
+  private currentBatchSize = BATCH_SIZE_INITIAL;
+  private congestionWindow = 0; // 현재 비행 중인(In-flight) 데이터 크기 추정
+  
+  // 속도 측정용 샘플링
   private speedSamples: number[] = [];
   private readonly SAMPLE_SIZE = 10;
 
@@ -34,6 +35,7 @@ export class NetworkAdaptiveController {
     this.lastUpdateTime = this.startTime;
     this.totalBytes = totalBytes;
     this.totalBytesSent = 0;
+    this.currentBatchSize = BATCH_SIZE_INITIAL;
     this.speedSamples = [];
   }
 
@@ -42,21 +44,42 @@ export class NetworkAdaptiveController {
   }
 
   /**
-   * 주기적으로 호출되어 현재 속도와 진행률을 계산합니다.
-   * (UI 업데이트 루프에서 호출 권장)
+   * 🚀 [핵심] WebRTC 버퍼 상태에 따라 배치 크기 조절 (AIMD 알고리즘)
+   * drain 이벤트나 주기적인 모니터링 시 호출됨
    */
+  public updateBufferState(bufferedAmount: number): void {
+    // 1. 혼잡 감지 (Congestion Detected)
+    if (bufferedAmount > HIGH_WATER_MARK * 0.8) {
+      // 버퍼가 80% 이상 차면 배치를 절반으로 줄임 (Multiplicative Decrease)
+      this.currentBatchSize = Math.max(BATCH_SIZE_MIN, Math.floor(this.currentBatchSize * 0.5));
+    }
+    // 2. 여유 감지 (Idle Detected)
+    else if (bufferedAmount < LOW_WATER_MARK) {
+      // 버퍼가 여유로우면 배치를 1씩 늘림 (Additive Increase)
+      // 너무 급격히 늘어나지 않도록 제한
+      if (this.currentBatchSize < BATCH_SIZE_MAX) {
+        this.currentBatchSize += 1;
+      }
+    }
+    // 중간 상태에서는 현상 유지
+  }
+
+  /**
+   * 워커에게 요청할 최적의 배치 크기 반환
+   */
+  public getRecommendedBatchSize(): number {
+    return this.currentBatchSize;
+  }
+
   public getMetrics(): TransferMetrics {
     const now = Date.now();
-    const elapsedSinceLast = (now - this.lastUpdateTime) / 1000; // seconds
+    const elapsedSinceLast = (now - this.lastUpdateTime) / 1000;
 
-    let currentSpeed = 0;
-
-    // 200ms 이상 지났을 때만 속도 갱신 (너무 잦은 갱신 방지)
+    // 200ms마다 속도 갱신
     if (elapsedSinceLast >= 0.2) {
       const bytesDiff = this.totalBytesSent - this.lastBytesSent;
-      currentSpeed = bytesDiff / elapsedSinceLast;
+      const currentSpeed = bytesDiff / elapsedSinceLast;
 
-      // 이동 평균 필터 적용
       this.speedSamples.push(currentSpeed);
       if (this.speedSamples.length > this.SAMPLE_SIZE) {
         this.speedSamples.shift();
@@ -64,9 +87,6 @@ export class NetworkAdaptiveController {
 
       this.lastBytesSent = this.totalBytesSent;
       this.lastUpdateTime = now;
-    } else {
-      // 갱신 주기 전에는 마지막 계산된 평균 속도 유지
-      currentSpeed = this.getAverageSpeed();
     }
 
     const avgSpeed = this.getAverageSpeed();
@@ -77,11 +97,12 @@ export class NetworkAdaptiveController {
     return {
       bytesSent: this.totalBytesSent,
       totalBytes: this.totalBytes,
-      speed: avgSpeed, // UI에는 부드러운 평균값 표시
+      speed: avgSpeed,
       averageSpeed: avgSpeed,
       progress: this.totalBytes > 0 ? (this.totalBytesSent / this.totalBytes) * 100 : 0,
       elapsedTime: totalElapsed,
-      remainingTime
+      remainingTime,
+      currentBatchSize: this.currentBatchSize // 모니터링용
     };
   }
 
@@ -91,25 +112,13 @@ export class NetworkAdaptiveController {
     return sum / this.speedSamples.length;
   }
 
-  // 기존 코드와의 호환성을 위한 Stub 메서드들 (빈 껍데기)
-  public updateBufferState(bufferedAmount: number): void {}
-  public updateFromWebRTCStats(stats: any): void {}
-  
-  // 항상 고정된 최대 배치 설정 반환
-  public getAdaptiveParams() {
-    return {
-      chunkSize: 64 * 1024, // 64KB (고정)
-      batchSize: 128,       // 128개 (약 8MB) - 항상 최대 성능
-      bufferTarget: 16 * 1024 * 1024 // 16MB
-    };
-  }
-
   public reset(): void {
     this.startTime = 0;
     this.lastUpdateTime = 0;
     this.lastBytesSent = 0;
     this.totalBytesSent = 0;
     this.totalBytes = 0;
+    this.currentBatchSize = BATCH_SIZE_INITIAL;
     this.speedSamples = [];
   }
 }

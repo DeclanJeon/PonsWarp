@@ -34,6 +34,10 @@ export class SinglePeerConnection {
 
   // Round-Robin 로드 밸런싱 인덱스
   private nextChannelIndex = 0;
+  
+  // 🚀 ICE Restart 관련
+  private isReconnecting = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(peerId: string, initiator: boolean, config: PeerConfig) {
     this.id = peerId;
@@ -90,7 +94,34 @@ export class SinglePeerConnection {
       this.pc.oniceconnectionstatechange = () => {
         const state = this.pc?.iceConnectionState;
         logInfo(`[NativePeer ${this.id}]`, `ICE State: ${state}`);
-        if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+        
+        if (state === 'connected' || state === 'completed') {
+          if (!this.connected || this.isReconnecting) {
+            this.connected = true;
+            this.isReconnecting = false;
+            if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+            
+            logInfo(`[NativePeer ${this.id}]`, '✅ Connection established/restored');
+            this.emit('connected', this.id);
+            
+            // Receiver는 채널이 열릴 때까지 대기
+            if (!this.isInitiator) {
+              if (this.dataChannels.length > 0 && this.dataChannels.every(ch => ch.readyState === 'open')) {
+                this.ready = true;
+              }
+            }
+          }
+        }
+        // 🚀 [핵심] 연결이 끊어지면 ICE Restart 시도
+        else if (state === 'disconnected') {
+          logWarn(`[NativePeer ${this.id}]`, '⚠️ ICE Disconnected. Attempting restart...');
+          this.handleDisconnect();
+        }
+        else if (state === 'failed') {
+          logError(`[NativePeer ${this.id}]`, '❌ ICE Failed. Attempting one final restart...');
+          this.handleDisconnect();
+        }
+        else if (state === 'closed') {
           this.handleClose();
         }
       };
@@ -376,5 +407,50 @@ export class SinglePeerConnection {
     this.dataChannels = [];
     this.removeAllListeners();
     logInfo(`[NativePeer ${this.id}]`, 'Destroyed');
+  }
+
+  /**
+   * 🚀 네트워크 핸드오버 처리 (Debounce 적용)
+   */
+  private handleDisconnect() {
+    if (this.isReconnecting) return;
+    this.connected = false;
+    this.isReconnecting = true;
+    
+    // UI에 '재연결 중...' 상태 알림
+    this.emit('reconnecting', true);
+
+    // 2초 정도 기다려보고(일시적 장애일 수 있음) 여전히 끊겨있으면 Restart
+    this.reconnectTimer = setTimeout(() => {
+        if (this.pc && this.pc.iceConnectionState !== 'connected') {
+            this.restartIce();
+        }
+    }, 2000);
+  }
+
+  /**
+   * 🚀 ICE Restart 실행
+   * 새로운 ufrag/pwd를 생성하여 IP가 바뀌어도 연결을 복구함
+   */
+  public async restartIce() {
+    if (!this.pc || !this.isInitiator) return; // Initiator만 Restart 주도
+
+    logInfo(`[NativePeer ${this.id}]`, '🔄 Triggering ICE Restart...');
+
+    try {
+      // iceRestart: true 옵션이 핵심
+      const offer = await this.pc.createOffer({ iceRestart: true });
+      await this.pc.setLocalDescription(offer);
+      
+      // 변경된 SDP(새로운 후보자 정보 포함) 전송
+      this.emit('signal', {
+        type: 'offer',
+        sdp: this.pc.localDescription?.sdp,
+        restart: true // 시그널링 서버에 재시작임을 알림 (선택사항)
+      });
+    } catch (e) {
+      logError(`[NativePeer ${this.id}]`, 'ICE Restart failed', e);
+      this.emit('error', 'Connection recovery failed');
+    }
   }
 }

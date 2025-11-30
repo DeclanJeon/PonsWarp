@@ -22,6 +22,8 @@ import streamSaver from 'streamsaver';
 import { ReorderingBuffer } from './reorderingBuffer';
 import { logInfo, logError, logWarn } from '../utils/logger';
 import { EncryptionService } from '../utils/encryption';
+import { bufferPool } from '../utils/bufferPool';
+import { formatBytes } from '../utils/fileUtils';
 
 // StreamSaver MITM 설정
 if (typeof window !== 'undefined') {
@@ -58,13 +60,15 @@ export class DirectFileWriter {
   
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
   private pendingBytesInBuffer = 0;
+  
 
   private onProgressCallback: ((data: any) => void) | null = null;
   private onCompleteCallback: ((actualSize: number) => void) | null = null;
   private onErrorCallback: ((error: string) => void) | null = null;
+  private onNackCallback: ((nack: any) => void) | null = null;
 
   /**
-   * 스토리지 초기화
+   * 저장소 초기화
    */
   public async initStorage(manifest: any, encryptionKey?: string): Promise<void> {
     this.manifest = manifest;
@@ -98,6 +102,7 @@ export class DirectFileWriter {
 
     try {
       await this.initFileWriter(fileName, manifest.totalSize);
+      
       logInfo('[DirectFileWriter]', `✅ Initialized: ${fileName}`);
     } catch (e: any) {
       if (e.name === 'AbortError') {
@@ -125,32 +130,49 @@ export class DirectFileWriter {
         accept['application/octet-stream'] = [`.${ext}`];
       }
 
+      let handle: FileSystemFileHandle | undefined;
+      
+      // 새 핸들 생성
       // @ts-ignore
-      const handle = await window.showSaveFilePicker({
+      handle = await window.showSaveFilePicker({
         suggestedName: fileName,
         types: [{
           description: 'File',
           accept
         }]
       });
-      
+
+      // Writable 생성
+      // @ts-ignore
       this.writer = await handle.createWritable();
+      
       this.writerMode = 'file-system-access';
-      // 🚀 [중요] 두 모드 모두 ReorderingBuffer를 사용하여 순차 데이터 보장
-      // 순차 데이터여야만 Batch Merge가 가능함
-      this.reorderingBuffer = new ReorderingBuffer(0);
+      // ReorderingBuffer를 사용하여 순차 데이터 보장
+      this.reorderingBuffer = new ReorderingBuffer(this.totalBytesWritten);
+      
+      // ReorderingBuffer의 NACK 이벤트를 상위로 전달
+      this.reorderingBuffer.onNack((nack) => {
+          this.onNackCallback?.(nack);
+      });
+      
       logInfo('[DirectFileWriter]', `File System Access ready: ${fileName} (Batch Mode ON)`);
     } else {
       // StreamSaver (Firefox 등)
-      // 🚨 [수정] ZIP 파일(여러 파일 전송)인 경우 fileSize가 정확하지 않음.
+      // ZIP 파일(여러 파일 전송)인 경우 fileSize가 정확하지 않음.
       // size를 undefined로 보내면 StreamSaver는 Content-Length를 설정하지 않아 브라우저가 크기 불일치 오류를 뱉지 않음.
       const isZip = fileName.endsWith('.zip');
       const streamConfig = isZip ? {} : { size: fileSize };
       const fileStream = streamSaver.createWriteStream(fileName, streamConfig);
       this.writer = fileStream.getWriter();
       this.writerMode = 'streamsaver';
-      // 🚀 [중요] 두 모드 모두 ReorderingBuffer를 사용하여 순차 데이터 보장
-      this.reorderingBuffer = new ReorderingBuffer(0);
+      // ReorderingBuffer를 사용하여 순차 데이터 보장
+      this.reorderingBuffer = new ReorderingBuffer(this.totalBytesWritten);
+      
+      // ReorderingBuffer의 NACK 이벤트를 상위로 전달
+      this.reorderingBuffer.onNack((nack) => {
+          this.onNackCallback?.(nack);
+      });
+      
       logInfo('[DirectFileWriter]', `StreamSaver ready: ${fileName} (Batch Mode ON)`);
     }
   }
@@ -222,23 +244,6 @@ export class DirectFileWriter {
 
     let data = new Uint8Array(packet, HEADER_SIZE, size);
     
-    // 🔐 암호화된 데이터 복호화 (암호화 키가 있는 경우)
-    // ⚠️ 현재 암호화 기능은 비활성화됨 - 송신 측에서 암호화를 하지 않음
-    if (false && this.encryptionKey) {
-      try {
-        const cryptoKey = await EncryptionService.importKey(this.encryptionKey);
-        // 🔐 패킷 헤더의 청크 인덱스 사용 (송신 측과 동일한 IV 생성)
-        const decryptedData = await EncryptionService.decryptChunk(
-          cryptoKey,
-          data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-          chunkIndex
-        );
-        data = new Uint8Array(decryptedData);
-      } catch (error) {
-        logError('[DirectFileWriter]', 'Decryption failed:', error);
-        throw error; // 🔐 복호화 실패 시 에러 전파 (데이터 손상 방지)
-      }
-    }
 
     // 1. 순서 정렬 (Reordering) - 모든 모드에서 사용
     const chunksToWrite = this.reorderingBuffer.push(
@@ -260,38 +265,58 @@ export class DirectFileWriter {
   }
 
   /**
-   * 🚀 [핵심] 메모리에 모아둔 데이터를 한 번에 디스크로 전송
+   * 🚀 [핵심] 메모리에 모아둔 데이터를 한 번에 디스크로 전송 (메모리 풀링 적용)
    */
   private async flushBuffer(): Promise<void> {
     if (this.writeBuffer.length === 0) return;
 
-    // 1. 큰 버퍼 하나로 병합
-    const mergedBuffer = new Uint8Array(this.currentBatchSize);
+    // 1. 풀에서 거대 버퍼 대여 (Slab Allocation)
+    // 정확히 currentBatchSize 크기를 요청하거나,
+    // 성능을 위해 표준 사이즈(예: 8MB, 16MB)로 올림(Rounding)할 수도 있음
+    // 여기서는 정확한 크기로 요청 (BufferPool이 알아서 처리하거나 할당함)
+    const mergedBuffer = bufferPool.acquire(this.currentBatchSize);
+    
+    // 2. 데이터 병합 (Merge)
     let offset = 0;
     for (const chunk of this.writeBuffer) {
       mergedBuffer.set(chunk, offset);
       offset += chunk.byteLength;
     }
 
-    // 2. 디스크 쓰기
-    if (this.writerMode === 'file-system-access') {
-      const fsWriter = this.writer as FileSystemWritableFileStream;
-      await fsWriter.write({
-        type: 'write',
-        position: this.totalBytesWritten, // 순차적으로 쓰므로 누적 오프셋 사용
-        data: mergedBuffer,
-      });
-    } else {
-      const streamWriter = this.writer as WritableStreamDefaultWriter;
-      await streamWriter.ready;
-      await streamWriter.write(mergedBuffer);
+    try {
+      // 3. 디스크 쓰기
+      if (this.writerMode === 'file-system-access') {
+        const fsWriter = this.writer as FileSystemWritableFileStream;
+        // 🚀 타입 호환을 위해 Uint8Array를 그대로 전달
+        // @ts-ignore - FileSystem API 타입 정의와 실제 구현 간의 불일치 우회
+        await fsWriter.write({
+          type: 'write',
+          position: this.totalBytesWritten, // 순차적으로 쓰므로 누적 오프셋 사용
+          data: mergedBuffer, // 🚀 Uint8Array 직접 전달
+        });
+      } else {
+        const streamWriter = this.writer as WritableStreamDefaultWriter;
+        await streamWriter.ready;
+        await streamWriter.write(mergedBuffer); // 🚀 Uint8Array 직접 전달
+      }
+    } catch (e) {
+      logError('[DirectFileWriter]', 'Write failed', e);
+      throw e;
+    } finally {
+      // 4. 🚀 [핵심] 사용 완료한 버퍼 반납 (재사용)
+      // StreamSaver 등에서 버퍼를 계속 잡고 있을 수 있으므로,
+      // 확실히 쓰기가 끝난 시점에 반납해야 함
+      // FileSystemAccess API의 write는 await시 완료를 보장함
+      bufferPool.release(mergedBuffer);
     }
 
-    // 3. 상태 업데이트 및 초기화
+    // 5. 상태 업데이트 및 초기화
     this.totalBytesWritten += this.currentBatchSize;
     this.pendingBytesInBuffer -= this.currentBatchSize; // 버퍼에서 디스크로 이동했으므로 감소
-    this.writeBuffer = [];
+    this.writeBuffer = []; // 참조 해제 (작은 청크들은 GC 대상이 됨)
     this.currentBatchSize = 0;
+    
+    
     this.reportProgress();
   }
 
@@ -383,6 +408,8 @@ export class DirectFileWriter {
     }
 
     this.writer = null;
+    
+    
     this.onCompleteCallback?.(this.totalBytesWritten);
   }
 
@@ -399,6 +426,13 @@ export class DirectFileWriter {
 
   public onError(callback: (error: string) => void): void {
     this.onErrorCallback = callback;
+  }
+
+  /**
+   * 🚀 NACK 콜백 등록 메서드
+   */
+  public onNack(callback: (nack: any) => void) {
+      this.onNackCallback = callback;
   }
 
   /**

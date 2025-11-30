@@ -6,19 +6,19 @@ export const CHUNK_SIZE_MIN = 16 * 1024;      // 16KB
 export const CHUNK_SIZE_INITIAL = 64 * 1024;  // 64KB
 export const CHUNK_SIZE_MAX = 128 * 1024;     // 128KB (브라우저 한계)
 
-// 🚀 [성능 최적화] WebRTC 버퍼 설정 - 공격적 파이프라이닝 적용
-// 60Mbps 환경에서 끊김 없는 전송을 위해 마진을 크게 확보
-export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024;  // 16MB (기존 8MB -> 2배 증대)
-export const LOW_WATER_MARK = 4 * 1024 * 1024;        // 4MB (이하로 떨어지면 즉시 리필)
-export const HIGH_WATER_MARK = 12 * 1024 * 1024;      // 12MB (여기까지 꽉 채움)
+// 🚀 [성능 최적화] WebRTC 버퍼 설정 - Unordered Mode 대응
+// 순서가 뒤섞여 들어오므로, 재조립을 기다리는 동안 버퍼가 찰 수 있음 -> 용량 증대
+export const MAX_BUFFERED_AMOUNT = 32 * 1024 * 1024;  // 32MB (기존 16MB -> 2배 증대)
+export const LOW_WATER_MARK = 8 * 1024 * 1024;        // 8MB (리필 기준점 상향)
+export const HIGH_WATER_MARK = 24 * 1024 * 1024;      // 24MB (Backpressure 기준점 상향)
 
 export const HEADER_SIZE = 18; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4)
 export const CONNECTION_TIMEOUT_MS = 15000;
 
-// 🚀 [성능 최적화] 배치 설정 - IPC 오버헤드 감소
-export const BATCH_SIZE_MIN = 32;             // 최소 32개 (약 4MB) - 기존 16에서 상향
-export const BATCH_SIZE_MAX = 128;            // 최대 128개 (약 16MB) - 기존 32에서 상향
-export const BATCH_SIZE_INITIAL = 64;         // 초기 64개 (약 8MB) -> Start-up 가속
+// 배치 크기 상향 (CPU Context Switch 감소)
+export const BATCH_SIZE_MIN = 64;
+export const BATCH_SIZE_MAX = 256;            // 최대 256개 (약 16MB~32MB)
+export const BATCH_SIZE_INITIAL = 128;
 export const BATCH_REQUEST_SIZE = 64;         // 레거시 호환
 
 // 🚀 프리페치 버퍼 설정

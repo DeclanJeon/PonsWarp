@@ -25,9 +25,14 @@ const App: React.FC = () => {
     const match = path.match(/^\/receive\/([A-Z0-9]{6})$/);
     
     if (match) {
+      // URL에 roomId가 있으면 RECEIVER 모드로 전환
       const roomId = match[1];
       setRoomId(roomId);
       setMode(AppMode.RECEIVER);
+    } else if (path === '/') {
+      // 🚀 메인 페이지에서는 저장된 roomId 무시하고 INTRO로 리셋
+      setRoomId(null);
+      setMode(AppMode.INTRO);
     }
     
     // 글로벌 에러 핸들러
