@@ -24,23 +24,19 @@ const App: React.FC = () => {
     const match = path.match(/^\/receive\/([A-Z0-9]{6})$/);
     
     if (match) {
-      // 🚨 새로고침 감지: sessionStorage를 사용하여 초기 진입인지 확인
-      const isInitialEntry = !sessionStorage.getItem('ponswarp-session-active');
+      // 🚀 [버그 수정] sessionStorage 기반의 새로고침 감지 로직 제거
+      // React StrictMode의 이중 실행으로 인해 정상적인 링크 접속도
+      // 새로고침으로 오인되어 메인으로 리다이렉트되는 문제를 해결함.
+      const roomId = match[1];
+      console.log(`[App] 🔗 Link detected for Room ID: ${roomId}`);
       
-      if (isInitialEntry) {
-        // 첫 진입: 정상적으로 수신 모드로 전환
-        const roomId = match[1];
-        setRoomId(roomId);
-        setMode(AppMode.RECEIVER);
-        sessionStorage.setItem('ponswarp-session-active', 'true');
-      } else {
-        // 새로고침: 홈으로 리다이렉트
-        console.log('[App] Refresh detected - redirecting to home');
-        sessionStorage.removeItem('ponswarp-session-active');
-        window.history.pushState({}, '', '/');
-        setMode(AppMode.INTRO);
-        toast.info('Session reset. Please reconnect.');
-      }
+      setRoomId(roomId);
+      setMode(AppMode.RECEIVER);
+      
+    } else if (path === '/') {
+      // 메인 페이지에서는 저장된 roomId 무시하고 INTRO로 리셋
+      setRoomId(null);
+      setMode(AppMode.INTRO);
     }
     
     // 글로벌 에러 핸들러
@@ -92,10 +88,10 @@ const App: React.FC = () => {
         {/* Header */}
         <header
           className="absolute top-0 left-0 p-8 z-50 flex items-center gap-4 cursor-pointer hover:opacity-80 transition-opacity"
-          onClick={() => { 
-            setMode(AppMode.INTRO); 
+          onClick={() => {
+            setMode(AppMode.INTRO);
             window.history.pushState({}, '', '/');
-            sessionStorage.removeItem('ponswarp-session-active');
+            setRoomId(null);
           }}
         >
           <div className="w-12 h-12 border-2 border-cyan-500 rounded-full flex items-center justify-center backdrop-blur-sm bg-black/20 shadow-[0_0_15px_rgba(6,182,212,0.5)]">
