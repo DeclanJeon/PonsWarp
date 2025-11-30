@@ -315,7 +315,11 @@ class EnhancedWebRTCService {
         const peer = new SinglePeerConnection(
             this.connectedPeerId || 'unknown',
             initiator,
-            { iceServers: this.iceServers }
+            {
+                iceServers: this.iceServers,
+                isInitiator: initiator,
+                id: this.connectedPeerId || 'unknown'
+            }
         );
 
         peer.on('signal', data => {

@@ -1,15 +1,10 @@
+import { PeerConfig } from '../utils/config';
 import { LOW_WATER_MARK, MULTI_CHANNEL_COUNT } from '../utils/constants';
 import { logInfo, logError, logWarn } from '../utils/logger';
 import { IPeerConnection, IPeerState } from './peerConnectionTypes';
 
 // 이벤트 핸들러 타입
 type EventHandler = (data: any) => void;
-
-export interface NativePeerConfig {
-  iceServers: RTCIceServer[];
-  isInitiator: boolean;
-  id: string; // Peer ID
-}
 
 export interface PeerState extends IPeerState {
   // 추가 속성이 필요하면 여기에 정의
@@ -23,7 +18,7 @@ export class NativePeerConnection implements IPeerConnection {
   private pc: RTCPeerConnection | null = null;
   private dataChannels: RTCDataChannel[] = [];
   private eventListeners: Record<string, EventHandler[]> = {};
-  private config: NativePeerConfig;
+  private config: PeerConfig;
   
   // 라운드 로빈 로드 밸런싱을 위한 인덱스
   private nextChannelIndex = 0;
@@ -33,7 +28,7 @@ export class NativePeerConnection implements IPeerConnection {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isDestroyed: boolean = false; // 🚀 [추가] 파괴 상태 추적
 
-  constructor(config: NativePeerConfig) {
+  constructor(config: PeerConfig) {
     this.config = config;
     this.id = config.id;
     this.initialize();

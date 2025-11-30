@@ -10,8 +10,8 @@
  * - 전송 중 새 피어 ready: 대기열에 추가, 현재 전송 완료 후 자동 시작
  * - 모든 피어 완료: Transfer Success UI 표시
  */
-import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
-import { NativePeerConnection, NativePeerConfig } from './nativePeerConnection';
+
+import { NativePeerConnection } from './nativePeerConnection';
 import { IPeerConnection, IPeerState } from './peerConnectionTypes';
 import { signalingService } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
@@ -22,6 +22,7 @@ import {
   HEADER_SIZE,
   BATCH_SIZE_INITIAL
 } from '../utils/constants';
+import { PeerConfig } from '../utils/config';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -158,12 +159,8 @@ export class SwarmManager {
       return this.peers.get(peerId)!;
     }
 
-    const config: PeerConfig = {
-      iceServers: this.iceServers
-    };
-
     // 🚀 [Phase 2] NativePeerConnection 사용 (멀티 채널 지원)
-    const nativeConfig: NativePeerConfig = {
+    const nativeConfig: PeerConfig = {
       iceServers: this.iceServers,
       isInitiator: initiator,
       id: peerId

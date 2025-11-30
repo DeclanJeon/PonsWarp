@@ -1,17 +1,9 @@
-/**
- * SinglePeerConnection (Native WebRTC Implementation)
- * Native RTCPeerConnection으로 구현된 WebRTC 연결 클래스입니다.
- * Multi-Channel(병렬 전송)을 지원하며, SwarmManager와의 호환성을 유지합니다.
- */
+import { PeerConfig } from '../utils/config';
 import { LOW_WATER_MARK, MULTI_CHANNEL_COUNT } from '../utils/constants';
 import { logInfo, logError, logWarn } from '../utils/logger';
 import { optimizeSDP } from '../utils/sdpUtils'; // 🚀 추가
 
 type EventHandler = (data: any) => void;
-
-export interface PeerConfig {
-  iceServers: RTCIceServer[];
-}
 
 export interface PeerState {
   id: string;
