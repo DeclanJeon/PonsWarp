@@ -1,31 +1,10 @@
-/**
- * Direct File Writer Service
- * OPFS 없이 청크를 받으면서 바로 다운로드
- * 
- * 전략:
- * - 송신자가 폴더를 ZIP으로 압축해서 보냄
- * - 수신자는 항상 단일 파일로 받음 (ZIP 또는 원본 파일)
- * - File System Access API (Chrome/Edge) 또는 StreamSaver (Firefox) 사용
- * 
- * 장점:
- * - 브라우저 저장소 quota 제한 없음
- * - 무제한 파일 크기 지원
- * - 메모리 효율적 (청크 단위 처리)
- * - 간단하고 안정적
- * 
- * 🚀 [개선] ReorderingBuffer 통합
- * - Multi-Channel 전송 시 패킷 순서 보장
- * - StreamSaver 모드에서 파일 손상 방지
- */
-
 import streamSaver from 'streamsaver';
 import { ReorderingBuffer } from './reorderingBuffer';
 import { logInfo, logError, logWarn } from '../utils/logger';
-import { EncryptionService } from '../utils/encryption';
 import { bufferPool } from '../utils/bufferPool';
+import { EncryptionService } from '../utils/encryption';
 import { formatBytes } from '../utils/fileUtils';
 
-// StreamSaver MITM 설정
 if (typeof window !== 'undefined') {
   streamSaver.mitm = `${window.location.origin}/mitm.html`;
 }
@@ -38,24 +17,13 @@ export class DirectFileWriter {
   private lastProgressTime = 0;
   private isFinalized = false;
   
-  // 파일 Writer
   private writer: WritableStreamDefaultWriter | FileSystemWritableFileStream | null = null;
   private writerMode: 'file-system-access' | 'streamsaver' = 'streamsaver';
-  
-  // 🚀 [추가] 재정렬 버퍼 (StreamSaver 모드용)
   private reorderingBuffer: ReorderingBuffer | null = null;
-  
-  // 🔐 암호화 키 (복호화용)
   private encryptionKey: string | null = null;
-
-  // 🚀 [추가] 쓰기 작업을 순차적으로 처리하기 위한 Promise 체인
   private writeQueue: Promise<void> = Promise.resolve();
-
-  // 🚀 [속도 개선] 배치 버퍼 설정 (메모리에 모았다가 한 번에 쓰기)
   private writeBuffer: Uint8Array[] = [];
   private currentBatchSize = 0;
-  // 🚀 [최적화] 디스크 I/O 배치 크기 상향
-  // 송신 측의 HIGH_WATER_MARK(12MB)에 맞춰 효율적인 쓰기 수행 (Context Switch 최소화)
   private readonly BATCH_THRESHOLD = 8 * 1024 * 1024; // 8MB
   
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
@@ -132,7 +100,6 @@ export class DirectFileWriter {
 
       let handle: FileSystemFileHandle | undefined;
       
-      // 새 핸들 생성
       // @ts-ignore
       handle = await window.showSaveFilePicker({
         suggestedName: fileName,
@@ -142,33 +109,21 @@ export class DirectFileWriter {
         }]
       });
 
-      // Writable 생성
-      // @ts-ignore
       this.writer = await handle.createWritable();
-      
       this.writerMode = 'file-system-access';
-      // ReorderingBuffer를 사용하여 순차 데이터 보장
       this.reorderingBuffer = new ReorderingBuffer(this.totalBytesWritten);
-      
-      // ReorderingBuffer의 NACK 이벤트를 상위로 전달
       this.reorderingBuffer.onNack((nack) => {
           this.onNackCallback?.(nack);
       });
       
       logInfo('[DirectFileWriter]', `File System Access ready: ${fileName} (Batch Mode ON)`);
     } else {
-      // StreamSaver (Firefox 등)
-      // ZIP 파일(여러 파일 전송)인 경우 fileSize가 정확하지 않음.
-      // size를 undefined로 보내면 StreamSaver는 Content-Length를 설정하지 않아 브라우저가 크기 불일치 오류를 뱉지 않음.
       const isZip = fileName.endsWith('.zip');
       const streamConfig = isZip ? {} : { size: fileSize };
       const fileStream = streamSaver.createWriteStream(fileName, streamConfig);
       this.writer = fileStream.getWriter();
       this.writerMode = 'streamsaver';
-      // ReorderingBuffer를 사용하여 순차 데이터 보장
       this.reorderingBuffer = new ReorderingBuffer(this.totalBytesWritten);
-      
-      // ReorderingBuffer의 NACK 이벤트를 상위로 전달
       this.reorderingBuffer.onNack((nack) => {
           this.onNackCallback?.(nack);
       });
@@ -321,16 +276,22 @@ export class DirectFileWriter {
   }
 
   /**
-   * 진행률 보고
+   * 🚀 [핵심 요구사항] 진행률/속도가 실제 데이터 전송과 정확히 일치해야 함
+   * 
+   * - progress: 실제 수신된 바이트 / 전체 바이트 * 100
+   * - speed: 실제 수신된 바이트 / 경과 시간
+   * - bytesTransferred: 실제 수신된 바이트 (totalBytesWritten)
    */
   private reportProgress(): void {
     const now = Date.now();
     if (now - this.lastProgressTime < 100) return;
 
     const elapsed = (now - this.startTime) / 1000;
+    
+    // 🚀 [정확성] 실제 수신된 바이트 기반 속도 계산
     const speed = elapsed > 0 ? this.totalBytesWritten / elapsed : 0;
     
-    // 🚀 [핵심 수정] 진행률을 100%로 제한 (ZIP 오버헤드로 인해 초과할 수 있음)
+    // 🚀 [정확성] 실제 수신된 바이트 기반 진행률 계산 (100% 초과 방지)
     const rawProgress = this.totalSize > 0 ? (this.totalBytesWritten / this.totalSize) * 100 : 0;
     const progress = Math.min(100, rawProgress);
 
@@ -338,6 +299,7 @@ export class DirectFileWriter {
       progress,
       speed,
       bytesTransferred: this.totalBytesWritten,
+      totalBytesSent: this.totalBytesWritten, // 호환성
       totalBytes: this.totalSize,
     });
 

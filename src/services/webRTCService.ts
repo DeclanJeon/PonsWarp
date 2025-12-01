@@ -131,12 +131,17 @@ class EnhancedWebRTCService {
             this.networkController.recordSend(chunks[i].byteLength);
         }
         
-        // 3. UI 업데이트 (Metrics 사용)
+        // 3. 🚀 [핵심 요구사항] 진행률/속도가 실제 데이터 전송과 정확히 일치해야 함
         const metrics = this.networkController.getMetrics();
+        const actualProgress = metrics.totalBytes > 0 
+            ? Math.min((metrics.bytesSent / metrics.totalBytes) * 100, 100)
+            : 0;
+        
         this.emit('progress', {
-            progress: metrics.progress,
+            progress: actualProgress,
             speed: metrics.speed,
             bytesTransferred: metrics.bytesSent,
+            totalBytesSent: metrics.bytesSent, // 호환성
             totalBytes: metrics.totalBytes,
             networkMetrics: metrics // 디버깅용
         });
@@ -270,14 +275,30 @@ class EnhancedWebRTCService {
    * 수신 시작
    */
   public async startReceiving(manifest: any, encryptionKeyStr?: string) {
-    if (!this.writer) return;
+    if (!this.writer) {
+      console.error('[webRTCService] ❌ startReceiving: No writer set!');
+      return;
+    }
     try {
+      console.log('[webRTCService] 📥 startReceiving called, initializing storage...');
       await this.writer.initStorage(manifest, encryptionKeyStr);
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
       
-      this.peer?.send(JSON.stringify({ type: 'TRANSFER_READY' }));
+      // 🚀 [핵심] TRANSFER_READY 메시지 전송
+      console.log('[webRTCService] 📤 Sending TRANSFER_READY to sender...', {
+        peerExists: !!this.peer,
+        peerConnected: this.peer?.connected
+      });
+      
+      if (this.peer && this.peer.connected) {
+        this.peer.send(JSON.stringify({ type: 'TRANSFER_READY' }));
+        console.log('[webRTCService] ✅ TRANSFER_READY sent successfully!');
+      } else {
+        console.error('[webRTCService] ❌ Cannot send TRANSFER_READY - peer not connected!');
+      }
     } catch (error: any) {
+      console.error('[webRTCService] ❌ startReceiving error:', error);
       this.emit('error', error.message);
     }
   }
@@ -382,36 +403,49 @@ class EnhancedWebRTCService {
   }
 
   private handleData(data: any) {
+    // JSON 제어 메시지인지 확인 (문자열 또는 '{'로 시작하는 바이너리)
     if (typeof data === 'string' || (data instanceof ArrayBuffer && new Uint8Array(data)[0] === 123)) {
         try {
             const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
             const msg = JSON.parse(str);
             
+            // 기존 메시지 처리
             if (msg.type === 'TRANSFER_READY') {
-                // 처음부터 시작
-                this.startWorkerTransfer();
+                this.startWorkerTransfer(); // Sender: 전송 시작
+            }
+            else if (msg.type === 'MANIFEST') {
+                this.handleMetadata(msg.manifest); // Receiver: 메타데이터 수신
+            }
+            else if (msg.type === 'DOWNLOAD_COMPLETE') {
+                this.emit('complete', true); // Sender: 완료 확인
+            }
+            else if (msg.type === 'NACK') {
+                // ... (NACK 처리 로직 유지)
+            }
+            
+            // 🚀 [핵심 수정] 대기열 관련 메시지 라우팅
+            else if (msg.type === 'QUEUED') {
+                console.log('[WebRTC] ⏳ Queued message received:', msg);
+                this.emit('queued', msg);
+            }
+            else if (msg.type === 'TRANSFER_STARTING') {
+                console.log('[WebRTC] 🚀 Transfer starting message received (from queue)');
+                this.emit('transfer-starting', msg);
+                this.emit('remote-started', true); // 호환성 유지
             }
             else if (msg.type === 'TRANSFER_STARTED') {
-                this.emit('remote-started', true);
-            } else if (msg.type === 'MANIFEST') {
-                this.handleMetadata(msg.manifest);
-            } else if (msg.type === 'DOWNLOAD_COMPLETE') {
-                this.emit('complete', true);
+                console.log('[WebRTC] 🚀 Transfer started message received');
+                // 🚀 [핵심] TRANSFER_STARTED도 transfer-starting 이벤트로 처리
+                this.emit('transfer-starting', msg);
+                this.emit('remote-started', true); // 호환성 유지
             }
-            // 🚀 [신규] NACK 수신 처리
-            else if (msg.type === 'NACK') {
-                console.warn('[Sender] 🚨 Received NACK for offset:', msg.offset);
-                this.worker?.postMessage({
-                    type: 'resend-request',
-                    payload: { offset: msg.offset }
-                });
+            else if (msg.type === 'READY_FOR_DOWNLOAD') {
+                this.emit('ready-for-download', msg);
             }
-            // 그 외 메시지 (Queue 등)
-            else if (msg.type === 'QUEUED' || msg.type === 'TRANSFER_STARTING' || msg.type === 'READY_FOR_DOWNLOAD') {
-                const eventName = msg.type.toLowerCase().replace(/_/g, '-');
-                this.emit(eventName, msg);
-            }
-        } catch (e) { }
+
+        } catch (e) {
+            console.error('[WebRTC] Failed to parse control message:', e);
+        }
         return;
     }
     

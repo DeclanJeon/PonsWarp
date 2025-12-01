@@ -64,17 +64,14 @@ export class NativePeerConnection implements IPeerConnection {
           console.log(`[NativePeer ${this.id}] 🔗 [DEBUG] Connection established/restored, emitting 'connected' event`);
           this.emit('connected', this.id);
           
-          // Initiator가 아니면(Receiver) 채널이 열릴 때까지 기다려야 함
           if (!this.config.isInitiator) {
-             // 채널이 다 열리면 'connected' 이벤트 발생 (ondatachannel에서 처리)
-             // 이미 채널이 열려있는지 확인
              if (this.dataChannels.length > 0 && this.dataChannels.every(ch => ch.readyState === 'open')) {
                this.ready = true;
              }
           }
         }
       }
-      // 🚀 [핵심] 연결이 끊어지면 ICE Restart 시도
+      
       else if (state === 'disconnected') {
         logWarn(`[NativePeer ${this.id}]`, '⚠️ ICE Disconnected. Attempting restart...');
         this.handleDisconnect();
@@ -90,36 +87,23 @@ export class NativePeerConnection implements IPeerConnection {
       }
     };
 
-    // Sender(Initiator)인 경우 데이터 채널 생성
     if (this.config.isInitiator) {
       this.createDataChannels();
       this.createOffer();
     } else {
-      // Receiver인 경우 데이터 채널 수신 대기
       this.pc.ondatachannel = (event) => {
         this.setupChannel(event.channel);
-        // 모든 예상 채널이 열렸는지 확인하는 로직은 복잡하므로,
-        // 첫 채널이 열리면 연결된 것으로 간주하고 이후 추가
-        // ready 상태는 setupChannel에서 모든 채널이 열릴 때 설정됨
         if (this.dataChannels.length === 1) {
-            // 연결은 즉시 알리지만, ready는 모든 채널이 열릴 때까지 기다림
             this.connected = true;
         }
       };
     }
   }
 
-  /**
-   * 🚀 [핵심] 멀티 채널 생성 (Parallel Streams)
-   */
   private createDataChannels() {
     if (!this.pc) return;
 
     for (let i = 0; i < MULTI_CHANNEL_COUNT; i++) {
-      // 🚀 [안정성 강화] Ordered Mode 전환
-      // ordered: true로 설정하여 ZIP 재개 기능 안정화.
-      // 순차 전송으로 패킷 유실 시 복구가 더 용이해짐.
-      // 약간의 속도 저하가 있지만 안정성이 크게 향상됨.
       const channel = this.pc.createDataChannel(`warp-channel-${i}`, {
         ordered: true,
       });
@@ -129,16 +113,11 @@ export class NativePeerConnection implements IPeerConnection {
 
   private setupChannel(channel: RTCDataChannel) {
     channel.binaryType = 'arraybuffer';
-    
-    // 🚀 Backpressure 제어를 위한 임계값 설정
-    // 버퍼가 이 값(4MB) 이하로 떨어지면 'bufferedamountlow' 이벤트 발생
     channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
-
     channel.onopen = () => {
       logInfo(`[NativePeer ${this.id}]`, `Channel ${channel.label} OPEN`);
       console.log(`[NativePeer ${this.id}] 📡 [DEBUG] Channel opened:`, channel.label, 'Total channels:', this.dataChannels.length);
       
-      // 모든 채널이 열리면 ready 상태로 설정
       if (this.dataChannels.every(ch => ch.readyState === 'open')) {
         this.ready = true;
         console.log(`[NativePeer ${this.id}] ✅ [DEBUG] All channels open, emitting 'connected' event`);
@@ -170,7 +149,6 @@ export class NativePeerConnection implements IPeerConnection {
       logError(`[NativePeer ${this.id}]`, `Channel ${channel.label} ERROR`, error);
     };
 
-    // 🚀 Flow Control: 버퍼가 비워지면 알림
     channel.onbufferedamountlow = () => {
       console.log(`[NativePeer ${this.id}] 💧 [DEBUG] bufferedamountlow event on channel ${channel.label}:`, {
         bufferedAmount: channel.bufferedAmount,
@@ -182,8 +160,6 @@ export class NativePeerConnection implements IPeerConnection {
 
     this.dataChannels.push(channel);
   }
-
-  // === Signaling ===
 
   private async createOffer() {
     if (!this.pc) return;
@@ -200,25 +176,19 @@ export class NativePeerConnection implements IPeerConnection {
     if (this.isDestroyed || !this.pc) return;
 
     try {
-      // 🚨 [수정] RTCSessionDescription 객체를 직접 받는 경우 처리
       if (data.type === 'offer' || data.type === 'answer') {
         await this.pc.setRemoteDescription(new RTCSessionDescription(data));
         
-        // offer를 받았으면 answer 생성
         if (data.type === 'offer') {
           const answer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(answer);
           this.emit('signal', { type: 'answer', answer });
         }
       } else if (data.candidate) {
-        // 🚀 [수정] ICE Candidate 처리 시 원격 설명(Remote Description)이 없으면 대기 큐에 넣거나 무시해야 함
         if (this.pc.remoteDescription) {
             await this.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
         } else {
             console.log(`[NativePeer ${this.id}] ⏳ Queueing candidate (remote description not set)`);
-            // 큐 로직이 없다면 최소한 에러 로그라도 방지하고,
-            // 나중에 setRemoteDescription 완료 후 처리되도록 해야 함.
-            // 여기서는 단순화를 위해 로그만 찍고 넘어갑니다. (WebRTC 내부 버퍼가 어느 정도 처리해줌)
         }
       }
     } catch (e) {
@@ -226,15 +196,8 @@ export class NativePeerConnection implements IPeerConnection {
     }
   }
 
-  // === Data Transmission ===
-
-  /**
-   * 🚀 [핵심] 데이터 전송 (Round Robin + Load Balancing)
-   * 버퍼가 가장 비어있는 채널을 찾아 전송하거나, 순차적으로 전송
-   */
   public send(data: ArrayBuffer | ArrayBufferView | string): boolean {
     if (this.dataChannels.length === 0) return false;
-
     // 1. 단순 Round Robin 방식 (가장 빠름)
     /*
     const channel = this.dataChannels[this.nextChannelIndex % this.dataChannels.length];

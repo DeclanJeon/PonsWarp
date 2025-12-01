@@ -26,6 +26,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const [connectedPeers, setConnectedPeers] = useState<string[]>([]);
   const [readyPeers, setReadyPeers] = useState<string[]>([]);
   const [readyCountdown, setReadyCountdown] = useState<number | null>(null);
+  const [totalPeersToWait, setTotalPeersToWait] = useState<number>(0);
   const [completedPeers, setCompletedPeers] = useState<string[]>([]);
   const [queuedPeers, setQueuedPeers] = useState<string[]>([]);
   const [waitingPeersCount, setWaitingPeersCount] = useState(0);
@@ -65,55 +66,94 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
     // 🚀 [Multi-Receiver] 피어 이벤트
     swarmManager.on('peer-connected', (peerId: string) => {
-      setConnectedPeers((prev: string[]) => [...prev, peerId]);
+      console.log('[SenderView] Peer connected:', peerId);
+      setConnectedPeers((prev: string[]) => {
+        // 중복 방지
+        if (prev.includes(peerId)) return prev;
+        return [...prev, peerId];
+      });
     });
 
+    // 🚀 [설계 10] Receiver가 방을 나가면 카운트에서 제거, 정보 삭제
     swarmManager.on('peer-disconnected', ({ peerId }: { peerId: string }) => {
+      console.log('[SenderView] [설계 10] Peer disconnected:', peerId);
       setConnectedPeers((prev: string[]) => prev.filter((id: string) => id !== peerId));
       setReadyPeers((prev: string[]) => prev.filter((id: string) => id !== peerId));
+      setCompletedPeers((prev: string[]) => prev.filter((id: string) => id !== peerId));
+      setQueuedPeers((prev: string[]) => prev.filter((id: string) => id !== peerId));
       
-      // 🚀 [수정] 피어가 끊겨도 IDLE로 가지 않음!
-      // 전송 중이었다면, 잠시 멈추고 기다리는 상태 유지
+      // 피어가 끊겨도 IDLE로 가지 않음 (다른 피어가 있을 수 있음)
       if (status === 'TRANSFERRING') {
-          console.log('[SenderView] Peer disconnected during transfer. Waiting for reconnection...');
-          // 상태를 굳이 IDLE로 바꾸지 않음.
-          // 필요하다면 사용자에게 "재접속 대기 중..." 토스트 메시지 표시
+          console.log('[SenderView] Peer disconnected during transfer. Continuing with remaining peers...');
       }
+    });
+    
+    // 🚀 [설계 6,9] 방 유저 목록 업데이트 이벤트 (실시간 피어 카운트 반영)
+    // Sender는 Receiver의 정보를 받고 방에 접속한 피어를 카운팅
+    swarmManager.on('room-users-updated', ({ totalUsers, connectedPeers: peerCount }: { totalUsers: number; connectedPeers: number }) => {
+      console.log('[SenderView] [설계 6,9] Room users updated:', { totalUsers, peerCount });
+      // 실제 피어 카운트는 peer-connected/peer-disconnected 이벤트로 관리됨
     });
 
     swarmManager.on('peer-ready', (peerId: string) => {
-      setReadyPeers((prev: string[]) => [...prev, peerId]);
+      console.log('[SenderView] 🟢 [DEBUG] Peer ready:', peerId);
+      console.log('[SenderView] 🟢 [DEBUG] Current status:', status);
+      console.log('[SenderView] 🟢 [DEBUG] Current readyCountdown:', readyCountdown);
+      console.log('[SenderView] 🟢 [DEBUG] Connected peers before update:', connectedPeers.length);
+      console.log('[SenderView] 🟢 [DEBUG] Ready peers before update:', readyPeers.length);
+      
+      setReadyPeers((prev: string[]) => {
+        // 중복 방지
+        if (prev.includes(peerId)) return prev;
+        const updated = [...prev, peerId];
+        console.log('[SenderView] 🟢 [DEBUG] Ready peers updated:', updated);
+        return updated;
+      });
     });
 
-    // 🚀 [Multi-Receiver] Ready 카운트다운 이벤트
-    let countdownInterval: ReturnType<typeof setInterval> | null = null;
+    // 🚀 [수정] 카운트다운 핸들러 로직 강화
+    const handleCountdownStart = ({ readyCount, totalCount, waitTime }: { readyCount: number; totalCount: number; waitTime: number }) => {
+      console.log('[SenderView] ⏰ [DEBUG] Countdown signal received:', { readyCount, totalCount, waitTime });
+      console.log('[SenderView] ⏰ [DEBUG] Current readyCountdown state before update:', readyCountdown);
+      console.log('[SenderView] ⏰ [DEBUG] Current status:', status);
+      console.log('[SenderView] ⏰ [DEBUG] Connected peers:', connectedPeers.length);
+      console.log('[SenderView] ⏰ [DEBUG] Ready peers:', readyPeers.length);
+      
+      setTotalPeersToWait(totalCount);
+      
+      // 🚀 [수정] 카운트다운 강제 시작 (이전 상태와 관계없이)
+      const countdownSeconds = waitTime / 1000;
+      console.log('[SenderView] ⏰ [DEBUG] Setting countdown to:', countdownSeconds);
+      setReadyCountdown(countdownSeconds);
+    };
     
-    swarmManager.on('ready-countdown-start', ({ waitTime }: { waitTime: number }) => {
-      // 기존 interval 정리
-      if (countdownInterval) {
-        clearInterval(countdownInterval);
-      }
+    // 🚀 [추가] 카운트다운 업데이트 핸들러 (인원수만 업데이트)
+    const handleCountdownUpdate = ({ readyCount, totalCount }: { readyCount: number; totalCount: number }) => {
+      console.log('[SenderView] ⏰ [DEBUG] Countdown update:', { readyCount, totalCount });
+      console.log('[SenderView] ⏰ [DEBUG] Current readyCountdown:', readyCountdown);
+      console.log('[SenderView] ⏰ [DEBUG] Connected peers:', connectedPeers.length);
+      console.log('[SenderView] ⏰ [DEBUG] Ready peers:', readyPeers.length);
       
-      setReadyCountdown(waitTime / 1000);
-      
-      // 1초마다 카운트다운 감소
-      countdownInterval = setInterval(() => {
-        setReadyCountdown((prev: number | null) => {
-          if (prev === null || prev <= 1) {
-            if (countdownInterval) {
-              clearInterval(countdownInterval);
-              countdownInterval = null;
-            }
-            return null;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    });
+      setTotalPeersToWait(totalCount);
+      // 카운트다운은 계속 진행
+    };
 
-    swarmManager.on('all-peers-ready', () => {
-      setReadyCountdown(null); // 카운트다운 종료
-    });
+    // 🚀 [수정] 즉시 시작 핸들러
+    const handleAllReady = () => {
+      console.log('[SenderView] ⚡ [DEBUG] All ready signal received. Clearing countdown and starting transfer.');
+      console.log('[SenderView] ⚡ [DEBUG] Current readyCountdown before clearing:', readyCountdown);
+      console.log('[SenderView] ⚡ [DEBUG] Current status:', status);
+      console.log('[SenderView] ⚡ [DEBUG] Connected peers:', connectedPeers.length);
+      console.log('[SenderView] ⚡ [DEBUG] Ready peers:', readyPeers.length);
+      
+      setReadyCountdown(null);
+      // 상태를 TRANSFERRING으로 전환 (transfer-batch-start 이벤트가 오기 전에 미리)
+      // setStatus('TRANSFERRING'); // transfer-batch-start에서 처리하므로 주석 처리
+    };
+
+    swarmManager.on('ready-countdown-start', handleCountdownStart);
+    swarmManager.on('ready-countdown-update', handleCountdownUpdate);
+    swarmManager.on('all-peers-ready', handleAllReady);
 
     // 🚀 [Multi-Receiver] 전송 배치 시작 이벤트
     swarmManager.on('transfer-batch-start', ({ peerCount }: { peerCount: number }) => {
@@ -132,8 +172,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setReadyPeers((prev: string[]) => prev.filter((id: string) => id !== peerId));
     });
 
-    // 🚀 [Multi-Receiver] 피어 대기열 추가 이벤트
-    swarmManager.on('peer-queued', ({ peerId }: { peerId: string }) => {
+    // 🚀 [설계 24-25] 전송 중 새 피어가 ready하면 대기열에 추가
+    // Sender는 다음 순서가 이 피어라는 것을 기억
+    swarmManager.on('peer-queued', ({ peerId, position }: { peerId: string; position?: number }) => {
+      console.log('[SenderView] [설계 24-25] Peer queued:', peerId, 'position:', position);
       setQueuedPeers((prev: string[]) => [...prev, peerId]);
     });
 
@@ -143,9 +185,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setStatus('READY_FOR_NEXT');
     });
 
-    // 🚀 [Multi-Receiver] 배치 완료 (대기 중인 피어 없음)
-    swarmManager.on('batch-complete', () => {
-      // 대기 중인 피어가 없으면 READY_FOR_NEXT로 전환
+    // 🚀 [Multi-Receiver] 배치 완료 (대기 중인 피어 있을 수 있음)
+    swarmManager.on('batch-complete', ({ completedCount, waitingCount }: { completedCount: number; waitingCount?: number }) => {
+      console.log('[SenderView] Batch complete:', { completedCount, waitingCount });
+      setWaitingPeersCount(waitingCount || 0);
       setStatus('READY_FOR_NEXT');
     });
 
@@ -161,7 +204,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setQueuedPeers([]); // 대기열 UI 초기화
     });
 
-    // 🚀 [Multi-Receiver] 진행률 리셋 (새 전송 시작 시)
+    // 🚀 [핵심 요구사항] 진행률/속도가 실제 데이터 전송과 정확히 일치해야 함
     swarmManager.on('progress', (data: any) => {
       // 진행률이 0으로 리셋되면 새 전송 시작
       if (data.progress === 0 && data.totalBytesSent === 0) {
@@ -172,8 +215,13 @@ const SenderView: React.FC<SenderViewProps> = () => {
           totalBytes: data.totalBytes || 0
         });
       } else {
+        // 🚀 [정확성] 실제 전송된 바이트 기반 진행률 계산
+        const actualProgress = data.totalBytes > 0 
+          ? Math.min((data.totalBytesSent / data.totalBytes) * 100, 100)
+          : 0;
+        
         setProgressData({
-          progress: data.progress || (data.totalBytes > 0 ? (data.totalBytesSent / data.totalBytes) * 100 : 0),
+          progress: data.progress !== undefined ? data.progress : actualProgress,
           speed: data.speed || 0,
           bytesTransferred: data.totalBytesSent || data.bytesTransferred || 0,
           totalBytes: data.totalBytes || 0
@@ -192,10 +240,45 @@ const SenderView: React.FC<SenderViewProps> = () => {
     });
 
     return () => {
+      swarmManager.off('ready-countdown-start', handleCountdownStart);
+      swarmManager.off('ready-countdown-update', handleCountdownUpdate);
+      swarmManager.off('all-peers-ready', handleAllReady);
       swarmManager.cleanup();
       swarmManager.removeAllListeners();
     };
   }, []);
+
+  // 별도의 타이머 관리 Effect
+  // 🚀 [수정] readyCountdown이 null이 아닐 때만 타이머 시작
+  // readyCountdown 값이 변경될 때마다 interval을 재생성하지 않도록 수정
+  const countdownActiveRef = useRef(false);
+  
+  useEffect(() => {
+    // 카운트다운이 시작되었을 때만 타이머 설정
+    if (readyCountdown !== null && readyCountdown > 0 && !countdownActiveRef.current) {
+      countdownActiveRef.current = true;
+      
+      const interval = window.setInterval(() => {
+        setReadyCountdown((prev) => {
+          if (prev === null || prev <= 1) {
+            countdownActiveRef.current = false;
+            return null; // 0이 되면 종료
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => {
+        clearInterval(interval);
+        countdownActiveRef.current = false;
+      };
+    }
+    
+    // readyCountdown이 null이 되면 플래그 리셋
+    if (readyCountdown === null) {
+      countdownActiveRef.current = false;
+    }
+  }, [readyCountdown !== null]); // 시작/종료 시에만 effect 실행
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -395,20 +478,22 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 <span className="text-sm text-gray-300">Receivers</span>
               </div>
               <div className="flex items-center gap-1">
-                {[...Array(MAX_DIRECT_PEERS)].map((_, i) => (
-                  <div
-                    key={i}
-                    className={`w-3 h-3 rounded-full transition-colors ${
-                      i < connectedPeers.length
-                        ? readyPeers.length > i
-                          ? 'bg-green-500'
-                          : 'bg-cyan-500'
-                        : 'bg-gray-700'
-                    }`}
-                  />
-                ))}
+                {[...Array(MAX_DIRECT_PEERS)].map((_, i) => {
+                  const isConnected = i < connectedPeers.length;
+                  const isReady = i < readyPeers.length;
+                  return (
+                    <div
+                      key={i}
+                      className={`w-3 h-3 rounded-full transition-colors ${
+                        isConnected
+                          ? (isReady ? 'bg-green-500 shadow-[0_0_5px_#22c55e]' : 'bg-cyan-500')
+                          : 'bg-gray-700'
+                      }`}
+                    />
+                  );
+                })}
                 <span className="ml-2 text-sm font-mono text-gray-400">
-                  {connectedPeers.length}/{MAX_DIRECT_PEERS}
+                  {readyPeers.length}/{connectedPeers.length} Ready
                 </span>
               </div>
             </div>
@@ -433,23 +518,32 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </button>
           </div>
           
-          <div className="mt-6 text-center">
+          <div className="mt-6 text-center h-16 flex items-center justify-center">
             {readyCountdown !== null ? (
-              <div className="space-y-2">
-                <p className="text-yellow-400 font-bold animate-pulse">
+              // 🚀 [설계 17] 카운트다운 UI (강조)
+              <div className="bg-yellow-500/20 border border-yellow-500/50 px-6 py-3 rounded-xl w-full animate-pulse flex flex-col items-center">
+                <p className="text-yellow-400 font-bold text-lg leading-none mb-1">
                   Starting in {readyCountdown}s...
                 </p>
-                <p className="text-xs text-gray-500">
-                  {readyPeers.length} receiver(s) ready. Others can still join.
+                <p className="text-[10px] text-yellow-200 uppercase tracking-wider">
+                  Waiting for other receivers ({readyPeers.length}/{totalPeersToWait})
                 </p>
               </div>
             ) : (
-              <p className="text-sm text-gray-500 flex items-center justify-center gap-2">
-                <Loader2 className="animate-spin w-4 h-4" />
-                {connectedPeers.length === 0 
-                  ? 'Waiting for receivers...' 
-                  : `${readyPeers.length}/${connectedPeers.length} receivers ready`}
-              </p>
+              // 대기 중 메시지
+              <div className="text-gray-500 text-sm flex flex-col items-center">
+                 {connectedPeers.length === 0 ? (
+                    <div className="flex items-center gap-2">
+                        <Loader2 className="animate-spin w-4 h-4"/>
+                        <span>Waiting for connections...</span>
+                    </div>
+                 ) : (
+                    <div className="flex items-center gap-2 text-cyan-400">
+                        <Loader2 className="animate-spin w-4 h-4"/>
+                        <span>Waiting for receivers to start download...</span>
+                    </div>
+                 )}
+              </div>
             )}
           </div>
         </motion.div>

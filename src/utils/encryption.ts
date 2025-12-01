@@ -1,9 +1,3 @@
-/**
- * 🔐 Zero-Knowledge Encryption Service
- * Web Crypto API (AES-GCM)를 사용하여 파일을 청크 단위로 암호화/복호화합니다.
- * 키는 URL Hash로만 공유되며 서버에 전송되지 않습니다.
- */
-
 // AES-GCM 설정
 const ALGORITHM = 'AES-GCM';
 const KEY_LENGTH = 256;

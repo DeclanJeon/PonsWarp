@@ -65,32 +65,39 @@ const ReceiverView: React.FC = () => {
     
     console.log('[ReceiverView] ✨ No resume data found, starting fresh');
     
-    // 🚀 [Multi-Receiver] QUEUED 상태에서 manifest를 다시 받으면 
-    // 대기열에서 전송이 시작된 것이므로 RECEIVING으로 전환
+    // 🚀 [수정] QUEUED 상태에서 manifest를 받으면 handleTransferStarting에서 처리하도록 위임
+    // 중복 전환 방지: QUEUED → RECEIVING 전환은 handleTransferStarting에서만 수행
     const currentStatus = statusRef.current;
     if (currentStatus === 'QUEUED') {
-      console.log('[ReceiverView] Manifest received while QUEUED - transfer starting');
-      setQueuePosition(0);
-      setQueueMessage('');
-      updateProgress({ progress: 0, bytesTransferred: 0, totalBytes: m?.totalSize || 0 });
-      setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: m?.totalSize || 0 });
-      setStatus('RECEIVING');
-      setIsWaitingForSender(false);
+      console.log('[ReceiverView] Manifest received while QUEUED - waiting for TRANSFER_STARTING signal');
+      // QUEUED 상태에서는 manifest만 저장하고, 상태 전환은 handleTransferStarting에서 처리
+      return;
     } else if (currentStatus !== 'RECEIVING' && currentStatus !== 'DONE') {
       // 일반적인 경우: WAITING 상태로 전환
       setStatus('WAITING');
     }
-  }, [setStatus, updateProgress]);
+  }, [setStatus, setManifest]);
 
   const handleRemoteStarted = useCallback(() => {
+    console.log('[ReceiverView] Remote started signal received');
     // 🚨 [핵심 수정] 송신자 응답 시 타임아웃 해제
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
       connectionTimeoutRef.current = null;
     }
     setIsWaitingForSender(false);
-  }, []);
+    
+    // 🚀 [핵심 수정] RECEIVING 상태로 전환 (아직 아니라면)
+    const currentStatus = statusRef.current;
+    if (currentStatus !== 'RECEIVING' && currentStatus !== 'DONE') {
+      console.log('[ReceiverView] Transitioning to RECEIVING from remote-started');
+      setStatus('RECEIVING');
+    }
+  }, [setStatus]);
 
+  /**
+   * 🚀 [핵심 요구사항] 진행률/속도가 실제 데이터 전송과 정확히 일치해야 함
+   */
   const handleProgress = useCallback((p: any) => {
     // 1. 대기 상태 해제 (데이터가 들어오기 시작함)
     setIsWaitingForSender(false);
@@ -110,14 +117,15 @@ const ReceiverView: React.FC = () => {
     }
     lastProgressUpdateRef.current = now;
 
-    // 4. 진행률 데이터 업데이트
-    updateProgress({ progress: isNaN(val) ? 0 : val });
+    // 4. 🚀 [정확성] 실제 전송된 바이트 기반 진행률 업데이트
+    const progressValue = isNaN(val) ? 0 : Math.min(val, 100);
+    updateProgress({ progress: progressValue });
     
-    if (typeof p === 'object' && p.speed !== undefined) {
+    if (typeof p === 'object') {
       setProgressData({
-        progress: p.progress || 0,
+        progress: progressValue,
         speed: p.speed || 0,
-        bytesTransferred: p.bytesTransferred || 0,
+        bytesTransferred: p.bytesTransferred || p.totalBytesSent || 0,
         totalBytes: p.totalBytes || 0
       });
     }
@@ -254,27 +262,51 @@ const ReceiverView: React.FC = () => {
     setStatus('ERROR');
   }, []);
 
-  // 🚀 [Multi-Receiver] 대기열 추가 핸들러
+  // 🚀 [설계 24] 전송 중 새 피어가 ready하면 대기 신호 수신
+  // Receiver가 대기 UI를 렌더링
   const handleQueued = useCallback((data: { message: string; position: number }) => {
-    console.log('[ReceiverView] Added to queue:', data);
+    console.log('[ReceiverView] [DEBUG] [설계 24] Added to queue:', data);
+    console.log('[ReceiverView] [DEBUG] Current status before QUEUED:', statusRef.current);
     if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
     setQueuePosition(data.position);
     setQueueMessage(data.message);
     setStatus('QUEUED');
+    setIsWaitingForSender(false);
   }, []);
 
-  // 🚀 [Multi-Receiver] 전송 시작 핸들러 (대기열에서 나옴)
+  // 🚀 [설계 26] 대기열에서 나와 전송 시작 또는 일반 전송 시작
+  // Sender가 Receiver A 전송 완료 후 Receiver B에게 즉시 전송
   const handleTransferStarting = useCallback(() => {
-    console.log('[ReceiverView] Transfer starting from queue');
-    // 대기열 상태 초기화
+    const currentStatus = statusRef.current;
+    console.log('[ReceiverView] [DEBUG] [설계 26] Transfer starting signal received. Current status:', currentStatus);
+    console.log('[ReceiverView] [DEBUG] Queue position before reset:', queuePosition);
+    console.log('[ReceiverView] [DEBUG] Queue message before reset:', queueMessage);
+    
+    // 이미 완료 상태면 무시
+    if (currentStatus === 'DONE') {
+      console.log('[ReceiverView] Already DONE, ignoring transfer-starting');
+      return;
+    }
+    
+    // 대기열 상태 초기화 (QUEUED -> RECEIVING 전환)
     setQueuePosition(0);
     setQueueMessage('');
-    // 진행률 초기화
+    
+    // 🚀 [핵심 요구사항] 진행률 초기화 - 실제 데이터 전송과 일치해야 함
     updateProgress({ progress: 0, bytesTransferred: 0, totalBytes: manifest?.totalSize || 0 });
     setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: manifest?.totalSize || 0 });
+    
     // 상태 전환
-    setStatus('RECEIVING');
+    if (currentStatus !== 'RECEIVING') {
+      setStatus('RECEIVING');
+    }
     setIsWaitingForSender(false);
+    
+    // 타임아웃 해제
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
   }, [manifest, updateProgress, setStatus]);
 
   // 🚀 [Multi-Receiver] 다운로드 가능 알림 핸들러
@@ -383,11 +415,13 @@ const ReceiverView: React.FC = () => {
       transferService.setWriter(writer);
 
       // 🚨 [핵심] 수신 시작 - 이 함수가 완료되어야 TRANSFER_READY가 전송됨
-      console.log('[ReceiverView] Starting receiver initialization...');
+      console.log('[ReceiverView] [DEBUG] Starting receiver initialization...');
+      console.log('[ReceiverView] [DEBUG] Current status before startReceiving:', status);
       // 🔐 암호화 키를 transferService에 전달
       const { encryptionKeyStr } = useTransferStore.getState();
+      console.log('[ReceiverView] [DEBUG] 📤 Calling startReceiving() - this will send TRANSFER_READY');
       await transferService.startReceiving(manifest, encryptionKeyStr);
-      console.log('[ReceiverView] ✅ Receiver initialization complete');
+      console.log('[ReceiverView] [DEBUG] ✅ Receiver initialization complete - TRANSFER_READY should have been sent');
       
       // 🚀 [핵심 수정] TRANSFER_READY 전송 후 즉시 상태 확인
       // 송신자의 응답을 기다리지 않고 즉시 전송 시작 가능 여부 확인
@@ -529,6 +563,28 @@ const ReceiverView: React.FC = () => {
         </div>
       )}
 
+      {/* 🚀 [추가] QUEUED 상태 UI */}
+      {status === 'QUEUED' && (
+        <div className={glassPanelClass}>
+          <div className={glowEffectClass} />
+          <div className="text-center relative z-10">
+            <div className="w-20 h-20 mx-auto mb-6 bg-yellow-900/20 rounded-full flex items-center justify-center animate-pulse border border-yellow-500/30">
+              <Loader2 className="w-10 h-10 text-yellow-500 animate-spin" />
+            </div>
+            <h2 className="text-2xl font-bold mb-2 text-yellow-400 animate-pulse">IN QUEUE</h2>
+            <p className="text-gray-300 mb-6 text-sm">
+              Another transfer is in progress.<br/>
+              You are <b>#{queuePosition}</b> in line.
+            </p>
+            <div className="w-full bg-gray-800 h-1 rounded-full overflow-hidden">
+               <div className="h-full bg-yellow-500 w-full animate-progress-indeterminate" />
+            </div>
+            <p className="mt-4 text-xs text-gray-500">
+              Transfer will start automatically when your turn comes.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* 4. RECEIVING (REVERSE WARP VISIBLE) */}
       {status === 'RECEIVING' && (
