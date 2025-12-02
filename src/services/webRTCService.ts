@@ -2,7 +2,7 @@ import SimplePeer from 'simple-peer/simplepeer.min.js';
 import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
-import { logInfo, logError } from '../utils/logger';
+import { logInfo, logError, logDebug } from '../utils/logger';
 import {
   HEADER_SIZE,
   MAX_BUFFERED_AMOUNT,
@@ -112,8 +112,7 @@ class EnhancedWebRTCService {
   }
 
   /**
-   * 🚀 [Refactored] Burst Transfer Mode - Single Channel Optimized
-   * 멀티 채널 로직을 제거하고 단일 채널에 집중하여 오버헤드 감소
+   * 🚀 [Updated] Backpressure with Dynamic Congestion Window
    */
   private async handleBatchFromWorker(payload: any) {
     if (!this.peer || this.peer.destroyed) return;
@@ -128,43 +127,62 @@ class EnhancedWebRTCService {
     this.isProcessingBatch = false;
 
     try {
-        // 1. 버퍼 체크 (Pre-check): 너무 많이 쌓여있으면 대기
-        if (channel.bufferedAmount + batchBytes > MAX_BUFFERED_AMOUNT) {
-            await this.waitForBufferDrain(channel);
+        // 🚀 [핵심 변경] 고정 상수 대신 네트워크 컨트롤러의 동적 윈도우(cwnd) 사용
+        // 네트워크가 좋으면 cwnd가 커져서 더 빨리 보내고, 나쁘면 작아져서 대기함
+        let currentLimit = MAX_BUFFERED_AMOUNT;
+        
+        if (this.useAdaptiveControl) {
+            const { cwnd } = this.networkController.getCongestionState();
+            currentLimit = cwnd;
+            logDebug('[WebRTC]', `Using dynamic cwnd: ${(cwnd / 1024 / 1024).toFixed(2)}MB, buffered: ${(channel.bufferedAmount / 1024 / 1024).toFixed(2)}MB`);
+        }
+
+        // 1. 동적 버퍼 체크 (Dynamic Backpressure)
+        if (channel.bufferedAmount + batchBytes > currentLimit) {
+            // cwnd를 초과하면 배수(drain) 될 때까지 대기
+            // 대기 기준점도 cwnd의 70% 수준으로 설정
+            logDebug('[WebRTC]', `Buffer full, waiting for drain. Target: ${(currentLimit * 0.7 / 1024 / 1024).toFixed(2)}MB`);
+            await this.waitForBufferDrain(channel, currentLimit * 0.7);
         }
 
         const sendStart = performance.now();
         
-        // 2. Burst Sending (Loop Unrolling 효과)
-        // JS 루프는 매우 빠르므로 SCTP 버퍼로 즉시 밀어넣음
+        // 2. Burst Sending
         for (let i = 0; i < chunks.length; i++) {
             try {
-                this.peer.send(chunks[i]); // Sync Call
-                
+                this.peer.send(chunks[i]);
                 if (this.useAdaptiveControl) {
                     this.networkController.recordSend(chunks[i].byteLength);
                 }
             } catch (e) {
                 console.warn('Chunk send glitch:', e);
-                // 단일 청크 실패는 무시하고 계속 진행 (연결 유지 우선)
                 continue;
             }
         }
         
-        // 3. 진행률 및 통계 업데이트
+        // 3. 통계 및 파라미터 업데이트
         this.emit('progress', {
             ...progressData,
             networkMetrics: this.useAdaptiveControl ? this.networkController.getMetrics() : null
         });
 
+        // 드레인 속도 측정 (기존 로직 유지)
         this.updateDrainMetrics(channel, batchBytes, sendStart);
         
+        // 🚀 [핵심] 컨트롤러에 현재 버퍼 상태 보고 -> 다음 cwnd, batchSize 결정
         if (this.useAdaptiveControl) {
             this.networkController.updateBufferState(channel.bufferedAmount);
+            const debugInfo = this.networkController.getDebugInfo();
+            logDebug('[WebRTC]', `Updated network state: ${JSON.stringify(debugInfo)}`);
         }
 
-        // 4. Greedy Refill: 버퍼가 비기 전에 미리 더 요청
-        if (channel.bufferedAmount < HIGH_WATER_MARK) {
+        // 4. 리필 요청 (Greedy Refill)
+        // cwnd 내에 여유 공간이 있으면 즉시 다음 배치 요청
+        const effectiveLimit = this.useAdaptiveControl
+            ? this.networkController.getCongestionState().cwnd
+            : HIGH_WATER_MARK;
+
+        if (channel.bufferedAmount < effectiveLimit * 0.8) {
             this.requestMoreChunks();
         }
 
@@ -174,14 +192,12 @@ class EnhancedWebRTCService {
     }
   }
   /**
-   * 버퍼 드레인 대기 (단일 채널용)
+   * 🚀 [수정] 목표 레벨을 인자로 받도록 변경
    */
-  private async waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
+  private async waitForBufferDrain(channel: RTCDataChannel, targetLevel: number): Promise<void> {
     const maxWaitTime = 5000;
     const checkInterval = 5;
     let elapsedTime = 0;
-    // 70% 수준까지 비워질 때까지 대기
-    const targetLevel = MAX_BUFFERED_AMOUNT * 0.7;
 
     while (channel.bufferedAmount > targetLevel && elapsedTime < maxWaitTime) {
       await new Promise(resolve => setTimeout(resolve, checkInterval));
@@ -261,10 +277,16 @@ class EnhancedWebRTCService {
 
   private requestMoreChunks() {
     if (this.isProcessingBatch || !this.worker || !this.isTransferring) return;
-    
     this.isProcessingBatch = true;
-    // 🚀 [Phase 1] 적응형 배치 크기 사용
-    this.worker.postMessage({ type: 'process-batch', payload: { count: this.currentBatchSize } });
+    
+    // 🚀 [핵심] 컨트롤러가 계산한 최적의 배치 사이즈 사용
+    let batchSize = this.currentBatchSize;
+    if (this.useAdaptiveControl) {
+        batchSize = this.networkController.getAdaptiveParams().batchSize;
+        logDebug('[WebRTC]', `Requesting adaptive batch size: ${batchSize} chunks`);
+    }
+    
+    this.worker.postMessage({ type: 'process-batch', payload: { count: batchSize } });
   }
 
 
