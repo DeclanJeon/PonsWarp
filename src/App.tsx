@@ -13,96 +13,10 @@ import { ToastContainer } from './components/ui/ToastContainer';
 import { StatusOverlay } from './components/ui/StatusOverlay';
 import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
-// 🚀 ZipEngine import 추가 - 동적 import 사용
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
   const { mode, setMode, setRoomId, status } = useTransferStore();
-
-  // 🚀 [Step 1] WASM 초기화 및 테스트
-  useEffect(() => {
-    const loadWasm = async () => {
-      try {
-        console.log('[App] 🔄 Loading WASM...');
-        const wasmModule = await import('./wasm-pkg/ponswarp_wasm.js');
-        await wasmModule.default();
-        wasmModule.init_wasm();
-
-        // 🚀 [Step 2] Checksum 성능 테스트
-        console.log('[App] 🧪 Starting Checksum Benchmark...');
-        
-        // 1. 테스트 데이터 생성 (50MB)
-        const size = 50 * 1024 * 1024;
-        const buffer = new Uint8Array(size); // 0으로 채워진 더미 데이터
-        
-        // 2. Rust WASM 성능 측정
-        const startWasm = performance.now();
-        const hasher = new (wasmModule as any).WasmHasher();
-        
-        // 청크 단위 처리 시뮬레이션 (1MB씩 50번)
-        const hashChunkSize = 1024 * 1024;
-        for (let i = 0; i < size; i += hashChunkSize) {
-            hasher.update(buffer.subarray(i, i + hashChunkSize));
-        }
-        const hashResult = hasher.finalize();
-        const endWasm = performance.now();
-        
-        const timeWasm = (endWasm - startWasm).toFixed(2);
-        console.log(`[App] 🦀 Rust SHA-256 (50MB): ${timeWasm}ms`);
-        console.log(`[App] #️⃣ Hash: ${hashResult}`);
-
-        toast.success(`WASM Checksum Engine Online (${timeWasm}ms/50MB)`);
-
-        // 🚀 [Step 3] ZIP Compression Test
-        console.log('[App] 🧪 Starting ZIP Benchmark...');
-        const zipStart = performance.now();
-        
-        // 1. ZIP 엔진 생성
-        const zip = new (wasmModule as any).ZipEngine();
-        
-        // 2. 파일 추가 시뮬레이션
-        zip.start_file("hello.txt");
-        const textData = new TextEncoder().encode("Hello PonsWarp! This is a test file compressed by Rust.");
-        zip.write_data(textData);
-        
-        // 중간 플러시 테스트
-        const chunk1 = zip.flush();
-        console.log(`[App] 📦 ZIP Chunk 1 size: ${chunk1.length} bytes`);
-
-        // 3. 대용량 더미 데이터 추가 (10MB)
-        zip.start_file("large_data.bin");
-        const dummySize = 10 * 1024 * 1024;
-        const dummyBuffer = new Uint8Array(dummySize); // 0으로 채워짐 (압축률 매우 높을 것임)
-        
-        // 청크 단위 쓰기 시뮬레이션
-        const zipChunkSize = 1024 * 1024; // 1MB
-        let totalCompressedSize = 0;
-        
-        for(let i=0; i<dummySize; i+=zipChunkSize) {
-            zip.write_data(dummyBuffer.subarray(i, i+zipChunkSize));
-            const chunk = zip.flush(); // 주기적으로 데이터 빼내기
-            totalCompressedSize += chunk.length;
-        }
-
-        // 4. 마무리 (Central Directory)
-        const finalChunk = zip.finish();
-        totalCompressedSize += finalChunk.length;
-        
-        const zipEnd = performance.now();
-        const zipTime = (zipEnd - zipStart).toFixed(2);
-        
-        console.log(`[App] 🦀 Rust ZIP (10MB Zero-fill): ${zipTime}ms`);
-        console.log(`[App] 📉 Compressed Size: ${totalCompressedSize} bytes (Original: ${dummySize + textData.length})`);
-
-        toast.success(`WASM Engines Ready (Hash & Zip)`);
-
-      } catch (e) {
-        console.error('[App] ❌ WASM Error:', e);
-        toast.error('WASM Engine Failed');
-      }
-    };
-    loadWasm();
-  }, []);
 
   // URL 파라미터 체크 (앱 로드 시)
   useEffect(() => {

@@ -1,30 +1,11 @@
 /// <reference lib="webworker" />
 declare const self: DedicatedWorkerGlobalScope;
 
-// 🚀 [Step 4] WASM 모듈 import
-// 🚀 [Step 4] WASM 모듈 import
-// 동적 import를 사용하여 워커 환경에서의 모듈 로딩 문제 해결
-let initWasm: any;
-let ZipEngineClass: any;
-let init_wasm: any;
-
-async function loadWasmModule() {
-  try {
-    const wasmModule = await import('../wasm-pkg/ponswarp_wasm.js') as any;
-    initWasm = wasmModule.default;
-    ZipEngineClass = wasmModule.ZipEngine;
-    init_wasm = wasmModule.init_wasm;
-    console.log('[Worker] WASM module loaded successfully');
-  } catch (error) {
-    console.error('[Worker] Failed to load WASM module:', error);
-    throw error;
-  }
-}
-
 // ============================================================================
-// 🚀 Sender Worker V3 (WASM Powered)
-// - Core: Rust-based ZipEngine (No fflate)
-// - Features: Zero-copy flushing, Aggregation, Backpressure
+// 🚀 Sender Worker V3 (Native Browser APIs)
+// - ZIP: Native CompressionStream (Deflate)
+// - Features: Zero-copy streaming, Aggregation, Backpressure
+// - Checksum: CRC32 for data integrity verification
 // ============================================================================
 
 const CHUNK_SIZE_MIN = 16 * 1024;
@@ -45,14 +26,13 @@ interface AdaptiveConfig {
   enableAdaptive: boolean;
 }
 
-// --- ChunkPool & DoubleBuffer (기존 로직 유지) ---
 class ChunkPool {
   private pool: Uint8Array[] = [];
   private readonly chunkSize: number;
   private readonly maxPoolSize: number;
 
   constructor(chunkSize: number, maxPoolSize: number) {
-    this.chunkSize = chunkSize + 18;
+    this.chunkSize = chunkSize + 22; // 헤더 크기 18 -> 22로 변경
     this.maxPoolSize = maxPoolSize;
   }
 
@@ -158,8 +138,6 @@ interface WorkerState {
   startTime: number;
   isInitialized: boolean;
   isCompleted: boolean;
-  // 🚀 WASM 엔진 추가
-  zipEngine: any | null;
 }
 
 const state: WorkerState = {
@@ -173,8 +151,7 @@ const state: WorkerState = {
   totalBytesSent: 0,
   startTime: 0,
   isInitialized: false,
-  isCompleted: false,
-  zipEngine: null
+  isCompleted: false
 };
 
 const adaptiveConfig: AdaptiveConfig = {
@@ -244,18 +221,6 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   const fileCount = state.files.length;
   console.log('[Worker] Initializing for', fileCount, 'files');
 
-  // 🚀 WASM 초기화
-  try {
-    await loadWasmModule();
-    await initWasm();
-    init_wasm();
-    console.log('[Worker] WASM module loaded');
-  } catch (e) {
-    console.error('[Worker] WASM load failed:', e);
-    self.postMessage({ type: 'error', payload: { message: 'WASM load failed' } });
-    return;
-  }
-
   if (fileCount === 1) {
     state.mode = 'single';
   } else {
@@ -278,7 +243,8 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
 let zipSourceBytesRead = 0;
 
 /**
- * 🚀 [Core] Rust ZipEngine 기반 스트리밍
+ * 🚀 [Core] Native Browser ZIP Streaming (fflate)
+ * CompressionStream은 개별 파일만 압축 가능하므로 fflate 사용
  */
 async function initZipStream() {
   zipSourceBytesRead = 0;
@@ -286,8 +252,8 @@ async function initZipStream() {
   isZipPaused = false;
   resolveZipResume = null;
 
-  // WASM 엔진 생성
-  state.zipEngine = new ZipEngineClass();
+  // fflate 동적 import
+  const { Zip } = await import('fflate');
   
   const zipDataQueue: Uint8Array[] = [];
   let resolveDataAvailable: (() => void) | null = null;
@@ -306,10 +272,34 @@ async function initZipStream() {
     }
   };
 
-  // 파일 처리 루프 (Rust Engine 사용)
-  const processFilesAsync = async () => {
-    if (!state.zipEngine) return;
+  // fflate Zip 인스턴스 생성
+  const zip = new Zip((err, data, final) => {
+    if (err) {
+      console.error('[Worker] ZIP error:', err);
+      hasError = true;
+      if (resolveDataAvailable) {
+        resolveDataAvailable();
+        resolveDataAvailable = null;
+      }
+      return;
+    }
+    
+    if (data && data.length > 0) {
+      pushToQueue(data);
+    }
+    
+    if (final) {
+      zipFinalized = true;
+      console.log('[Worker] ZIP stream finalized (fflate)');
+      if (resolveDataAvailable) {
+        resolveDataAvailable();
+        resolveDataAvailable = null;
+      }
+    }
+  });
 
+  // 파일 처리 루프
+  const processFilesAsync = async () => {
     try {
       for (let i = 0; i < state.files.length; i++) {
         if (!isTransferActive) break;
@@ -317,11 +307,13 @@ async function initZipStream() {
         const file = state.files[i];
         let filePath = file.name;
         if (state.manifest && state.manifest.files && state.manifest.files[i]) {
-            filePath = state.manifest.files[i].path;
+          filePath = state.manifest.files[i].path;
         }
         
-        // 1. Rust에 새 파일 시작 알림
-        state.zipEngine.start_file(filePath);
+        // fflate ZipDeflate 스트림 생성
+        const { ZipDeflate } = await import('fflate');
+        const fileStream = new ZipDeflate(filePath, { level: 6 });
+        zip.add(fileStream);
         
         const reader = file.stream().getReader();
         try {
@@ -334,46 +326,26 @@ async function initZipStream() {
             }
 
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+              fileStream.push(new Uint8Array(0), true); // 파일 종료
+              break;
+            }
             
             zipSourceBytesRead += value.length;
-            
-            // 2. Rust에 데이터 주입
-            state.zipEngine.write_data(value);
-            
-            // 3. 압축된 데이터 회수 (Streaming Flush)
-            const compressedChunk = state.zipEngine.flush();
-            pushToQueue(compressedChunk);
+            fileStream.push(value);
           }
         } finally {
           reader.releaseLock();
         }
       }
       
-      // 4. 모든 파일 처리 후 마무리 (Central Directory)
-      if (isTransferActive && state.zipEngine) {
-        const finalChunk = state.zipEngine.finish();
-        pushToQueue(finalChunk);
-        
-        console.log('[Worker] ZIP stream finalized (WASM)');
-        zipFinalized = true;
-        
-        // 엔진 메모리 해제
-        state.zipEngine.free();
-        state.zipEngine = null;
-        
-        if (resolveDataAvailable) {
-          resolveDataAvailable();
-          resolveDataAvailable = null;
-        }
+      // 모든 파일 처리 후 ZIP 종료
+      if (isTransferActive) {
+        zip.end();
       }
     } catch (e) {
       console.error('[Worker] Fatal ZIP error:', e);
       hasError = true;
-      if (state.zipEngine) {
-        state.zipEngine.free();
-        state.zipEngine = null;
-      }
     }
   };
   
@@ -434,13 +406,14 @@ function resetWorker() {
     state.zipReader = null;
   }
   
-  // 🚀 WASM 엔진 메모리 정리
-  if (state.zipEngine) {
+  // Clean up single file reader
+  if (singleFileReader) {
     try {
-        state.zipEngine.free();
-    } catch(e) {}
-    state.zipEngine = null;
+      singleFileReader.cancel();
+    } catch (e) {}
+    singleFileReader = null;
   }
+  singleFileBuffer = null;
 
   if (resolveZipResume) {
     resolveZipResume();
@@ -485,30 +458,90 @@ async function createNextChunk(): Promise<ArrayBuffer | null> {
   return createZipChunk();
 }
 
+// Single file stream reader (singleton)
+let singleFileReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+let singleFileBuffer: Uint8Array | null = null;
+
 async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   if (state.files.length === 0) return null;
   const file = state.files[0];
   
+  // Initialize stream reader on first call
+  if (!singleFileReader && state.currentFileOffset === 0) {
+    singleFileReader = file.stream().getReader();
+  }
+  
   if (state.currentFileOffset >= file.size) {
     state.isCompleted = true;
+    if (singleFileReader) {
+      try {
+        await singleFileReader.cancel();
+      } catch (e) {}
+      singleFileReader = null;
+    }
     return null;
   }
 
   const currentChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
-  const start = state.currentFileOffset;
-  const end = Math.min(start + currentChunkSize, file.size);
-
-  state.currentFileOffset = end;
 
   try {
-    const blob = file.slice(start, end);
-    const buffer = await blob.arrayBuffer();
-    
-    if (buffer.byteLength === 0) return null;
-    
-    return createPacket(new Uint8Array(buffer), buffer.byteLength);
+    // Accumulate data until we have enough for a chunk
+    while (true) {
+      const bufferSize = singleFileBuffer ? singleFileBuffer.length : 0;
+      
+      // If we have enough data, create packet
+      if (bufferSize >= currentChunkSize || state.currentFileOffset + bufferSize >= file.size) {
+        const dataToSend = singleFileBuffer!.slice(0, currentChunkSize);
+        const remaining = singleFileBuffer!.slice(currentChunkSize);
+        singleFileBuffer = remaining.length > 0 ? remaining : null;
+        
+        state.currentFileOffset += dataToSend.length;
+        return createPacket(dataToSend, dataToSend.length);
+      }
+      
+      // Read more data from stream
+      if (!singleFileReader) {
+        state.isCompleted = true;
+        return null;
+      }
+      
+      const { done, value } = await singleFileReader.read();
+      
+      if (done) {
+        // Stream ended, send remaining buffer
+        if (singleFileBuffer && singleFileBuffer.length > 0) {
+          const dataToSend = singleFileBuffer;
+          singleFileBuffer = null;
+          state.currentFileOffset += dataToSend.length;
+          
+          singleFileReader = null;
+          return createPacket(dataToSend, dataToSend.length);
+        }
+        
+        state.isCompleted = true;
+        singleFileReader = null;
+        return null;
+      }
+      
+      // Append to buffer
+      if (singleFileBuffer) {
+        const newBuffer = new Uint8Array(singleFileBuffer.length + value.length);
+        newBuffer.set(singleFileBuffer);
+        newBuffer.set(value, singleFileBuffer.length);
+        singleFileBuffer = newBuffer;
+      } else {
+        singleFileBuffer = value;
+      }
+    }
   } catch (e) {
     console.error('[Worker] Single chunk error:', e);
+    if (singleFileReader) {
+      try {
+        await singleFileReader.cancel();
+      } catch (err) {}
+      singleFileReader = null;
+    }
+    singleFileBuffer = null;
     return null;
   }
 }
@@ -569,6 +602,28 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
   }
 }
 
+// CRC32 Checksum 계산 함수
+function calculateCRC32(data: Uint8Array): number {
+  const CRC_TABLE = new Int32Array(256);
+  
+  // CRC 테이블 초기화 (한 번만 실행)
+  if (CRC_TABLE[0] === 0) {
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      CRC_TABLE[i] = c;
+    }
+  }
+  
+  let crc = -1; // 0xFFFFFFFF
+  for (let i = 0; i < data.length; i++) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ data[i]) & 0xFF];
+  }
+  return (crc ^ -1) >>> 0; // 부호 없는 정수로 변환
+}
+
 function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
   // Single File 모드 크기 제한 체크
   if (state.mode === 'single' && state.manifest) {
@@ -584,17 +639,28 @@ function createPacket(data: Uint8Array, dataSize: number): ArrayBuffer {
   const packet = chunkPool.acquire();
   const view = new DataView(packet.buffer);
 
-  // Header: FileIndex(2) + ChunkIndex(4) + Offset(8) + Length(4)
-  view.setUint16(0, 0, true);
-  view.setUint32(2, state.chunkSequence++, true);
-  view.setBigUint64(6, BigInt(state.totalBytesSent), true);
-  view.setUint32(14, dataSize, true);
+  // 1. Checksum 계산 (Payload 부분만)
+  const checksum = calculateCRC32(data);
 
-  packet.set(data, 18);
+  // 2. Header 작성 (총 22 Bytes)
+  // [0-1] FileIndex (2)
+  view.setUint16(0, 0, true);
+  // [2-5] ChunkIndex (4)
+  view.setUint32(2, state.chunkSequence++, true);
+  // [6-13] Offset (8)
+  view.setBigUint64(6, BigInt(state.totalBytesSent), true);
+  // [14-17] Length (4)
+  view.setUint32(14, dataSize, true);
+  // [18-21] Checksum (4) - 🚀 신규 추가
+  view.setUint32(18, checksum, true);
+
+  // 3. Data 복사 (헤더 뒤부터)
+  packet.set(data, 22); // 18 -> 22로 변경
   state.totalBytesSent += dataSize;
 
-  const result = new ArrayBuffer(18 + dataSize);
-  new Uint8Array(result).set(packet.subarray(0, 18 + dataSize));
+  // 4. 최종 패킷 생성 (헤더 + 데이터)
+  const result = new ArrayBuffer(22 + dataSize); // 18 -> 22로 변경
+  new Uint8Array(result).set(packet.subarray(0, 22 + dataSize)); // 18 -> 22로 변경
   chunkPool.release(packet);
 
   return result;

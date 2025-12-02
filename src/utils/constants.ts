@@ -12,7 +12,7 @@ export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024;  // 16MB (기존 8MB -> 2�
 export const LOW_WATER_MARK = 4 * 1024 * 1024;        // 4MB (이하로 떨어지면 즉시 리필)
 export const HIGH_WATER_MARK = 12 * 1024 * 1024;      // 12MB (여기까지 꽉 채움)
 
-export const HEADER_SIZE = 18; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4)
+export const HEADER_SIZE = 22; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4) + Checksum(4)
 export const CONNECTION_TIMEOUT_MS = 15000;
 
 // 🚀 [성능 최적화] 배치 설정 - IPC 오버헤드 감소

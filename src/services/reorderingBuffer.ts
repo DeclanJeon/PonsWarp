@@ -23,16 +23,16 @@ export class ReorderingBuffer {
   private totalProcessedBytes: number = 0;
   
   // 🚀 [최적화] 메모리 보호 설정
-  private readonly MAX_BUFFER_SIZE = 64 * 1024 * 1024; // 64MB 제한
-  private readonly CHUNK_TTL = 30000; // 30초가 지난 청크는 폐기 (유효기간)
+  private readonly MAX_BUFFER_SIZE = 128 * 1024 * 1024; // 128MB로 상향 (안전마진 확보)
+  private readonly CHUNK_TTL = 60000; // 60초로 상향 (네트워크 지연 고려)
   private currentBufferSize: number = 0;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(startOffset: number = 0) {
     this.nextExpectedOffset = startOffset;
     
-    // 5초마다 청소부 실행
-    this.cleanupInterval = setInterval(() => this.cleanupStaleChunks(), 5000);
+    // 5초마다 상태 점검 (삭제가 아닌 점검)
+    this.cleanupInterval = setInterval(() => this.checkStaleChunks(), 5000);
   }
 
   /**
@@ -57,10 +57,12 @@ export class ReorderingBuffer {
       this.drainBuffer(orderedChunks); // 연속된 다음 청크 확인
     } else {
       // 3. Buffered Path: 순서가 아님 -> 버퍼링
-      // 🚨 [최적화] 버퍼 오버플로우 방지 (Drop Strategy)
+      
+      // 🚨 [수정] 버퍼 오버플로우 시 무조건 드랍하지 않고 경고 후 허용 (혹은 오래된 것부터 정리)
       if (this.currentBufferSize + chunkLen > this.MAX_BUFFER_SIZE) {
-        logError('[Reorder]', 'Buffer overflow! Dropping packet to prevent crash.');
-        return []; // 치명적이지만 앱 크래시보다는 나음 (재전송 로직 필요)
+        logWarn('[Reorder]', '⚠️ Buffer overflow imminent. Pausing recommended.');
+        // 여기서 무조건 리턴하기보다, 가장 먼 미래의 청크를 버리거나 NACK을 보내야 함.
+        // 현재 단계에서는 우선 허용하되 로그를 남김 (데이터 유실보다는 메모리 압박이 나음)
       }
 
       if (!this.buffer.has(offset)) {
@@ -95,16 +97,26 @@ export class ReorderingBuffer {
   }
 
   /**
-   * 🚀 [최적화] 오래된 청크 청소 (GC 유도)
+   * 🚀 [수정] 오래된 청크 청소 로직 개선
+   * 무조건 삭제하는 대신 경고만 출력하도록 변경 (데이터 유실 방지)
+   * 추후 NACK 구현 시 여기서 재전송 요청을 트리거해야 함.
    */
-  private cleanupStaleChunks() {
+  private checkStaleChunks() {
     const now = Date.now();
+    let staleCount = 0;
+    
     for (const [offset, chunk] of this.buffer.entries()) {
       if (now - chunk.timestamp > this.CHUNK_TTL) {
-        logWarn('[Reorder]', `Dropping stale chunk at offset ${offset}`);
-        this.currentBufferSize -= chunk.data.byteLength;
-        this.buffer.delete(offset);
+        staleCount++;
+        // 🚨 [Critical Change] 삭제 로직 주석 처리
+        // this.currentBufferSize -= chunk.data.byteLength;
+        // this.buffer.delete(offset);
       }
+    }
+    
+    if (staleCount > 0) {
+      logWarn('[Reorder]', `⚠️ ${staleCount} chunks are stale (> ${this.CHUNK_TTL}ms). Missing offset: ${this.nextExpectedOffset}`);
+      // TODO: Emit NACK event here in future steps
     }
   }
 

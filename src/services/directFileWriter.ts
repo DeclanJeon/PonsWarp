@@ -21,6 +21,7 @@
 import streamSaver from 'streamsaver';
 import { ReorderingBuffer } from './reorderingBuffer';
 import { logInfo, logError, logWarn } from '../utils/logger';
+import { HEADER_SIZE } from '../utils/constants';
 
 // StreamSaver MITM 설정
 if (typeof window !== 'undefined') {
@@ -174,7 +175,6 @@ export class DirectFileWriter {
   private async processChunkInternal(packet: ArrayBuffer): Promise<void> {
     if (this.isFinalized) return;
 
-    const HEADER_SIZE = 18;
     if (packet.byteLength < HEADER_SIZE) return;
 
     const view = new DataView(packet);
