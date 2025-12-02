@@ -25,12 +25,6 @@ export const BATCH_REQUEST_SIZE = 64;         // 레거시 호환
 export const PREFETCH_BUFFER_SIZE = 32 * 1024 * 1024;  // 32MB
 export const PREFETCH_LOW_THRESHOLD = 8 * 1024 * 1024; // 8MB
 
-// 🚀 [Phase 3] 멀티 채널 설정
-export const MULTI_CHANNEL_COUNT = 3;                  // 기본 데이터 채널 수
-export const MULTI_CHANNEL_MIN = 1;                    // 최소 채널 수
-export const MULTI_CHANNEL_MAX = 4;                    // 최대 채널 수
-export const CHANNEL_BUFFER_THRESHOLD = 512 * 1024;    // 채널별 버퍼 임계값
-
 // 🚀 [Phase 3] 네트워크 적응형 제어 설정
 export const BBR_STARTUP_GAIN = 2.89;                  // BBR Startup 모드 gain
 export const BBR_DRAIN_GAIN = 0.75;                    // BBR Drain 모드 gain

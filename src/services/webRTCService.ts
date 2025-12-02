@@ -3,16 +3,15 @@ import { signalingService, TurnConfigResponse } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
 import { logInfo, logError } from '../utils/logger';
-import { 
-  HEADER_SIZE, 
-  MAX_BUFFERED_AMOUNT, 
-  LOW_WATER_MARK, 
+import {
+  HEADER_SIZE,
+  MAX_BUFFERED_AMOUNT,
   HIGH_WATER_MARK,
+  LOW_WATER_MARK,
   BATCH_SIZE_MIN,
   BATCH_SIZE_MAX,
   BATCH_SIZE_INITIAL,
-  CHUNK_SIZE_MAX,
-  MULTI_CHANNEL_COUNT
+  CHUNK_SIZE_MAX
 } from '../utils/constants';
 import { NetworkAdaptiveController } from './networkAdaptiveController';
 
@@ -54,10 +53,7 @@ class EnhancedWebRTCService {
   private lastMetricsUpdate = 0;
   private statsInterval: ReturnType<typeof setInterval> | null = null;
   
-  // 🚀 [Phase 3] 멀티 채널 (선택적 활성화)
-  private useMultiChannel = false;
-  private dataChannels: RTCDataChannel[] = [];
-  private currentChannelIndex = 0;
+  // 🚀 [삭제] Multi-Channel 관련 변수 제거
   
   private iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' }
@@ -116,8 +112,8 @@ class EnhancedWebRTCService {
   }
 
   /**
-   * 🚀 [긴급 수정] Burst Transfer Mode
-   * 루프 내부의 await를 제거하여 JS 실행 지연을 0으로 만듭니다.
+   * 🚀 [Refactored] Burst Transfer Mode - Single Channel Optimized
+   * 멀티 채널 로직을 제거하고 단일 채널에 집중하여 오버헤드 감소
    */
   private async handleBatchFromWorker(payload: any) {
     if (!this.peer || this.peer.destroyed) return;
@@ -132,35 +128,30 @@ class EnhancedWebRTCService {
     this.isProcessingBatch = false;
 
     try {
-        // 🚨 [수정 1] 루프 진입 전 '한 번만' 버퍼 체크 (Pre-check)
-        // 버퍼가 꽉 찼을 때만 여기서 대기하고, 루프 진입 후에는 멈추지 않음
+        // 1. 버퍼 체크 (Pre-check): 너무 많이 쌓여있으면 대기
         if (channel.bufferedAmount + batchBytes > MAX_BUFFERED_AMOUNT) {
             await this.waitForBufferDrain(channel);
         }
 
         const sendStart = performance.now();
         
-        // 🚨 [수정 2] Burst Sending (루프 내 await 절대 금지)
-        if (this.useMultiChannel && this.dataChannels.length > 0) {
-            this.sendChunksMultiChannel(chunks);
-        } else {
-            // JS 루프는 1ms 이내에 완료됨 -> WebRTC 버퍼로 순식간에 이동
-            for (let i = 0; i < chunks.length; i++) {
-                try {
-                    this.peer.send(chunks[i]); // 동기 호출 (즉시 리턴)
-                    
-                    if (this.useAdaptiveControl) {
-                        this.networkController.recordSend(chunks[i].byteLength);
-                    }
-                } catch (e) {
-                    // 전송 실패 시 연결 유지를 위해 해당 청크만 포기하고 계속 진행
-                    console.warn('Chunk send glitch:', e);
-                    continue;
+        // 2. Burst Sending (Loop Unrolling 효과)
+        // JS 루프는 매우 빠르므로 SCTP 버퍼로 즉시 밀어넣음
+        for (let i = 0; i < chunks.length; i++) {
+            try {
+                this.peer.send(chunks[i]); // Sync Call
+                
+                if (this.useAdaptiveControl) {
+                    this.networkController.recordSend(chunks[i].byteLength);
                 }
+            } catch (e) {
+                console.warn('Chunk send glitch:', e);
+                // 단일 청크 실패는 무시하고 계속 진행 (연결 유지 우선)
+                continue;
             }
         }
         
-        // 2. 진행률 업데이트
+        // 3. 진행률 및 통계 업데이트
         this.emit('progress', {
             ...progressData,
             networkMetrics: this.useAdaptiveControl ? this.networkController.getMetrics() : null
@@ -172,10 +163,8 @@ class EnhancedWebRTCService {
             this.networkController.updateBufferState(channel.bufferedAmount);
         }
 
-        // 3. Greedy Refill (공격적 리필)
-        // 루프가 순식간에 끝났으므로 즉시 워커에 다음 데이터를 요청
-        const currentBuffered = channel.bufferedAmount;
-        if (currentBuffered < HIGH_WATER_MARK) {
+        // 4. Greedy Refill: 버퍼가 비기 전에 미리 더 요청
+        if (channel.bufferedAmount < HIGH_WATER_MARK) {
             this.requestMoreChunks();
         }
 
@@ -185,58 +174,20 @@ class EnhancedWebRTCService {
     }
   }
   /**
-   * 🚀 [최적화] 버퍼 대기 시간 및 체크 주기 단축
+   * 버퍼 드레인 대기 (단일 채널용)
    */
   private async waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
     const maxWaitTime = 5000;
-    const checkInterval = 5;  // 10ms -> 5ms (반응성 향상)
+    const checkInterval = 5;
     let elapsedTime = 0;
-    const targetLevel = MAX_BUFFERED_AMOUNT * 0.7; // 70% 수준까지 대기
+    // 70% 수준까지 비워질 때까지 대기
+    const targetLevel = MAX_BUFFERED_AMOUNT * 0.7;
 
     while (channel.bufferedAmount > targetLevel && elapsedTime < maxWaitTime) {
       await new Promise(resolve => setTimeout(resolve, checkInterval));
       elapsedTime += checkInterval;
       if (channel.readyState !== 'open') return;
     }
-  }
-  
-  /**
-   * 🚀 [Phase 3] 멀티 채널 분산 전송
-   */
-  private sendChunksMultiChannel(chunks: ArrayBuffer[]): void {
-    for (const chunk of chunks) {
-        // 버퍼 여유가 가장 많은 채널 선택
-        const channel = this.getBestChannel();
-        if (channel && channel.readyState === 'open') {
-            channel.send(chunk);
-            
-            if (this.useAdaptiveControl) {
-                this.networkController.recordSend(chunk.byteLength);
-            }
-        }
-    }
-  }
-  
-  /**
-   * 🚀 [Phase 3] 최적 채널 선택 (버퍼 여유 기반)
-   */
-  private getBestChannel(): RTCDataChannel | null {
-    if (this.dataChannels.length === 0) {
-        // @ts-ignore
-        return this.peer?._channel as RTCDataChannel;
-    }
-    
-    let bestChannel: RTCDataChannel | null = null;
-    let lowestBuffer = Infinity;
-    
-    for (const channel of this.dataChannels) {
-        if (channel.readyState === 'open' && channel.bufferedAmount < lowestBuffer) {
-            lowestBuffer = channel.bufferedAmount;
-            bestChannel = channel;
-        }
-    }
-    
-    return bestChannel;
   }
 
   /**
@@ -263,131 +214,49 @@ class EnhancedWebRTCService {
     this.batchSendTime = now - sendStart;
   }
 
-  /**
-   * 🚀 [Phase 1 + Phase 3] 적응형 배치 크기 조절 (AIMD + BBR 통합)
-   */
   private adjustBatchSize(channel: RTCDataChannel) {
     const bufferUtilization = channel.bufferedAmount / MAX_BUFFERED_AMOUNT;
-    const oldBatchSize = this.currentBatchSize;
     
-    // 🚨 [수정] ZIP 압축률 계산 (원본 대비 전송 데이터 비율)
-    let compressionRatio = 1.0; // 기본값 (압축 없음)
+    let compressionRatio = 1.0;
     if (this.worker && this.pendingManifest && this.pendingManifest.totalFiles > 1) {
-      // ZIP 모드인 경우 압축률 추정
       compressionRatio = this.estimateZipCompressionRatio();
-      console.log('[Adaptive] 📊 [DEBUG] ZIP compression ratio:', compressionRatio.toFixed(2));
     }
     
-    // 🚀 [Phase 3] 네트워크 적응형 컨트롤러 사용 시
+    // 적응형 컨트롤러 사용 시
     if (this.useAdaptiveControl) {
       const adaptiveParams = this.networkController.getAdaptiveParams();
-      
-      // 🚨 [수정] ZIP 압축률을 고려한 배치 크기 조절
       const adjustedBatchSize = Math.floor(adaptiveParams.batchSize / compressionRatio);
       this.currentBatchSize = Math.max(BATCH_SIZE_MIN, Math.min(BATCH_SIZE_MAX, adjustedBatchSize));
-      
-      if (oldBatchSize !== this.currentBatchSize) {
-        const metrics = this.networkController.getMetrics();
-        logInfo('[Adaptive-BBR]', `Batch: ${oldBatchSize} → ${this.currentBatchSize} (compression: ${compressionRatio.toFixed(2)}, RTT: ${metrics.avgRtt.toFixed(1)}ms, throughput: ${(metrics.throughput / 1024 / 1024).toFixed(2)}MB/s)`);
-      }
       return;
     }
     
-    // 기존 AIMD 로직 (fallback) - ZIP 압축률 고려
+    // Fallback 로직 (단순 AIMD)
     let targetBatchSize = this.currentBatchSize;
-    
     if (bufferUtilization < 0.3) {
-      // 버퍼 여유가 많으면 증가 (ZIP 압축률 반영)
       targetBatchSize = Math.floor(this.currentBatchSize * 1.2 / compressionRatio);
     } else if (bufferUtilization > 0.7) {
-      // 버퍼가 거의 차면 감소
       targetBatchSize = Math.floor(this.currentBatchSize * 0.75);
     }
     
-    if (this.drainRate > 0) {
-      const optimalBatch = Math.floor(
-        (MAX_BUFFERED_AMOUNT - channel.bufferedAmount) / (CHUNK_SIZE_MAX * compressionRatio)
-      );
-      
-      targetBatchSize = Math.floor((targetBatchSize + optimalBatch) / 2);
-    }
-    
-    this.currentBatchSize = Math.max(
-      BATCH_SIZE_MIN,
-      Math.min(BATCH_SIZE_MAX, targetBatchSize)
-    );
-    
-    if (oldBatchSize !== this.currentBatchSize) {
-      logInfo('[Adaptive]', `Batch size: ${oldBatchSize} → ${this.currentBatchSize} (compression: ${compressionRatio.toFixed(2)}, buffer: ${(bufferUtilization * 100).toFixed(1)}%)`);
-    }
+    this.currentBatchSize = Math.max(BATCH_SIZE_MIN, Math.min(BATCH_SIZE_MAX, targetBatchSize));
   }
   
-  /**
-   * 🚨 [추가] ZIP 압축률 추정 함수
-   */
   private estimateZipCompressionRatio(): number {
-    // 파일 종류에 따른 평균 압축률
     const fileTypes = this.pendingManifest?.files?.map(f => f.name.split('.').pop()?.toLowerCase()) || [];
+    let totalRatio = 0;
+    let count = 0;
     
-    let totalCompressionRatio = 0;
-    let fileCount = 0;
-    
-    for (const fileType of fileTypes) {
-      let compressionRatio = 1.0; // 기본값 (압축 없음)
+    for (const type of fileTypes) {
+      let ratio = 1.0;
+      if (['zip', 'rar', '7z', 'mp4', 'jpg', 'png'].includes(type || '')) ratio = 1.1;
+      else if (['txt', 'json', 'csv', 'js', 'html'].includes(type || '')) ratio = 0.3;
+      else ratio = 0.7;
       
-      // 파일 종류별 압축률 (실제 경험 기반)
-      switch (fileType) {
-        case 'txt':
-        case 'csv':
-        case 'json':
-        case 'xml':
-        case 'md':
-          compressionRatio = 0.3; // 텍스트 파일은 압축률이 높음
-          break;
-        case 'js':
-        case 'css':
-        case 'html':
-        case 'ts':
-          compressionRatio = 0.4; // 코드 파일
-          break;
-        case 'jpg':
-        case 'jpeg':
-        case 'png':
-        case 'gif':
-        case 'mp3':
-        case 'mp4':
-        case 'avi':
-          compressionRatio = 1.1; // 이미지/영상은 오히려 더 커질 수 있음
-          break;
-        case 'pdf':
-        case 'doc':
-        case 'docx':
-        case 'xls':
-        case 'xlsx':
-          compressionRatio = 0.8; // 문서 파일
-          break;
-        case 'zip':
-        case 'rar':
-        case '7z':
-          compressionRatio = 1.2; // 이미 압축된 파일
-          break;
-        default:
-          compressionRatio = 0.7; // 기타 파일
-      }
-      
-      totalCompressionRatio += compressionRatio;
-      fileCount++;
+      totalRatio += ratio;
+      count++;
     }
     
-    const averageCompressionRatio = fileCount > 0 ? totalCompressionRatio / fileCount : 1.0;
-    
-    console.log('[Adaptive] 📊 [DEBUG] Compression analysis:', {
-      fileTypes,
-      averageCompressionRatio: averageCompressionRatio.toFixed(2),
-      fileCount
-    });
-    
-    return averageCompressionRatio;
+    return count > 0 ? totalRatio / count : 1.0;
   }
 
   private requestMoreChunks() {
@@ -852,13 +721,6 @@ class EnhancedWebRTCService {
     logInfo('[WebRTC]', `Adaptive control: ${enabled ? 'enabled' : 'disabled'}`);
   }
   
-  /**
-   * 🚀 [Phase 3] 멀티 채널 활성화/비활성화
-   */
-  public setMultiChannel(enabled: boolean): void {
-    this.useMultiChannel = enabled;
-    logInfo('[WebRTC]', `Multi-channel: ${enabled ? 'enabled' : 'disabled'}`);
-  }
   
   /**
    * 🚀 [Phase 3] 네트워크 메트릭 조회
@@ -880,10 +742,7 @@ class EnhancedWebRTCService {
   public getDebugInfo() {
     return {
       adaptiveControl: this.useAdaptiveControl,
-      multiChannel: this.useMultiChannel,
-      channelCount: this.dataChannels.length,
       currentBatchSize: this.currentBatchSize,
-      drainRate: this.drainRate,
       networkController: this.networkController.getDebugInfo()
     };
   }
@@ -899,11 +758,8 @@ class EnhancedWebRTCService {
     // 🚨 [핵심] 연결된 피어 ID 초기화
     this.connectedPeerId = null;
     
-    // 🚀 [Phase 3] 추가 정리
     this.stopStatsCollection();
     this.networkController.reset();
-    this.dataChannels.forEach(ch => ch.close());
-    this.dataChannels = [];
   }
 }
 
