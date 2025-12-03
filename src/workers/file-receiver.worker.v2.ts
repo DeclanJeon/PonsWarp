@@ -141,9 +141,10 @@ class ReceiverWorker {
     // 진행률 및 속도 보고
     const now = Date.now();
     if (now - this.lastReportTime > PROGRESS_REPORT_INTERVAL) {
+      // 🚀 [FIX] ZIP 파일의 경우 크기가 더 커질 수 있으므로 100%를 넘지 않도록 Math.min 적용
       const progress =
         this.totalSize > 0
-          ? (this.totalBytesReceived / this.totalSize) * 100
+          ? Math.min(100, (this.totalBytesReceived / this.totalSize) * 100)
           : 0;
 
       // 속도 계산

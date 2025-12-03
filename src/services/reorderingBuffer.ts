@@ -24,7 +24,7 @@ export class ReorderingBuffer {
 
   // 🚀 [최적화] 메모리 보호 설정
   private readonly MAX_BUFFER_SIZE = 128 * 1024 * 1024; // 128MB로 상향 (안전마진 확보)
-  private readonly CHUNK_TTL = 60000; // 60초로 상향 (네트워크 지연 고려)
+  private readonly CHUNK_TTL = 30000; // 30초로 조정 (메모리 보호 강화)
   private currentBufferSize: number = 0;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
@@ -58,14 +58,33 @@ export class ReorderingBuffer {
     } else {
       // 3. Buffered Path: 순서가 아님 -> 버퍼링
 
-      // 🚨 [수정] 버퍼 오버플로우 시 무조건 드랍하지 않고 경고 후 허용 (혹은 오래된 것부터 정리)
+      // 🚀 [개선] 버퍼 오버플로우 시 오래된 청크부터 정리
       if (this.currentBufferSize + chunkLen > this.MAX_BUFFER_SIZE) {
+        // 가장 오래된 청크들부터 정리하여 공간 확보
+        const sortedEntries = Array.from(this.buffer.entries())
+          .sort((a, b) => a[1].timestamp - b[1].timestamp);
+        
+        let freedSpace = 0;
+        const toDelete: number[] = [];
+        
+        for (const [offset, chunk] of sortedEntries) {
+          toDelete.push(offset);
+          freedSpace += chunk.data.byteLength;
+          if (this.currentBufferSize + chunkLen - freedSpace <= this.MAX_BUFFER_SIZE * 0.8) {
+            break; // 80% 수준까지 정리
+          }
+        }
+        
+        toDelete.forEach(offset => {
+          const chunk = this.buffer.get(offset)!;
+          this.currentBufferSize -= chunk.data.byteLength;
+          this.buffer.delete(offset);
+        });
+        
         logWarn(
           '[Reorder]',
-          '⚠️ Buffer overflow imminent. Pausing recommended.'
+          `🗑️ Buffer overflow: cleaned ${toDelete.length} oldest chunks (${formatBytes(freedSpace)}) to make space`
         );
-        // 여기서 무조건 리턴하기보다, 가장 먼 미래의 청크를 버리거나 NACK을 보내야 함.
-        // 현재 단계에서는 우선 허용하되 로그를 남김 (데이터 유실보다는 메모리 압박이 나음)
       }
 
       if (!this.buffer.has(offset)) {
@@ -101,28 +120,29 @@ export class ReorderingBuffer {
 
   /**
    * 🚀 [수정] 오래된 청크 청소 로직 개선
-   * 무조건 삭제하는 대신 경고만 출력하도록 변경 (데이터 유실 방지)
-   * 추후 NACK 구현 시 여기서 재전송 요청을 트리거해야 함.
+   * 메모리 보호를 위해 오래된 청크는 정리하지만, 로그를 상세히 남겨 디버깅 용이
    */
   private checkStaleChunks() {
     const now = Date.now();
     let staleCount = 0;
+    const staleOffsets: number[] = [];
 
     for (const [offset, chunk] of this.buffer.entries()) {
       if (now - chunk.timestamp > this.CHUNK_TTL) {
         staleCount++;
-        // 🚨 [Critical Change] 삭제 로직 주석 처리
-        // this.currentBufferSize -= chunk.data.byteLength;
-        // this.buffer.delete(offset);
+        staleOffsets.push(offset);
+        
+        // 🚀 [개선] 메모리 보호를 위해 오래된 청크는 정리
+        this.currentBufferSize -= chunk.data.byteLength;
+        this.buffer.delete(offset);
       }
     }
 
     if (staleCount > 0) {
       logWarn(
         '[Reorder]',
-        `⚠️ ${staleCount} chunks are stale (> ${this.CHUNK_TTL}ms). Missing offset: ${this.nextExpectedOffset}`
+        `🗑️ Cleaned ${staleCount} stale chunks (> ${this.CHUNK_TTL}ms). Missing offsets: ${staleOffsets.slice(0, 5).join(', ')}${staleOffsets.length > 5 ? '...' : ''}. Expected: ${this.nextExpectedOffset}`
       );
-      // TODO: Emit NACK event here in future steps
     }
   }
 
@@ -144,7 +164,7 @@ export class ReorderingBuffer {
   public getNextExpectedOffset(): number {
     return this.nextExpectedOffset;
   }
-
+  
   /**
    * 버퍼에 남은 청크 수 조회
    */
@@ -172,4 +192,14 @@ export class ReorderingBuffer {
   public cleanup(): void {
     this.clear();
   }
+}
+
+// 헬퍼 함수 (클래스 외부)
+function formatBytes(bytes: number, decimals = 2): string {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }

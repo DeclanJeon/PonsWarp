@@ -223,9 +223,14 @@ export class DirectFileWriter {
     const size = view.getUint32(14, true);
     const offset = Number(view.getBigUint64(6, true));
 
-    // 🚨 [핵심 수정] 용량 초과 방지 - 버퍼 포함 총 바이트가 totalSize를 초과하면 무시
+    // 🚀 [FIX] ZIP 모드(isSizeEstimated)일 경우 Overflow 체크 완화
     const totalReceived = this.totalBytesWritten + this.pendingBytesInBuffer;
-    if (this.totalSize > 0 && totalReceived >= this.totalSize) {
+    
+    // Manifest가 있고, 크기 추정 모드(ZIP 등)가 아닐 때만 엄격하게 체크
+    const isSizeStrict = this.manifest && !this.manifest.isSizeEstimated;
+
+    // ZIP 모드(다중 파일)일 때는 totalSize를 초과해도 데이터를 받아야 함 (Central Directory 등 오버헤드 때문)
+    if (isSizeStrict && this.totalSize > 0 && totalReceived >= this.totalSize) {
       logWarn(
         '[DirectFileWriter]',
         `Ignoring chunk: already reached totalSize (${this.totalSize})`
