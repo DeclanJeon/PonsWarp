@@ -467,7 +467,7 @@ const ReceiverView: React.FC = () => {
   const strokeDashoffset = 283 - (283 * safeProgress) / 100; // 2 * PI * 45 ≈ 283
 
   // Common Styles
-  const glassPanelClass = "bg-black/40 backdrop-blur-2xl border border-white/10 rounded-[2rem] shadow-2xl w-full max-w-md mx-4 overflow-hidden relative";
+  const glassPanelClass = "bg-black/40 p-3 backdrop-blur-2xl border border-white/10 rounded-[2rem] shadow-2xl w-full max-w-md mx-4 overflow-hidden relative";
 
   return (
     <div className="flex flex-col items-center justify-center w-full h-full px-4 md:px-0 z-10 relative">
