@@ -5,15 +5,15 @@ export enum AppMode {
   RECEIVER = 'RECEIVER',
   TRANSFERRING = 'TRANSFERRING',
   COMPLETED = 'COMPLETED',
-  ERROR = 'ERROR'
+  ERROR = 'ERROR',
 }
 
 export interface FileNode {
-  id: number;       // 전송 시 식별할 index (0부터 시작)
-  name: string;     // 파일명
-  path: string;     // 상대 경로 (폴더 구조 포함)
-  size: number;     // 바이트 크기
-  type: string;     // MIME type
+  id: number; // 전송 시 식별할 index (0부터 시작)
+  name: string; // 파일명
+  path: string; // 상대 경로 (폴더 구조 포함)
+  size: number; // 바이트 크기
+  type: string; // MIME type
   lastModified: number;
   checksum?: string; // 💡 [패치] SHA-256 Checksum 추가
 }
@@ -50,7 +50,14 @@ export interface NetworkStatus {
 }
 
 export interface WorkerMessage {
-  type: 'CHUNK' | 'COMPLETE' | 'ERROR' | 'INIT_OPFS' | 'MANIFEST' | 'UPDATE_NETWORK' | 'NETWORK_UPDATE';
+  type:
+    | 'CHUNK'
+    | 'COMPLETE'
+    | 'ERROR'
+    | 'INIT_OPFS'
+    | 'MANIFEST'
+    | 'UPDATE_NETWORK'
+    | 'NETWORK_UPDATE';
   payload?: any;
 }
 

@@ -1,12 +1,12 @@
 /**
  * ReorderingBuffer (Optimized with TTL)
- * 
+ *
  * 비순차적으로 도착하는 청크들을 순서대로 정렬하여 내보내는 버퍼.
  * StreamSaver와 같이 순차 쓰기만 지원하는 Writer를 위해 필수적입니다.
- * 
- * Multi-Channel 전송이나 네트워크 지연(Jitter) 상황에서 
+ *
+ * Multi-Channel 전송이나 네트워크 지연(Jitter) 상황에서
  * 패킷이 순서 뒤바뀜(Out-of-Order) 상태로 도착할 경우 파일 손상을 방지합니다.
- * 
+ *
  * 🚀 [최적화] TTL(Time-To-Live) 및 자동 정리 기능 추가
  */
 
@@ -21,7 +21,7 @@ export class ReorderingBuffer {
   private buffer: Map<number, BufferedChunk> = new Map();
   private nextExpectedOffset: number = 0;
   private totalProcessedBytes: number = 0;
-  
+
   // 🚀 [최적화] 메모리 보호 설정
   private readonly MAX_BUFFER_SIZE = 128 * 1024 * 1024; // 128MB로 상향 (안전마진 확보)
   private readonly CHUNK_TTL = 60000; // 60초로 상향 (네트워크 지연 고려)
@@ -30,7 +30,7 @@ export class ReorderingBuffer {
 
   constructor(startOffset: number = 0) {
     this.nextExpectedOffset = startOffset;
-    
+
     // 5초마다 상태 점검 (삭제가 아닌 점검)
     this.cleanupInterval = setInterval(() => this.checkStaleChunks(), 5000);
   }
@@ -57,10 +57,13 @@ export class ReorderingBuffer {
       this.drainBuffer(orderedChunks); // 연속된 다음 청크 확인
     } else {
       // 3. Buffered Path: 순서가 아님 -> 버퍼링
-      
+
       // 🚨 [수정] 버퍼 오버플로우 시 무조건 드랍하지 않고 경고 후 허용 (혹은 오래된 것부터 정리)
       if (this.currentBufferSize + chunkLen > this.MAX_BUFFER_SIZE) {
-        logWarn('[Reorder]', '⚠️ Buffer overflow imminent. Pausing recommended.');
+        logWarn(
+          '[Reorder]',
+          '⚠️ Buffer overflow imminent. Pausing recommended.'
+        );
         // 여기서 무조건 리턴하기보다, 가장 먼 미래의 청크를 버리거나 NACK을 보내야 함.
         // 현재 단계에서는 우선 허용하되 로그를 남김 (데이터 유실보다는 메모리 압박이 나음)
       }
@@ -104,7 +107,7 @@ export class ReorderingBuffer {
   private checkStaleChunks() {
     const now = Date.now();
     let staleCount = 0;
-    
+
     for (const [offset, chunk] of this.buffer.entries()) {
       if (now - chunk.timestamp > this.CHUNK_TTL) {
         staleCount++;
@@ -113,9 +116,12 @@ export class ReorderingBuffer {
         // this.buffer.delete(offset);
       }
     }
-    
+
     if (staleCount > 0) {
-      logWarn('[Reorder]', `⚠️ ${staleCount} chunks are stale (> ${this.CHUNK_TTL}ms). Missing offset: ${this.nextExpectedOffset}`);
+      logWarn(
+        '[Reorder]',
+        `⚠️ ${staleCount} chunks are stale (> ${this.CHUNK_TTL}ms). Missing offset: ${this.nextExpectedOffset}`
+      );
       // TODO: Emit NACK event here in future steps
     }
   }
@@ -128,7 +134,7 @@ export class ReorderingBuffer {
       bufferedCount: this.buffer.size,
       bufferedBytes: this.currentBufferSize,
       nextExpected: this.nextExpectedOffset,
-      totalProcessed: this.totalProcessedBytes
+      totalProcessed: this.totalProcessedBytes,
     };
   }
 

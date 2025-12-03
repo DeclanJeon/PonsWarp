@@ -23,7 +23,7 @@ export const ToastContainer: React.FC = () => {
   return (
     <div className="fixed bottom-8 right-8 z-[100] flex flex-col gap-3 pointer-events-none">
       <AnimatePresence>
-        {toasts.map((t) => (
+        {toasts.map(t => (
           <motion.div
             key={t.id}
             initial={{ opacity: 0, x: 50, scale: 0.9 }}
@@ -33,9 +33,11 @@ export const ToastContainer: React.FC = () => {
             className={`pointer-events-auto flex items-center gap-3 px-5 py-4 bg-black/60 backdrop-blur-xl border ${borderColors[t.type]} rounded-2xl shadow-2xl min-w-[300px] max-w-md`}
           >
             {icons[t.type]}
-            <p className="text-sm font-medium text-white/90 flex-1">{t.message}</p>
-            <button 
-              onClick={() => removeToast(t.id)} 
+            <p className="text-sm font-medium text-white/90 flex-1">
+              {t.message}
+            </p>
+            <button
+              onClick={() => removeToast(t.id)}
               className="text-white/40 hover:text-white transition-colors"
             >
               <X size={16} />

@@ -2,7 +2,9 @@ import { FileNode, TransferManifest } from '../types/types';
 import { ScannedFile } from './fileScanner';
 
 // ScannedFile[] -> TransferManifest 변환 (새로운 방식)
-export const createManifest = (scannedFiles: ScannedFile[]): { manifest: TransferManifest, files: File[] } => {
+export const createManifest = (
+  scannedFiles: ScannedFile[]
+): { manifest: TransferManifest; files: File[] } => {
   const fileNodes: FileNode[] = [];
   let totalSize = 0;
   const rawFiles: File[] = [];
@@ -10,14 +12,14 @@ export const createManifest = (scannedFiles: ScannedFile[]): { manifest: Transfe
   scannedFiles.forEach((item, index) => {
     totalSize += item.file.size;
     rawFiles.push(item.file);
-    
+
     fileNodes.push({
       id: index,
       name: item.file.name,
       path: item.path, // 스캐너가 정제한 전체 경로
       size: item.file.size,
       type: item.file.type || 'application/octet-stream',
-      lastModified: item.file.lastModified
+      lastModified: item.file.lastModified,
     });
   });
 
@@ -51,7 +53,7 @@ export const createManifest = (scannedFiles: ScannedFile[]): { manifest: Transfe
     isFolder,
     // 🚨 [추가] ZIP 모드일 경우 정확한 크기를 알 수 없음
     // Receiver는 이 플래그를 보고 StreamSaver 설정을 조정할 수 있음
-    isSizeEstimated: isFolder || scannedFiles.length > 1
+    isSizeEstimated: isFolder || scannedFiles.length > 1,
   };
 
   return { manifest, files: rawFiles };

@@ -1,7 +1,13 @@
 console.log('[webRTCService] ✅ [DEBUG] ARCHITECTURE FIXED:');
-console.log('[webRTCService] ✅ [DEBUG] - Now uses SinglePeerConnection (unified)');
-console.log('[webRTCService] ✅ [DEBUG] - Receiver-only service (Sender logic removed)');
-console.log('[webRTCService] ✅ [DEBUG] - Architecture unified with SwarmManager');
+console.log(
+  '[webRTCService] ✅ [DEBUG] - Now uses SinglePeerConnection (unified)'
+);
+console.log(
+  '[webRTCService] ✅ [DEBUG] - Receiver-only service (Sender logic removed)'
+);
+console.log(
+  '[webRTCService] ✅ [DEBUG] - Architecture unified with SwarmManager'
+);
 
 import { signalingService, TurnConfigResponse } from './signaling';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
@@ -25,17 +31,17 @@ class ReceiverService {
   // 연결 관리
   private peer: SinglePeerConnection | null = null;
   private roomId: string | null = null;
-  
+
   // 파일 쓰기
   private writer: IFileWriter | null = null;
-  
+
   // 상태 관리
   private eventListeners: Record<string, EventHandler[]> = {};
   private connectedPeerId: string | null = null; // 연결된 Sender ID
 
   // ICE 서버 설정 (기본값)
   private iceServers: RTCIceServer[] = [
-    { urls: 'stun:stun.l.google.com:19302' }
+    { urls: 'stun:stun.l.google.com:19302' },
   ];
 
   constructor() {
@@ -46,7 +52,7 @@ class ReceiverService {
     signalingService.on('offer', this.handleOffer.bind(this));
     signalingService.on('ice-candidate', this.handleIceCandidate.bind(this));
     signalingService.on('room-full', () => {
-        this.emit('room-full', 'Room is currently occupied. Please wait.');
+      this.emit('room-full', 'Room is currently occupied. Please wait.');
     });
     // Receiver는 'answer'를 받을 일이 없음 (Answerer 역할이므로)
   }
@@ -58,9 +64,9 @@ class ReceiverService {
       console.log('[Receiver] Already connected to room:', roomId);
       return;
     }
-    
+
     console.log('[Receiver] Initializing connection for room:', roomId);
-    
+
     // 기존 연결 정리
     this.cleanup();
     this.roomId = roomId;
@@ -69,10 +75,14 @@ class ReceiverService {
       // 1. 시그널링 연결
       await signalingService.connect();
       await signalingService.joinRoom(roomId);
-      
+
       // 2. TURN 설정 (비동기 Fetch, 실패해도 진행)
-      this.fetchTurnConfig(roomId).catch(err => 
-        logWarn('[Receiver]', 'TURN config fetch failed, using default STUN', err)
+      this.fetchTurnConfig(roomId).catch(err =>
+        logWarn(
+          '[Receiver]',
+          'TURN config fetch failed, using default STUN',
+          err
+        )
       );
 
       this.emit('status', 'CONNECTING');
@@ -84,7 +94,7 @@ class ReceiverService {
 
   public setWriter(writerInstance: IFileWriter) {
     if (this.writer) {
-        this.writer.cleanup();
+      this.writer.cleanup();
     }
     this.writer = writerInstance;
 
@@ -94,20 +104,25 @@ class ReceiverService {
       if (typeof progressData === 'object') {
         this.emit('progress', progressData);
       } else {
-        this.emit('progress', { progress: progressData, speed: 0, bytesTransferred: 0, totalBytes: 0 });
+        this.emit('progress', {
+          progress: progressData,
+          speed: 0,
+          bytesTransferred: 0,
+          totalBytes: 0,
+        });
       }
     });
 
-    this.writer.onComplete((actualSize) => {
+    this.writer.onComplete(actualSize => {
       this.emit('complete', { actualSize });
       this.notifyDownloadComplete();
     });
 
-    this.writer.onError((err) => this.emit('error', err));
+    this.writer.onError(err => this.emit('error', err));
 
     // 🚀 [Flow Control] 이벤트 연결
     if (this.writer.onFlowControl) {
-      this.writer.onFlowControl((action) => {
+      this.writer.onFlowControl(action => {
         if (this.peer && this.peer.connected) {
           logDebug('[Receiver]', `Sending flow control: ${action}`);
           try {
@@ -132,7 +147,7 @@ class ReceiverService {
     try {
       console.log('[Receiver] Initializing storage writer...');
       await this.writer.initStorage(manifest);
-      
+
       console.log('[Receiver] ✅ Storage ready. Sending TRANSFER_READY...');
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
@@ -153,12 +168,12 @@ class ReceiverService {
     logInfo('[Receiver]', 'Cleaning up resources...');
     this.roomId = null;
     this.connectedPeerId = null;
-    
+
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
     }
-    
+
     if (this.writer) {
       this.writer.cleanup();
       // writer는 null로 만들지 않음 (재사용 가능성 고려)
@@ -173,7 +188,8 @@ class ReceiverService {
 
   private async fetchTurnConfig(roomId: string) {
     try {
-      const response: TurnConfigResponse = await signalingService.requestTurnConfig(roomId);
+      const response: TurnConfigResponse =
+        await signalingService.requestTurnConfig(roomId);
       if (response.success && response.data) {
         this.iceServers = response.data.iceServers;
       }
@@ -201,15 +217,15 @@ class ReceiverService {
 
     // 기존 Peer가 있다면 정리 (재연결 시나리오)
     if (this.peer) {
-        this.peer.destroy();
+      this.peer.destroy();
     }
 
     // SinglePeerConnection 생성 (Receiver는 initiator: false)
     const config: PeerConfig = { iceServers: this.iceServers };
     this.peer = new SinglePeerConnection(d.from, false, config);
-    
+
     this.setupPeerEvents(this.peer);
-    
+
     // 시그널링 처리
     this.peer.signal(d.offer);
   };
@@ -217,12 +233,12 @@ class ReceiverService {
   private handleIceCandidate = (d: any) => {
     if (this.connectedPeerId && d.from !== this.connectedPeerId) return;
     if (!this.peer || this.peer.isDestroyed()) return;
-    
+
     this.peer.signal(d.candidate);
   };
 
   private setupPeerEvents(peer: SinglePeerConnection) {
-    peer.on('signal', (data) => {
+    peer.on('signal', data => {
       // Receiver는 Answer와 Candidate를 Sender에게 보냄
       if (data.type === 'answer') {
         signalingService.sendAnswer(this.roomId!, data, peer.id);
@@ -238,7 +254,7 @@ class ReceiverService {
 
     peer.on('data', this.handleData.bind(this));
 
-    peer.on('error', (err) => {
+    peer.on('error', err => {
       logError('[Receiver]', 'Peer error:', err);
       this.emit('error', err.message);
     });
@@ -252,17 +268,17 @@ class ReceiverService {
   private handleData(data: ArrayBuffer) {
     // 1. 제어 메시지 (JSON 문자열)
     if (this.isControlMessage(data)) {
-        this.handleControlMessage(data);
-        return;
+      this.handleControlMessage(data);
+      return;
     }
 
     // 2. 파일 데이터 (Binary) -> Writer로 전달
     if (this.writer) {
-        // Fire-and-forget 방식으로 쓰기 (블로킹 방지)
-        this.writer.writeChunk(data).catch(err => {
-            console.error('[Receiver] Write error:', err);
-            this.emit('error', 'Disk write failed');
-        });
+      // Fire-and-forget 방식으로 쓰기 (블로킹 방지)
+      this.writer.writeChunk(data).catch(err => {
+        console.error('[Receiver] Write error:', err);
+        this.emit('error', 'Disk write failed');
+      });
     }
   }
 
@@ -270,45 +286,45 @@ class ReceiverService {
     // 텍스트일 확률이 높은지 간단 체크 (첫 바이트가 '{' 인지 확인)
     // 완벽하진 않으나 프로토콜상 바이너리 헤더는 0x00으로 시작하지 않음 (FileIndex)
     if (data.byteLength > 0) {
-        const view = new Uint8Array(data);
-        return view[0] === 123; // '{' ASCII
+      const view = new Uint8Array(data);
+      return view[0] === 123; // '{' ASCII
     }
     return false;
   }
 
   private handleControlMessage(data: ArrayBuffer) {
     try {
-        const str = new TextDecoder().decode(data);
-        const msg = JSON.parse(str);
+      const str = new TextDecoder().decode(data);
+      const msg = JSON.parse(str);
 
-        switch (msg.type) {
-            case 'MANIFEST':
-                logInfo('[Receiver]', 'Manifest received');
-                this.emit('metadata', msg.manifest);
-                break;
-            case 'TRANSFER_STARTED':
-                logInfo('[Receiver]', 'Sender started transfer');
-                this.emit('remote-started', true);
-                break;
-            case 'TRANSFER_STARTED_WITHOUT_YOU':
-                this.emit('transfer-missed', msg.message);
-                break;
-            case 'QUEUED':
-                this.emit('queued', { message: msg.message, position: msg.position });
-                break;
-            case 'TRANSFER_STARTING':
-                this.emit('transfer-starting', true);
-                this.emit('status', 'RECEIVING');
-                break;
-            case 'READY_FOR_DOWNLOAD':
-                this.emit('ready-for-download', { message: msg.message });
-                break;
-            case 'KEEP_ALIVE':
-                // 무시
-                break;
-        }
+      switch (msg.type) {
+        case 'MANIFEST':
+          logInfo('[Receiver]', 'Manifest received');
+          this.emit('metadata', msg.manifest);
+          break;
+        case 'TRANSFER_STARTED':
+          logInfo('[Receiver]', 'Sender started transfer');
+          this.emit('remote-started', true);
+          break;
+        case 'TRANSFER_STARTED_WITHOUT_YOU':
+          this.emit('transfer-missed', msg.message);
+          break;
+        case 'QUEUED':
+          this.emit('queued', { message: msg.message, position: msg.position });
+          break;
+        case 'TRANSFER_STARTING':
+          this.emit('transfer-starting', true);
+          this.emit('status', 'RECEIVING');
+          break;
+        case 'READY_FOR_DOWNLOAD':
+          this.emit('ready-for-download', { message: msg.message });
+          break;
+        case 'KEEP_ALIVE':
+          // 무시
+          break;
+      }
     } catch (e) {
-        // JSON 파싱 실패는 무시 (바이너리 데이터일 수 있음)
+      // JSON 파싱 실패는 무시 (바이너리 데이터일 수 있음)
     }
   }
 
@@ -318,7 +334,7 @@ class ReceiverService {
       // 신뢰성을 위해 여러 번 전송
       for (let i = 0; i < 3; i++) {
         setTimeout(() => {
-            this.peer?.send(msg);
+          this.peer?.send(msg);
         }, i * 100);
       }
     }
@@ -333,7 +349,9 @@ class ReceiverService {
 
   public off(event: string, handler: EventHandler) {
     if (!this.eventListeners[event]) return;
-    this.eventListeners[event] = this.eventListeners[event].filter(h => h !== handler);
+    this.eventListeners[event] = this.eventListeners[event].filter(
+      h => h !== handler
+    );
   }
 
   private emit(event: string, data: any) {

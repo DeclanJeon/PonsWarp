@@ -16,21 +16,21 @@ const SPEED_SAMPLE_SIZE = 10;
 // CRC32 Checksum 계산 함수
 function calculateCRC32(data: Uint8Array): number {
   const CRC_TABLE = new Int32Array(256);
-  
+
   // CRC 테이블 초기화 (한 번만 실행)
   if (CRC_TABLE[0] === 0) {
     for (let i = 0; i < 256; i++) {
       let c = i;
       for (let k = 0; k < 8; k++) {
-        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
       }
       CRC_TABLE[i] = c;
     }
   }
-  
+
   let crc = -1; // 0xFFFFFFFF
   for (let i = 0; i < data.length; i++) {
-    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ data[i]) & 0xFF];
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ data[i]) & 0xff];
   }
   return (crc ^ -1) >>> 0; // 부호 없는 정수로 변환
 }
@@ -41,7 +41,7 @@ class ReceiverWorker {
   private manifest: any = null;
   private lastReportTime = 0;
   private chunksProcessed = 0;
-  
+
   // 속도 측정용
   private startTime = 0;
   private speedSamples: number[] = [];
@@ -54,7 +54,7 @@ class ReceiverWorker {
 
   private handleMessage(e: MessageEvent) {
     const { type, payload } = e.data;
-    
+
     switch (type) {
       case 'init-manifest':
         this.initTransfer(payload);
@@ -70,16 +70,20 @@ class ReceiverWorker {
     this.totalSize = manifest.totalSize;
     this.totalBytesReceived = 0;
     this.chunksProcessed = 0;
-    
+
     // 속도 측정 초기화
     this.startTime = Date.now();
     this.speedSamples = [];
     this.lastSpeedCalcTime = this.startTime;
     this.lastSpeedCalcBytes = 0;
-    
+
     console.log('[Receiver Worker] Ready for', manifest.totalFiles, 'files');
-    console.log('[Receiver Worker] Total size:', (manifest.totalSize / (1024 * 1024)).toFixed(2), 'MB');
-    
+    console.log(
+      '[Receiver Worker] Total size:',
+      (manifest.totalSize / (1024 * 1024)).toFixed(2),
+      'MB'
+    );
+
     self.postMessage({ type: 'storage-ready' });
   }
 
@@ -88,9 +92,9 @@ class ReceiverWorker {
 
     const view = new DataView(packet);
     const fileId = view.getUint16(0, true);
-    
+
     // EOS 체크
-    if (fileId === 0xFFFF) {
+    if (fileId === 0xffff) {
       this.finalize();
       return;
     }
@@ -111,11 +115,13 @@ class ReceiverWorker {
     const calculatedChecksum = calculateCRC32(dataPart);
 
     if (receivedChecksum !== calculatedChecksum) {
-      console.error(`[Receiver Worker] ❌ Checksum mismatch! Expected: ${receivedChecksum.toString(16)}, Calc: ${calculatedChecksum.toString(16)}`);
+      console.error(
+        `[Receiver Worker] ❌ Checksum mismatch! Expected: ${receivedChecksum.toString(16)}, Calc: ${calculatedChecksum.toString(16)}`
+      );
       // 치명적 오류 보고 (현재는 로그만, 추후 재전송 요청으로 연결)
       self.postMessage({
         type: 'error',
-        payload: 'Data corruption detected (Checksum mismatch)'
+        payload: 'Data corruption detected (Checksum mismatch)',
       });
       return;
     }
@@ -124,33 +130,41 @@ class ReceiverWorker {
     this.chunksProcessed++;
 
     // 청크를 메인 스레드로 전달 (DirectFileWriter가 처리)
-    self.postMessage({
-      type: 'write-chunk',
-      payload: packet
-    }, [packet]); // Transferable로 전달 (복사 없이)
-    
+    self.postMessage(
+      {
+        type: 'write-chunk',
+        payload: packet,
+      },
+      [packet]
+    ); // Transferable로 전달 (복사 없이)
+
     // 진행률 및 속도 보고
     const now = Date.now();
     if (now - this.lastReportTime > PROGRESS_REPORT_INTERVAL) {
-      const progress = this.totalSize > 0 ? (this.totalBytesReceived / this.totalSize) * 100 : 0;
-      
+      const progress =
+        this.totalSize > 0
+          ? (this.totalBytesReceived / this.totalSize) * 100
+          : 0;
+
       // 속도 계산
       const timeDelta = now - this.lastSpeedCalcTime;
       const bytesDelta = this.totalBytesReceived - this.lastSpeedCalcBytes;
       let speed = 0;
-      
+
       if (timeDelta > 0 && bytesDelta > 0) {
         const instantSpeed = bytesDelta / (timeDelta / 1000);
         this.speedSamples.push(instantSpeed);
         if (this.speedSamples.length > SPEED_SAMPLE_SIZE) {
           this.speedSamples.shift();
         }
-        speed = this.speedSamples.reduce((a, b) => a + b, 0) / this.speedSamples.length;
+        speed =
+          this.speedSamples.reduce((a, b) => a + b, 0) /
+          this.speedSamples.length;
       }
-      
+
       this.lastSpeedCalcTime = now;
       this.lastSpeedCalcBytes = this.totalBytesReceived;
-      
+
       self.postMessage({
         type: 'progress',
         payload: {
@@ -158,21 +172,25 @@ class ReceiverWorker {
           bytesWritten: this.totalBytesReceived,
           totalBytes: this.totalSize,
           chunksProcessed: this.chunksProcessed,
-          speed
-        }
+          speed,
+        },
       });
       this.lastReportTime = now;
     }
   }
 
   private finalize() {
-    console.log('[Receiver Worker] Transfer complete. Total:', this.totalBytesReceived, 'bytes');
-    
+    console.log(
+      '[Receiver Worker] Transfer complete. Total:',
+      this.totalBytesReceived,
+      'bytes'
+    );
+
     self.postMessage({
       type: 'complete',
-      payload: { actualSize: this.totalBytesReceived }
+      payload: { actualSize: this.totalBytesReceived },
     });
-    
+
     // 상태 초기화
     this.manifest = null;
     this.totalBytesReceived = 0;

@@ -1,6 +1,6 @@
 /**
  * Transfer Store - Zustand 기반 중앙 집중식 상태 관리
- * 
+ *
  * 🚀 성능 최적화:
  * - 고빈도 업데이트(progress)를 위한 transient updates 지원
  * - Selector 패턴으로 불필요한 리렌더링 방지
@@ -29,21 +29,34 @@ export interface ProgressData {
 interface TransferState {
   // 앱 모드
   mode: AppMode;
-  
+
   // 방 정보
   roomId: string | null;
   shareLink: string | null;
-  
+
   // 상태
-  status: 'IDLE' | 'DRAGGING_FILES' | 'PREPARING' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'RECEIVING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE' | 'ERROR' | 'QUEUED' | 'ROOM_FULL';
+  status:
+    | 'IDLE'
+    | 'DRAGGING_FILES'
+    | 'PREPARING'
+    | 'WAITING'
+    | 'CONNECTING'
+    | 'TRANSFERRING'
+    | 'RECEIVING'
+    | 'REMOTE_PROCESSING'
+    | 'READY_FOR_NEXT'
+    | 'DONE'
+    | 'ERROR'
+    | 'QUEUED'
+    | 'ROOM_FULL';
   error: string | null;
-  
+
   // 메타데이터
   manifest: TransferManifest | null;
-  
+
   // 진행률 (자주 변경됨)
   progress: ProgressData;
-  
+
   // 피어 정보 (Sender용)
   connectedPeers: string[];
   readyPeers: string[];
@@ -52,7 +65,7 @@ interface TransferState {
   readyCountdown: number | null;
   currentTransferPeerCount: number;
   waitingPeersCount: number;
-  
+
   // 액션
   setMode: (mode: AppMode) => void;
   setRoomId: (id: string | null) => void;
@@ -60,16 +73,16 @@ interface TransferState {
   setStatus: (status: TransferState['status']) => void;
   setError: (error: string | null) => void;
   setManifest: (manifest: TransferManifest | null) => void;
-  
+
   // 드래그/전송 상태 헬퍼
   startDragging: () => void;
   stopDragging: () => void;
   startTransfer: () => void;
   completeTransfer: () => void;
-  
+
   // 🚀 진행률 업데이트 (고빈도 - 스로틀링 권장)
   updateProgress: (data: Partial<ProgressData>) => void;
-  
+
   // 피어 관리
   addConnectedPeer: (peerId: string) => void;
   removeConnectedPeer: (peerId: string) => void;
@@ -81,10 +94,10 @@ interface TransferState {
   setReadyCountdown: (countdown: number | null) => void;
   setCurrentTransferPeerCount: (count: number) => void;
   setWaitingPeersCount: (count: number) => void;
-  
+
   // 전체 리셋
   reset: () => void;
-  
+
   // Sender 상태 리셋 (새 전송 시작 시)
   resetForNewTransfer: () => void;
 }
@@ -118,85 +131,94 @@ const initialState = {
 export const useTransferStore = create<TransferState>()(
   subscribeWithSelector((set, get) => ({
     ...initialState,
-    
+
     // 기본 setter
-    setMode: (mode) => set({ mode }),
-    setRoomId: (roomId) => set({ roomId }),
-    setShareLink: (shareLink) => set({ shareLink }),
-    setStatus: (status) => set({ status }),
-    setError: (error) => set({ error }),
-    setManifest: (manifest) => set({ manifest }),
-    
+    setMode: mode => set({ mode }),
+    setRoomId: roomId => set({ roomId }),
+    setShareLink: shareLink => set({ shareLink }),
+    setStatus: status => set({ status }),
+    setError: error => set({ error }),
+    setManifest: manifest => set({ manifest }),
+
     // 🚀 진행률 업데이트 (성능 최적화: 필요한 필드만 업데이트)
-    updateProgress: (data) => set((state) => ({
-      progress: {
-        ...state.progress,
-        ...data,
-      }
-    })),
-    
+    updateProgress: data =>
+      set(state => ({
+        progress: {
+          ...state.progress,
+          ...data,
+        },
+      })),
+
     // 드래그/전송 상태 헬퍼
     startDragging: () => set({ status: 'DRAGGING_FILES' }),
     stopDragging: () => set({ status: 'IDLE' }),
     startTransfer: () => set({ status: 'TRANSFERRING' }),
     completeTransfer: () => set({ status: 'DONE' }),
-    
+
     // 피어 관리
-    addConnectedPeer: (peerId) => set((state) => ({
-      connectedPeers: state.connectedPeers.includes(peerId) 
-        ? state.connectedPeers 
-        : [...state.connectedPeers, peerId]
-    })),
-    
-    removeConnectedPeer: (peerId) => set((state) => ({
-      connectedPeers: state.connectedPeers.filter(id => id !== peerId),
-      readyPeers: state.readyPeers.filter(id => id !== peerId),
-    })),
-    
-    addReadyPeer: (peerId) => set((state) => ({
-      readyPeers: state.readyPeers.includes(peerId)
-        ? state.readyPeers
-        : [...state.readyPeers, peerId]
-    })),
-    
-    removeReadyPeer: (peerId) => set((state) => ({
-      readyPeers: state.readyPeers.filter(id => id !== peerId)
-    })),
-    
-    addCompletedPeer: (peerId) => set((state) => ({
-      completedPeers: state.completedPeers.includes(peerId)
-        ? state.completedPeers
-        : [...state.completedPeers, peerId],
-      // 완료된 피어는 readyPeers에서 제거
-      readyPeers: state.readyPeers.filter(id => id !== peerId)
-    })),
-    
-    addQueuedPeer: (peerId) => set((state) => ({
-      queuedPeers: state.queuedPeers.includes(peerId)
-        ? state.queuedPeers
-        : [...state.queuedPeers, peerId]
-    })),
-    
+    addConnectedPeer: peerId =>
+      set(state => ({
+        connectedPeers: state.connectedPeers.includes(peerId)
+          ? state.connectedPeers
+          : [...state.connectedPeers, peerId],
+      })),
+
+    removeConnectedPeer: peerId =>
+      set(state => ({
+        connectedPeers: state.connectedPeers.filter(id => id !== peerId),
+        readyPeers: state.readyPeers.filter(id => id !== peerId),
+      })),
+
+    addReadyPeer: peerId =>
+      set(state => ({
+        readyPeers: state.readyPeers.includes(peerId)
+          ? state.readyPeers
+          : [...state.readyPeers, peerId],
+      })),
+
+    removeReadyPeer: peerId =>
+      set(state => ({
+        readyPeers: state.readyPeers.filter(id => id !== peerId),
+      })),
+
+    addCompletedPeer: peerId =>
+      set(state => ({
+        completedPeers: state.completedPeers.includes(peerId)
+          ? state.completedPeers
+          : [...state.completedPeers, peerId],
+        // 완료된 피어는 readyPeers에서 제거
+        readyPeers: state.readyPeers.filter(id => id !== peerId),
+      })),
+
+    addQueuedPeer: peerId =>
+      set(state => ({
+        queuedPeers: state.queuedPeers.includes(peerId)
+          ? state.queuedPeers
+          : [...state.queuedPeers, peerId],
+      })),
+
     clearQueuedPeers: () => set({ queuedPeers: [] }),
-    
-    setReadyCountdown: (countdown) => set({ readyCountdown: countdown }),
-    setCurrentTransferPeerCount: (count) => set({ currentTransferPeerCount: count }),
-    setWaitingPeersCount: (count) => set({ waitingPeersCount: count }),
-    
+
+    setReadyCountdown: countdown => set({ readyCountdown: countdown }),
+    setCurrentTransferPeerCount: count =>
+      set({ currentTransferPeerCount: count }),
+    setWaitingPeersCount: count => set({ waitingPeersCount: count }),
+
     // 전체 리셋
     reset: () => set(initialState),
-    
+
     // 새 전송을 위한 부분 리셋
-    resetForNewTransfer: () => set({
-      status: 'IDLE',
-      error: null,
-      progress: initialProgress,
-      completedPeers: [],
-      queuedPeers: [],
-      readyCountdown: null,
-      currentTransferPeerCount: 0,
-      waitingPeersCount: 0,
-    }),
+    resetForNewTransfer: () =>
+      set({
+        status: 'IDLE',
+        error: null,
+        progress: initialProgress,
+        completedPeers: [],
+        queuedPeers: [],
+        readyCountdown: null,
+        currentTransferPeerCount: 0,
+        waitingPeersCount: 0,
+      }),
   }))
 );
 

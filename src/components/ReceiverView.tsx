@@ -1,11 +1,27 @@
 // 🚀 [리팩토링 완료] 아키텍처 통일 완료
 console.log('[ReceiverView] ✅ [DEBUG] ARCHITECTURE FIXED:');
-console.log('[ReceiverView] ✅ [DEBUG] - Using webRTCService (now Receiver-only)');
-console.log('[ReceiverView] ✅ [DEBUG] - webRTCService now uses SinglePeerConnection');
-console.log('[ReceiverView] ✅ [DEBUG] - Architecture unified with SwarmManager');
+console.log(
+  '[ReceiverView] ✅ [DEBUG] - Using webRTCService (now Receiver-only)'
+);
+console.log(
+  '[ReceiverView] ✅ [DEBUG] - webRTCService now uses SinglePeerConnection'
+);
+console.log(
+  '[ReceiverView] ✅ [DEBUG] - Architecture unified with SwarmManager'
+);
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw, Radio } from 'lucide-react';
+import {
+  Scan,
+  Download,
+  Loader2,
+  Archive,
+  AlertCircle,
+  CheckCircle,
+  FileCheck,
+  RefreshCw,
+  Radio,
+} from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../utils/constants';
 import { DirectFileWriter } from '../services/directFileWriter';
@@ -14,22 +30,36 @@ import { useTransferStore } from '../store/transferStore';
 
 const ReceiverView: React.FC = () => {
   // 전역 상태 사용
-  const { roomId, setRoomId, status, setStatus, progress, manifest, setManifest, updateProgress } = useTransferStore();
-  
+  const {
+    roomId,
+    setRoomId,
+    status,
+    setStatus,
+    progress,
+    manifest,
+    setManifest,
+    updateProgress,
+  } = useTransferStore();
+
   const [errorMsg, setErrorMsg] = useState('');
   const [actualSize, setActualSize] = useState<number>(0);
-  const [progressData, setProgressData] = useState({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
-  
+  const [progressData, setProgressData] = useState({
+    progress: 0,
+    speed: 0,
+    bytesTransferred: 0,
+    totalBytes: 0,
+  });
+
   // 🚨 [추가] 송신자 응답 대기 상태 변수
   const [isWaitingForSender, setIsWaitingForSender] = useState(false);
-  
+
   // 🚀 [Multi-Receiver] 대기열 상태
   const [queuePosition, setQueuePosition] = useState<number>(0);
   const [queueMessage, setQueueMessage] = useState<string>('');
-  
+
   // 🚨 [추가] 연결 타임아웃 관리용 Ref
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  
+
   // 🚨 [핵심 수정 1] status의 최신 값을 추적하기 위한 Ref 생성
   // setTimeout과 같은 비동기 클로저 안에서도 항상 최신 상태를 읽을 수 있게 함
   const statusRef = useRef(status);
@@ -42,31 +72,45 @@ const ReceiverView: React.FC = () => {
   const UI_UPDATE_INTERVAL = 100; // 100ms마다 한 번만 UI 업데이트
 
   // 🚀 [핵심] 이벤트 핸들러들을 useCallback으로 메모이제이션하여 안정성 확보
-  const handleMetadata = useCallback((m: any) => {
-    // 🚨 [수정] 메타데이터 수신 시 타임아웃 해제 및 에러 상태 초기화
-    if (connectionTimeoutRef.current) {
-      clearTimeout(connectionTimeoutRef.current);
-      connectionTimeoutRef.current = null;
-    }
-    setErrorMsg(''); // 이전 에러 메시지 초기화
-    setManifest(m);
-    
-    // 🚀 [Multi-Receiver] QUEUED 상태에서 manifest를 다시 받으면 
-    // 대기열에서 전송이 시작된 것이므로 RECEIVING으로 전환
-    const currentStatus = statusRef.current;
-    if (currentStatus === 'QUEUED') {
-      console.log('[ReceiverView] Manifest received while QUEUED - transfer starting');
-      setQueuePosition(0);
-      setQueueMessage('');
-      updateProgress({ progress: 0, bytesTransferred: 0, totalBytes: m?.totalSize || 0 });
-      setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: m?.totalSize || 0 });
-      setStatus('RECEIVING');
-      setIsWaitingForSender(false);
-    } else if (currentStatus !== 'RECEIVING' && currentStatus !== 'DONE') {
-      // 일반적인 경우: WAITING 상태로 전환
-      setStatus('WAITING');
-    }
-  }, [setStatus, updateProgress]);
+  const handleMetadata = useCallback(
+    (m: any) => {
+      // 🚨 [수정] 메타데이터 수신 시 타임아웃 해제 및 에러 상태 초기화
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
+      setErrorMsg(''); // 이전 에러 메시지 초기화
+      setManifest(m);
+
+      // 🚀 [Multi-Receiver] QUEUED 상태에서 manifest를 다시 받으면
+      // 대기열에서 전송이 시작된 것이므로 RECEIVING으로 전환
+      const currentStatus = statusRef.current;
+      if (currentStatus === 'QUEUED') {
+        console.log(
+          '[ReceiverView] Manifest received while QUEUED - transfer starting'
+        );
+        setQueuePosition(0);
+        setQueueMessage('');
+        updateProgress({
+          progress: 0,
+          bytesTransferred: 0,
+          totalBytes: m?.totalSize || 0,
+        });
+        setProgressData({
+          progress: 0,
+          speed: 0,
+          bytesTransferred: 0,
+          totalBytes: m?.totalSize || 0,
+        });
+        setStatus('RECEIVING');
+        setIsWaitingForSender(false);
+      } else if (currentStatus !== 'RECEIVING' && currentStatus !== 'DONE') {
+        // 일반적인 경우: WAITING 상태로 전환
+        setStatus('WAITING');
+      }
+    },
+    [setStatus, updateProgress]
+  );
 
   const handleRemoteStarted = useCallback(() => {
     // 🚨 [핵심 수정] 송신자 응답 시 타임아웃 해제
@@ -77,37 +121,43 @@ const ReceiverView: React.FC = () => {
     setIsWaitingForSender(false);
   }, []);
 
-  const handleProgress = useCallback((p: any) => {
-    // 1. 대기 상태 해제 (데이터가 들어오기 시작함)
-    setIsWaitingForSender(false);
-    
-    // 2. 상태 강제 동기화
-    if (status !== 'RECEIVING') {
-      setStatus('RECEIVING');
-    }
+  const handleProgress = useCallback(
+    (p: any) => {
+      // 1. 대기 상태 해제 (데이터가 들어오기 시작함)
+      setIsWaitingForSender(false);
 
-    // 3. 🚀 [성능 최적화] UI 업데이트 스로틀링
-    const now = Date.now();
-    const val = typeof p === 'object' ? p.progress : p;
-    
-    // 100ms가 안 지났고, 완료(100%)가 아니면 업데이트 스킵
-    if (now - lastProgressUpdateRef.current < UI_UPDATE_INTERVAL && val < 100) {
-      return;
-    }
-    lastProgressUpdateRef.current = now;
+      // 2. 상태 강제 동기화
+      if (status !== 'RECEIVING') {
+        setStatus('RECEIVING');
+      }
 
-    // 4. 진행률 데이터 업데이트
-    updateProgress({ progress: isNaN(val) ? 0 : val });
-    
-    if (typeof p === 'object' && p.speed !== undefined) {
-      setProgressData({
-        progress: p.progress || 0,
-        speed: p.speed || 0,
-        bytesTransferred: p.bytesTransferred || 0,
-        totalBytes: p.totalBytes || 0
-      });
-    }
-  }, [status, setStatus, updateProgress]);
+      // 3. 🚀 [성능 최적화] UI 업데이트 스로틀링
+      const now = Date.now();
+      const val = typeof p === 'object' ? p.progress : p;
+
+      // 100ms가 안 지났고, 완료(100%)가 아니면 업데이트 스킵
+      if (
+        now - lastProgressUpdateRef.current < UI_UPDATE_INTERVAL &&
+        val < 100
+      ) {
+        return;
+      }
+      lastProgressUpdateRef.current = now;
+
+      // 4. 진행률 데이터 업데이트
+      updateProgress({ progress: isNaN(val) ? 0 : val });
+
+      if (typeof p === 'object' && p.speed !== undefined) {
+        setProgressData({
+          progress: p.progress || 0,
+          speed: p.speed || 0,
+          bytesTransferred: p.bytesTransferred || 0,
+          totalBytes: p.totalBytes || 0,
+        });
+      }
+    },
+    [status, setStatus, updateProgress]
+  );
 
   const handleComplete = useCallback((payload: any) => {
     console.log('[ReceiverView] Transfer Complete.', payload);
@@ -120,25 +170,29 @@ const ReceiverView: React.FC = () => {
   // 🚨 [핵심 수정] room-full 이벤트 핸들러
   const handleRoomFull = useCallback((msg: string) => {
     console.warn('[ReceiverView] Room full:', msg);
-    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+    if (connectionTimeoutRef.current)
+      clearTimeout(connectionTimeoutRef.current);
     setErrorMsg(msg);
     setStatus('ROOM_FULL');
   }, []);
 
   const handleError = useCallback((e: any) => {
     console.error('[ReceiverView] Error:', e);
-    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+    if (connectionTimeoutRef.current)
+      clearTimeout(connectionTimeoutRef.current);
     setIsWaitingForSender(false);
-    
-    let msg = typeof e === 'string' ? e : 'Unknown Error';
+
+    const msg = typeof e === 'string' ? e : 'Unknown Error';
     if (msg.includes('Room full')) {
       // 🚨 [핵심 수정] 방이 꽉 찼을 때 ERROR가 아닌 ROOM_FULL 상태로 전환
-      setErrorMsg('Room is currently occupied. Please wait for the current transfer to complete.');
+      setErrorMsg(
+        'Room is currently occupied. Please wait for the current transfer to complete.'
+      );
       setStatus('ROOM_FULL');
       return;
     }
     if (msg.includes('closed')) return; // 단순 종료 무시
-    
+
     // 🚨 [핵심 수정] 이미 다운로드 중인 경우 에러 상태로 전환 방지
     const currentStatus = statusRef.current;
     if (currentStatus === 'RECEIVING' && !isWaitingForSender) {
@@ -152,36 +206,48 @@ const ReceiverView: React.FC = () => {
 
   const handleJoin = useCallback(async (id: string) => {
     if (!id || id.length < 6) return;
-    
+
     setStatus('CONNECTING');
     setErrorMsg('');
-    
-    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
-    
+
+    if (connectionTimeoutRef.current)
+      clearTimeout(connectionTimeoutRef.current);
+
     // 🚨 [핵심 수정] 연결 타임아웃 로직 개선
     connectionTimeoutRef.current = setTimeout(() => {
-        const currentStatus = statusRef.current;
-        console.log('[ReceiverView] Timeout check. Current status:', currentStatus);
-        
-        // 🚨 [수정] 메타데이터를 받은 경우(정상 연결) 타임아웃 무시
-        if (currentStatus === 'WAITING' || currentStatus === 'RECEIVING' || currentStatus === 'DONE') {
-            console.log('[ReceiverView] Timeout ignored - already connected');
-            return;
-        }
-        
-        // 🚨 [수정] 아직 CONNECTING 상태일 때만 타임아웃 처리
-        if (currentStatus === 'CONNECTING') {
-            console.warn('[ReceiverView] Connection timed out. Status:', currentStatus);
-            setErrorMsg('Connection timed out. Sender may be offline.');
-            setStatus('ERROR');
-            transferService.cleanup();
-        }
+      const currentStatus = statusRef.current;
+      console.log(
+        '[ReceiverView] Timeout check. Current status:',
+        currentStatus
+      );
+
+      // 🚨 [수정] 메타데이터를 받은 경우(정상 연결) 타임아웃 무시
+      if (
+        currentStatus === 'WAITING' ||
+        currentStatus === 'RECEIVING' ||
+        currentStatus === 'DONE'
+      ) {
+        console.log('[ReceiverView] Timeout ignored - already connected');
+        return;
+      }
+
+      // 🚨 [수정] 아직 CONNECTING 상태일 때만 타임아웃 처리
+      if (currentStatus === 'CONNECTING') {
+        console.warn(
+          '[ReceiverView] Connection timed out. Status:',
+          currentStatus
+        );
+        setErrorMsg('Connection timed out. Sender may be offline.');
+        setStatus('ERROR');
+        transferService.cleanup();
+      }
     }, CONNECTION_TIMEOUT_MS);
 
     try {
       await transferService.initReceiver(id.toUpperCase());
     } catch (e) {
-      if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+      if (connectionTimeoutRef.current)
+        clearTimeout(connectionTimeoutRef.current);
       console.error('[ReceiverView] Init failed:', e);
       setErrorMsg('Failed to initialize connection');
       setStatus('ERROR');
@@ -194,20 +260,27 @@ const ReceiverView: React.FC = () => {
   // 🚀 [Multi-Receiver] 전송 놓침 핸들러
   const handleTransferMissed = useCallback((msg: string) => {
     console.warn('[ReceiverView] Transfer missed:', msg);
-    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
+    if (connectionTimeoutRef.current)
+      clearTimeout(connectionTimeoutRef.current);
     setIsWaitingForSender(false);
-    setErrorMsg('Transfer has already started. Please wait for it to complete or refresh to join the next transfer.');
+    setErrorMsg(
+      'Transfer has already started. Please wait for it to complete or refresh to join the next transfer.'
+    );
     setStatus('ERROR');
   }, []);
 
   // 🚀 [Multi-Receiver] 대기열 추가 핸들러
-  const handleQueued = useCallback((data: { message: string; position: number }) => {
-    console.log('[ReceiverView] Added to queue:', data);
-    if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
-    setQueuePosition(data.position);
-    setQueueMessage(data.message);
-    setStatus('QUEUED');
-  }, []);
+  const handleQueued = useCallback(
+    (data: { message: string; position: number }) => {
+      console.log('[ReceiverView] Added to queue:', data);
+      if (connectionTimeoutRef.current)
+        clearTimeout(connectionTimeoutRef.current);
+      setQueuePosition(data.position);
+      setQueueMessage(data.message);
+      setStatus('QUEUED');
+    },
+    []
+  );
 
   // 🚀 [Multi-Receiver] 전송 시작 핸들러 (대기열에서 나옴)
   const handleTransferStarting = useCallback(() => {
@@ -216,8 +289,17 @@ const ReceiverView: React.FC = () => {
     setQueuePosition(0);
     setQueueMessage('');
     // 진행률 초기화
-    updateProgress({ progress: 0, bytesTransferred: 0, totalBytes: manifest?.totalSize || 0 });
-    setProgressData({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: manifest?.totalSize || 0 });
+    updateProgress({
+      progress: 0,
+      bytesTransferred: 0,
+      totalBytes: manifest?.totalSize || 0,
+    });
+    setProgressData({
+      progress: 0,
+      speed: 0,
+      bytesTransferred: 0,
+      totalBytes: manifest?.totalSize || 0,
+    });
     // 상태 전환
     setStatus('RECEIVING');
     setIsWaitingForSender(false);
@@ -263,7 +345,18 @@ const ReceiverView: React.FC = () => {
       transferService.off('transfer-starting', handleTransferStarting);
       transferService.off('ready-for-download', handleReadyForDownload);
     };
-  }, [handleMetadata, handleRemoteStarted, handleProgress, handleComplete, handleError, handleRoomFull, handleTransferMissed, handleQueued, handleTransferStarting, handleReadyForDownload]);
+  }, [
+    handleMetadata,
+    handleRemoteStarted,
+    handleProgress,
+    handleComplete,
+    handleError,
+    handleRoomFull,
+    handleTransferMissed,
+    handleQueued,
+    handleTransferStarting,
+    handleReadyForDownload,
+  ]);
 
   // 🚀 [핵심 수정] 방 참여 Effect (roomId가 있을 때 한 번만 실행)
   useEffect(() => {
@@ -276,14 +369,15 @@ const ReceiverView: React.FC = () => {
   // 🚀 [핵심 수정] 컴포넌트 실제 언마운트 시에만 cleanup 실행
   // React StrictMode에서 useEffect가 두 번 실행되는 문제 방지
   const isMountedRef = useRef(true);
-  
+
   useEffect(() => {
     isMountedRef.current = true;
-    
+
     return () => {
       isMountedRef.current = false;
-      if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
-      
+      if (connectionTimeoutRef.current)
+        clearTimeout(connectionTimeoutRef.current);
+
       // StrictMode에서 첫 번째 cleanup은 무시하고, 실제 언마운트 시에만 실행
       // 약간의 딜레이를 주어 StrictMode의 재마운트를 감지
       setTimeout(() => {
@@ -294,7 +388,6 @@ const ReceiverView: React.FC = () => {
       }, 100);
     };
   }, []);
-
 
   /**
    * 🚀 [핵심] 사용자가 "Start Download"를 누르면
@@ -310,15 +403,23 @@ const ReceiverView: React.FC = () => {
         clearTimeout(connectionTimeoutRef.current);
         connectionTimeoutRef.current = null;
       }
-      
+
       setIsWaitingForSender(true);
       setStatus('RECEIVING');
-      
+
       // DirectFileWriter 사용 (File System Access API 또는 StreamSaver)
       // 브라우저 저장소 quota 제한 없이 무제한 파일 크기 지원
-      console.log('[ReceiverView] Using DirectFileWriter (no storage quota limit)');
-      console.log('[ReceiverView] Manifest:', manifest.totalFiles, 'files,', (manifest.totalSize / (1024 * 1024)).toFixed(2), 'MB');
-      
+      console.log(
+        '[ReceiverView] Using DirectFileWriter (no storage quota limit)'
+      );
+      console.log(
+        '[ReceiverView] Manifest:',
+        manifest.totalFiles,
+        'files,',
+        (manifest.totalSize / (1024 * 1024)).toFixed(2),
+        'MB'
+      );
+
       const writer = new DirectFileWriter();
 
       // 서비스에 Writer 주입
@@ -328,46 +429,52 @@ const ReceiverView: React.FC = () => {
       console.log('[ReceiverView] Starting receiver initialization...');
       await transferService.startReceiving(manifest);
       console.log('[ReceiverView] ✅ Receiver initialization complete');
-      
+
       // 다운로드 시작 후 새로운 타임아웃 설정 (송신자 응답 대기)
       connectionTimeoutRef.current = setTimeout(() => {
         if (statusRef.current === 'RECEIVING' && isWaitingForSender) {
-          console.warn('[ReceiverView] Download start timeout - no response from sender');
+          console.warn(
+            '[ReceiverView] Download start timeout - no response from sender'
+          );
           setErrorMsg('Sender did not respond. Please try again.');
           setStatus('ERROR');
           setIsWaitingForSender(false);
           transferService.cleanup();
         }
       }, 10000); // 10초 타임아웃
-      
     } catch (e: any) {
       console.error('[ReceiverView] startDirectDownload error:', e);
-      
+
       if (e.name === 'AbortError') {
         console.log('[ReceiverView] User cancelled file selection');
         setIsWaitingForSender(false);
         setStatus('WAITING');
         return;
       }
-      
+
       const errorMessage = e.message || String(e);
-      console.error('[ReceiverView] Download initialization failed:', errorMessage);
+      console.error(
+        '[ReceiverView] Download initialization failed:',
+        errorMessage
+      );
       setErrorMsg('Failed to initialize download: ' + errorMessage);
       setStatus('ERROR');
       setIsWaitingForSender(false);
     }
   }, [manifest]);
 
-  const safeProgress = isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
+  const safeProgress =
+    isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
   const strokeDashoffset = 283 - (283 * safeProgress) / 100;
-  
+
   // Glass Panel 스타일
-  const glassPanelClass = "bg-black/30 backdrop-blur-2xl border border-white/10 rounded-[2rem] p-10 shadow-[0_0_40px_rgba(0,0,0,0.5)] w-full max-w-md relative overflow-hidden group";
-  const glowEffectClass = "absolute inset-0 bg-gradient-to-br from-purple-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none";
+  const glassPanelClass =
+    'bg-black/30 backdrop-blur-2xl border border-white/10 rounded-[2rem] p-10 shadow-[0_0_40px_rgba(0,0,0,0.5)] w-full max-w-md relative overflow-hidden group';
+  const glowEffectClass =
+    'absolute inset-0 bg-gradient-to-br from-purple-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none';
 
   return (
     <div className="flex flex-col items-center justify-center w-full">
-      
       {/* 1. IDLE / INPUT */}
       {status === 'IDLE' && (
         <div className={glassPanelClass}>
@@ -382,15 +489,15 @@ const ReceiverView: React.FC = () => {
             <div className="relative">
               <input
                 value={roomId || ''}
-                onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+                onChange={e => setRoomId(e.target.value.toUpperCase())}
                 placeholder="######"
                 maxLength={6}
                 className="w-full bg-black/40 border-2 border-white/10 rounded-xl p-4 text-center text-3xl font-mono text-cyan-400 tracking-[0.5em] outline-none focus:border-cyan-500/50 focus:shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all placeholder-white/10"
               />
               <div className="absolute inset-0 pointer-events-none border border-cyan-500/20 rounded-xl mix-blend-overlay" />
             </div>
-            <button 
-              onClick={() => handleJoin(roomId!)} 
+            <button
+              onClick={() => handleJoin(roomId!)}
               disabled={!roomId || roomId.length < 6}
               className="mt-6 w-full bg-white text-black py-4 rounded-xl font-bold tracking-widest hover:bg-cyan-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -406,10 +513,17 @@ const ReceiverView: React.FC = () => {
           <div className="relative w-32 h-32 mx-auto mb-8">
             <div className="absolute inset-0 border-4 border-t-cyan-500 border-r-transparent border-b-purple-500 border-l-transparent rounded-full animate-spin" />
             <div className="absolute inset-4 border-4 border-t-transparent border-r-white/30 border-b-transparent border-l-white/30 rounded-full animate-spin-reverse" />
-            <Radio className="absolute inset-0 m-auto text-cyan-400 animate-pulse" size={32} />
+            <Radio
+              className="absolute inset-0 m-auto text-cyan-400 animate-pulse"
+              size={32}
+            />
           </div>
-          <h3 className="text-2xl font-bold mb-2 tracking-widest">SEARCHING FREQUENCY...</h3>
-          <p className="text-cyan-400/60 font-mono">Waiting for sender signal</p>
+          <h3 className="text-2xl font-bold mb-2 tracking-widest">
+            SEARCHING FREQUENCY...
+          </h3>
+          <p className="text-cyan-400/60 font-mono">
+            Waiting for sender signal
+          </p>
         </div>
       )}
 
@@ -419,14 +533,20 @@ const ReceiverView: React.FC = () => {
           <div className={glowEffectClass} />
           <div className="text-center relative z-10">
             <Archive className="w-20 h-20 text-cyan-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
-            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">INCOMING TRANSMISSION</h2>
+            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">
+              INCOMING TRANSMISSION
+            </h2>
             <p className="text-cyan-400/80 text-sm mb-6 font-mono">
-              {manifest?.totalFiles === 1 ? manifest?.files[0]?.name : `${manifest?.totalFiles} files`}
+              {manifest?.totalFiles === 1
+                ? manifest?.files[0]?.name
+                : `${manifest?.totalFiles} files`}
             </p>
             <p className="text-gray-400 text-sm mb-8">
-              Size: {manifest ? (manifest.totalSize / (1024 * 1024)).toFixed(2) : '0'} MB
+              Size:{' '}
+              {manifest ? (manifest.totalSize / (1024 * 1024)).toFixed(2) : '0'}{' '}
+              MB
             </p>
-            
+
             {errorMsg && (
               <div className="mb-4 p-3 bg-red-900/30 border border-red-500/30 rounded-lg text-sm text-red-200 flex items-center gap-2 text-left backdrop-blur-sm">
                 <AlertCircle size={16} className="flex-shrink-0" />
@@ -451,15 +571,30 @@ const ReceiverView: React.FC = () => {
           {/* 중앙 HUD 스타일 프로그레스 */}
           <div className="relative w-64 h-64 mx-auto mb-8">
             {/* 배경 링 */}
-            <svg className="w-full h-full rotate-[-90deg]" viewBox="0 0 100 100">
-              <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+            <svg
+              className="w-full h-full rotate-[-90deg]"
+              viewBox="0 0 100 100"
+            >
+              <circle
+                cx="50"
+                cy="50"
+                r="45"
+                fill="none"
+                stroke="rgba(255,255,255,0.1)"
+                strokeWidth="2"
+              />
               {/* 진행 링 */}
               <circle
-                cx="50" cy="50" r="45" fill="none"
+                cx="50"
+                cy="50"
+                r="45"
+                fill="none"
                 stroke="url(#gradient)"
                 strokeWidth="4"
                 strokeDasharray="283"
-                strokeDashoffset={isNaN(strokeDashoffset) ? 283 : strokeDashoffset}
+                strokeDashoffset={
+                  isNaN(strokeDashoffset) ? 283 : strokeDashoffset
+                }
                 className="transition-all duration-300 ease-out drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]"
               />
               <defs>
@@ -475,19 +610,29 @@ const ReceiverView: React.FC = () => {
                 {Math.round(safeProgress)}
                 <span className="text-2xl text-cyan-400">%</span>
               </span>
-              <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">INCOMING STREAM</span>
+              <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">
+                INCOMING STREAM
+              </span>
             </div>
           </div>
 
           {/* 하단 정보 패널 (투명) */}
           <div className="grid grid-cols-2 gap-4 bg-black/20 backdrop-blur-md rounded-2xl p-6 border border-white/5">
             <div className="text-left">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Download Speed</p>
-              <p className="font-mono text-xl text-cyan-400 font-bold">{formatBytes(progressData.speed)}/s</p>
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                Download Speed
+              </p>
+              <p className="font-mono text-xl text-cyan-400 font-bold">
+                {formatBytes(progressData.speed)}/s
+              </p>
             </div>
             <div className="text-right">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Data Received</p>
-              <p className="font-mono text-xl text-white">{formatBytes(progressData.bytesTransferred)}</p>
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                Data Received
+              </p>
+              <p className="font-mono text-xl text-white">
+                {formatBytes(progressData.bytesTransferred)}
+              </p>
             </div>
           </div>
 
@@ -502,14 +647,16 @@ const ReceiverView: React.FC = () => {
         <div className={glassPanelClass}>
           <div className="text-center relative z-10">
             <CheckCircle className="w-20 h-20 text-green-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
-            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">MATERIALIZED</h2>
+            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">
+              MATERIALIZED
+            </h2>
             <p className="text-gray-400 mb-8">File reconstruction complete.</p>
             {actualSize > 0 && (
               <p className="text-gray-500 text-sm mb-6 font-mono">
                 {(actualSize / (1024 * 1024)).toFixed(2)} MB transferred
               </p>
             )}
-            <button 
+            <button
               onClick={() => window.location.reload()}
               className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto"
             >
@@ -524,7 +671,9 @@ const ReceiverView: React.FC = () => {
         <div className={glassPanelClass}>
           <div className="text-center relative z-10">
             <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]" />
-            <h2 className="text-2xl font-bold mb-2 text-white tracking-wider">CONNECTION FAILED</h2>
+            <h2 className="text-2xl font-bold mb-2 text-white tracking-wider">
+              CONNECTION FAILED
+            </h2>
             <p className="text-gray-300 mb-6">{errorMsg}</p>
             <button
               onClick={() => window.location.reload()}

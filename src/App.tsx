@@ -22,20 +22,21 @@ const App: React.FC = () => {
   useEffect(() => {
     const path = window.location.pathname;
     const match = path.match(/^\/receive\/([A-Z0-9]{6})$/);
-    
+
     if (match) {
       const roomId = match[1];
       setRoomId(roomId);
       setMode(AppMode.RECEIVER);
     }
-    
+
     // 글로벌 에러 핸들러
     const handleRejection = (event: PromiseRejectionEvent) => {
       toast.error(`Unexpected Error: ${event.reason?.message || 'Unknown'}`);
     };
     window.addEventListener('unhandledrejection', handleRejection);
-    
-    return () => window.removeEventListener('unhandledrejection', handleRejection);
+
+    return () =>
+      window.removeEventListener('unhandledrejection', handleRejection);
   }, [setRoomId, setMode]);
 
   const startApp = () => setMode(AppMode.SELECTION);
@@ -50,37 +51,36 @@ const App: React.FC = () => {
         console.error('[App] Signaling connection failed:', error);
       }
     };
-    
+
     initSignaling();
   }, []);
 
   return (
     <ErrorBoundary>
       <div className="relative w-screen h-screen overflow-hidden text-white bg-transparent font-rajdhani select-none">
-        
         {/* 배경 계층 */}
         <SpaceField />
-        
+
         {/* 오버레이 계층 */}
         <StatusOverlay />
         <ToastContainer />
-        
+
         {/* 플래시 효과 */}
         {status === 'DONE' && (
           <motion.div
             className="fixed inset-0 bg-cyan-400 pointer-events-none z-40 mix-blend-overlay"
             initial={{ opacity: 0 }}
             animate={{ opacity: [0, 0.6, 0] }}
-            transition={{ duration: 1.0, ease: "circOut" }}
+            transition={{ duration: 1.0, ease: 'circOut' }}
           />
         )}
-        
+
         {/* Header */}
         <header
           className="absolute top-0 left-0 p-8 z-50 flex items-center gap-4 cursor-pointer hover:opacity-80 transition-opacity"
-          onClick={() => { 
-            setMode(AppMode.INTRO); 
-            window.history.pushState({}, '', '/'); 
+          onClick={() => {
+            setMode(AppMode.INTRO);
+            window.history.pushState({}, '', '/');
           }}
         >
           <div className="w-12 h-12 border-2 border-cyan-500 rounded-full flex items-center justify-center backdrop-blur-sm bg-black/20 shadow-[0_0_15px_rgba(6,182,212,0.5)]">
@@ -94,22 +94,21 @@ const App: React.FC = () => {
         {/* 메인 컨텐츠 */}
         <main className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6">
           <AnimatePresence mode="wait">
-            
             {mode === AppMode.INTRO && (
-              <motion.div 
+              <motion.div
                 key="intro"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20, filter: "blur(10px)" }}
+                exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
                 className="text-center max-w-2xl"
               >
                 <h2 className="text-6xl md:text-8xl font-black mb-8 leading-tight brand-font tracking-tighter drop-shadow-[0_0_30px_rgba(6,182,212,0.3)]">
-                  WARP SPEED <br/>
+                  WARP SPEED <br />
                   <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-white to-purple-500 animate-gradient-x">
                     FILE TRANSFER
                   </span>
                 </h2>
-                <MagneticButton 
+                <MagneticButton
                   onClick={startApp}
                   className="bg-white/10 backdrop-blur-md border border-white/20 text-white px-12 py-6 rounded-full font-bold text-xl tracking-widest hover:bg-cyan-500 hover:border-cyan-400 transition-all flex items-center gap-4 mx-auto group shadow-[0_0_20px_rgba(0,0,0,0.5)]"
                 >
@@ -120,14 +119,14 @@ const App: React.FC = () => {
             )}
 
             {mode === AppMode.SELECTION && (
-              <motion.div 
+              <motion.div
                 key="selection"
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.1, filter: "blur(10px)" }}
+                exit={{ opacity: 0, scale: 1.1, filter: 'blur(10px)' }}
                 className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-5xl w-full"
               >
-                <MagneticButton 
+                <MagneticButton
                   onClick={() => setMode(AppMode.SENDER)}
                   className="group h-80 bg-black/30 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] p-10 flex flex-col items-center justify-center hover:border-cyan-500 hover:bg-cyan-900/20 transition-all duration-500 shadow-2xl"
                 >
@@ -137,11 +136,15 @@ const App: React.FC = () => {
                       <Send className="w-10 h-10 text-white group-hover:scale-110 transition-transform duration-300" />
                     </div>
                   </div>
-                  <h3 className="text-3xl font-bold mb-3 tracking-wider group-hover:text-cyan-400 transition-colors">SEND</h3>
-                  <p className="text-gray-400 text-sm tracking-widest uppercase">Create Warp Gate</p>
+                  <h3 className="text-3xl font-bold mb-3 tracking-wider group-hover:text-cyan-400 transition-colors">
+                    SEND
+                  </h3>
+                  <p className="text-gray-400 text-sm tracking-widest uppercase">
+                    Create Warp Gate
+                  </p>
                 </MagneticButton>
 
-                <MagneticButton 
+                <MagneticButton
                   onClick={() => setMode(AppMode.RECEIVER)}
                   className="group h-80 bg-black/30 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] p-10 flex flex-col items-center justify-center hover:border-purple-500 hover:bg-purple-900/20 transition-all duration-500 shadow-2xl"
                 >
@@ -151,15 +154,19 @@ const App: React.FC = () => {
                       <Download className="w-10 h-10 text-white group-hover:scale-110 transition-transform duration-300" />
                     </div>
                   </div>
-                  <h3 className="text-3xl font-bold mb-3 tracking-wider group-hover:text-purple-400 transition-colors">RECEIVE</h3>
-                  <p className="text-gray-400 text-sm tracking-widest uppercase">Connect to Gate</p>
+                  <h3 className="text-3xl font-bold mb-3 tracking-wider group-hover:text-purple-400 transition-colors">
+                    RECEIVE
+                  </h3>
+                  <p className="text-gray-400 text-sm tracking-widest uppercase">
+                    Connect to Gate
+                  </p>
                 </MagneticButton>
               </motion.div>
             )}
 
             {(mode === AppMode.SENDER || status === 'TRANSFERRING') && (
-              <motion.div 
-                key="sender" 
+              <motion.div
+                key="sender"
                 className="w-full h-full flex flex-col items-center justify-center"
               >
                 <SenderView />
@@ -168,8 +175,8 @@ const App: React.FC = () => {
                     <TransferProgressBar />
                   </div>
                 )}
-                <button 
-                  onClick={() => setMode(AppMode.SELECTION)} 
+                <button
+                  onClick={() => setMode(AppMode.SELECTION)}
                   className="absolute bottom-10 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs"
                 >
                   Abort Mission
@@ -178,8 +185,8 @@ const App: React.FC = () => {
             )}
 
             {mode === AppMode.RECEIVER && (
-              <motion.div 
-                key="receiver" 
+              <motion.div
+                key="receiver"
                 className="w-full h-full flex flex-col items-center justify-center"
               >
                 <ReceiverView />
@@ -194,7 +201,6 @@ const App: React.FC = () => {
                 </button>
               </motion.div>
             )}
-            
           </AnimatePresence>
         </main>
       </div>

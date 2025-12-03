@@ -1,15 +1,19 @@
 /**
  * Store Connector
- * 
+ *
  * 서비스 레이어(SwarmManager, webRTCService)와 Zustand Store를 연결하는 브릿지.
  * UI 컴포넌트를 거치지 않고 서비스에서 직접 상태를 업데이트할 수 있게 해줍니다.
- * 
+ *
  * 🚀 성능 최적화:
  * - 스로틀링된 진행률 업데이트
  * - 배치 상태 업데이트
  */
 
-import { useTransferStore, throttledUpdateProgress, ProgressData } from '../store/transferStore';
+import {
+  useTransferStore,
+  throttledUpdateProgress,
+  ProgressData,
+} from '../store/transferStore';
 
 // 스로틀링 설정
 const PROGRESS_THROTTLE_MS = 33; // ~30fps

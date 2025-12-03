@@ -13,11 +13,15 @@ export enum LogLevel {
   INFO = 1,
   WARN = 2,
   ERROR = 3,
-  NONE = 4
+  NONE = 4,
 }
 
 // 현재 환경에 따른 로그 레벨 설정
-const currentLogLevel = isDevelopment ? LogLevel.DEBUG : (isProduction ? LogLevel.ERROR : LogLevel.INFO);
+const currentLogLevel = isDevelopment
+  ? LogLevel.DEBUG
+  : isProduction
+    ? LogLevel.ERROR
+    : LogLevel.INFO;
 
 /**
  * 로그 출력 함수
