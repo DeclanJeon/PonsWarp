@@ -1,247 +1,328 @@
 # 🌌 PonsWarp
 
-> **File Transfer at Warp Speed.**
+> **File Transfer at Warp Speed.**  
 > High-performance, serverless P2P file sharing directly in your browser.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)![React](https://img.shields.io/badge/React-18-blue)![WebRTC](https://img.shields.io/badge/WebRTC-P2P-green)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
+![React](https://img.shields.io/badge/React-19-blue)
+![WebRTC](https://img.shields.io/badge/WebRTC-P2P-green)
 
 **PonsWarp** is a next-generation file transfer tool designed to overcome the limitations of traditional web-based sharing. By leveraging **WebRTC** for peer-to-peer connections and **Origin Private File System (OPFS)** for disk storage, PonsWarp allows you to transfer files of **unlimited size** (10GB, 100GB, 1TB+) without crashing your browser's memory.
 
 ## 🚀 Key Features
 
-*   **⚡ Hyper-Fast P2P Transfer:** Direct browser-to-browser connection using WebRTC (UDP/SCTP). No intermediate servers store your data.
-*   **🧠 Smart Congestion Control:** Implements a custom **Backpressure** algorithm to manage buffer levels dynamically, ensuring maximum speed without packet loss or browser freezing.
-*   **💾 10TB+ File Support:** Uses **OPFS (Origin Private File System)** and **Web Workers** to stream data directly to the disk, bypassing RAM limitations.
-*   **📂 Folder & Multi-File Support:** Drag and drop entire folder structures. Receivers can download them as a single ZIP stream or individual files.
-*   **🛡️ Reliable Delivery:** Custom binary signaling for EOF (End of File) ensures 100% data integrity with zero missing bytes.
-*   **🎨 Sci-Fi UI:** A fully immersive, hardware-accelerated 3D background and futuristic interface.
+- **⚡ Hyper-Fast P2P Transfer:** Direct browser-to-browser connection using WebRTC (UDP/SCTP). No intermediate servers store your data.
+- **🧠 Smart Congestion Control:** Custom **Backpressure** algorithm with RTT-based AIMD congestion control for maximum speed without packet loss.
+- **💾 Unlimited File Size:** Uses **OPFS** and **Web Workers** to stream data directly to disk, bypassing RAM limitations.
+- **📂 Folder & Multi-File Support:** Drag and drop entire folder structures. Receivers can download as a single ZIP stream or individual files.
+- **👥 Multi-Receiver (1:N):** Send files to up to 3 receivers simultaneously with intelligent queue management.
+- **🛡️ Data Integrity:** CRC32 checksum verification on every chunk ensures 100% data integrity.
+- **🎨 Sci-Fi UI:** Fully immersive, hardware-accelerated 3D background with futuristic interface.
+
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              PonsWarp System                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────┐         ┌─────────────────────┐               │
+│  │   Sender Browser    │         │  Receiver Browser   │               │
+│  │                     │         │                     │               │
+│  │  ┌───────────────┐  │         │  ┌───────────────┐  │               │
+│  │  │  SenderView   │  │         │  │ ReceiverView  │  │               │
+│  │  └───────┬───────┘  │         │  └───────┬───────┘  │               │
+│  │          │          │         │          │          │               │
+│  │  ┌───────▼───────┐  │         │  ┌───────▼───────┐  │               │
+│  │  │ SwarmManager  │  │◄───────►│  │ReceiverService│  │               │
+│  │  │  (1:N Peers)  │  │  WebRTC │  │               │  │               │
+│  │  └───────┬───────┘  │  P2P    │  └───────┬───────┘  │               │
+│  │          │          │         │          │          │               │
+│  │  ┌───────▼───────┐  │         │  ┌───────▼───────┐  │               │
+│  │  │ Sender Worker │  │         │  │Receiver Worker│  │               │
+│  │  │ (File Read)   │  │         │  │ (Disk Write)  │  │               │
+│  │  └───────────────┘  │         │  └───────────────┘  │               │
+│  └─────────────────────┘         └─────────────────────┘               │
+│              │                              │                           │
+│              │    ┌─────────────────────┐   │                           │
+│              └───►│  Signaling Server   │◄──┘                           │
+│                   │  (Socket.io)        │                               │
+│                   │  - Room Management  │                               │
+│                   │  - SDP/ICE Relay    │                               │
+│                   │  - TURN Credentials │                               │
+│                   └─────────────────────┘                               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Core Components
+
+| Component | Description |
+|-----------|-------------|
+| **SwarmManager** | Orchestrates 1:N peer connections with slot management (max 3 direct peers) |
+| **SinglePeerConnection** | Unified WebRTC wrapper with backpressure control and drain events |
+| **NetworkAdaptiveController** | RTT-based AIMD congestion control for optimal throughput |
+| **Sender Worker** | Reads files, creates ZIP streams (fflate), manages double-buffering |
+| **Receiver Worker** | Validates CRC32 checksums, streams data to DirectFileWriter |
+| **DirectFileWriter** | Streams downloads via StreamSaver.js, bypassing browser memory |
+
+### Data Flow
+
+1. **Connection Setup:** Sender creates room → Receiver joins via room code/QR
+2. **WebRTC Handshake:** Signaling server relays SDP offers/answers and ICE candidates
+3. **Manifest Exchange:** Sender sends file metadata (names, sizes, checksums)
+4. **P2P Transfer:** Binary chunks flow directly between browsers via DataChannel
+5. **Integrity Check:** Each chunk verified with CRC32 checksum
+6. **Completion:** Transfer manifest validated, files saved to disk
 
 ## 🛠️ Tech Stack
 
-*   **Frontend:** React 18, TypeScript, Vite, Tailwind CSS
-*   **Core Networking:** WebRTC (`simple-peer`), Socket.io (Signaling only)
-*   **Storage & Stream:** OPFS (FileSystem API), `streamsaver`, `fflate` (High-performance compression)
-*   **Concurrency:** Dedicated Web Workers for Sender and Receiver threads to keep the UI smooth.
-*   **Visuals:** Three.js / React Three Fiber
+### Frontend (ponswarp)
 
-## 📦 Installation & Setup
+| Category | Technology |
+|----------|------------|
+| **Framework** | React 19, TypeScript 5.9, Vite 7 |
+| **WebRTC** | simple-peer (WebRTC wrapper) |
+| **Signaling** | Socket.io-client |
+| **Compression** | fflate (streaming ZIP) |
+| **Storage** | OPFS, StreamSaver.js |
+| **State** | Zustand |
+| **3D Graphics** | Three.js, React Three Fiber |
+| **Animation** | Framer Motion |
+| **Styling** | Tailwind CSS 4 |
+
+### Backend (ponswarp-signaling)
+
+| Category | Technology |
+|----------|------------|
+| **Runtime** | Node.js 18+ |
+| **Framework** | Express.js |
+| **WebSocket** | Socket.io 4.x |
+| **TURN** | AWS SDK (S3 integration for credentials) |
+
+## 📦 Installation
 
 ### Prerequisites
-*   Node.js (v20 or higher)
-*   pnpm (v8 or higher)
+- Node.js v20+
+- pnpm v8+
 
-### 1. Clone repository
+### Quick Start
+
 ```bash
-git clone https://github.com/your-username/ponswarp.git
+# Clone repository
+git clone https://github.com/pons-dev/ponswarp.git
 cd ponswarp
-```
 
-### 2. Install dependencies
-```bash
+# Install dependencies
 pnpm install
-```
 
-### 3. Start development server
-```bash
+# Start development server
 pnpm dev
 ```
 
-## 🔄 CI/CD & Version Management
+### Environment Variables
 
-### 자동화된 파이프라인
-
-PonsWarp는 완전 자동화된 CI/CD 파이프라인을 사용합니다:
-
-- **테스트**: 단위 테스트, 통합 테스트, 코드 커버리지
-- **품질 검사**: ESLint, Prettier, TypeScript 타입 검사
-- **빌드**: 프로덕션 빌드 및 아티팩트 저장
-- **릴리즈**: 시맨틱 버전 관리 및 자동 태깅
-- **배포**: GitHub Pages에 자동 배포
-
-### 버전 관리 전략
-
-- **시맨틱 버전 관리**: `MAJOR.MINOR.PATCH` 형식
-- **자동 릴리즈**: 커밋 메시지 기반 버전 결정
-- **브랜치 전략**: Git Flow 기반 (master/develop/feature)
-- **커밋 규칙**: Conventional Commits 표준 준수
-
-### 브랜치 규칙
-
-```
-master     ← 프로덕션 배포 (자동)
-├── develop ← 개발 통합 (베타 릴리즈)
-├── feature/* ← 기능 개발
-├── hotfix/*  ← 긴급 수정
-└── release/* ← 릴리즈 준비
-```
-
-### 커밋 메시지 규칙
+Create `.env` file in `ponswarp/`:
 
 ```bash
-feat: 새로운 기능 추가
-fix: 버그 수정
-docs: 문서 변경
-style: 코드 스타일 변경
-refactor: 코드 리팩토링
-perf: 성능 개선
-test: 테스트 추가/수정
-chore: 빌드/프로세스 변경
-ci: CI/CD 관련 변경
-build: 빌드 시스템 변경
+SIGNALING_SERVER_URL=ws://localhost:5501
 ```
 
-## 🧪 개발 가이드
+## 📁 Project Structure
 
-### 코드 품질
-
-```bash
-# 코드 스타일 검사 및 수정
-pnpm lint
-
-# 타입 검사
-pnpm type-check
-
-# 테스트 실행
-pnpm test
-
-# 테스트 커버리지
-pnpm test:coverage
+```
+ponswarp/
+├── src/
+│   ├── components/          # React UI components
+│   │   ├── SenderView.tsx       # Sender interface with drag-drop
+│   │   ├── ReceiverView.tsx     # Receiver interface with progress
+│   │   ├── SpaceField.tsx       # 3D background (Three.js)
+│   │   └── ui/                  # Reusable UI components
+│   ├── services/            # Core business logic
+│   │   ├── swarmManager.ts      # 1:N peer orchestration
+│   │   ├── singlePeerConnection.ts  # WebRTC wrapper
+│   │   ├── networkAdaptiveController.ts  # Congestion control
+│   │   ├── signaling.ts         # Socket.io client
+│   │   ├── directFileWriter.ts  # StreamSaver integration
+│   │   └── webRTCService.ts     # Receiver-side WebRTC
+│   ├── workers/             # Web Worker threads
+│   │   ├── file-sender.worker.v2.ts   # File reading & ZIP streaming
+│   │   └── file-receiver.worker.v2.ts # Chunk validation & progress
+│   ├── store/               # Zustand state management
+│   ├── types/               # TypeScript definitions
+│   └── utils/               # Utility functions & constants
+├── public/                  # Static assets
+└── docs/                    # Technical documentation
 ```
 
-### 커밋 프로세스
+## 🔧 Technical Deep Dive
 
-1. **Pre-commit Hook**: 자동으로 lint-staged 실행
-2. **Commit-msg Hook**: 커밋 메시지 규칙 검사
-3. **Interactive Commit**: `pnpm commit`으로 가이드된 커밋
+### Binary Protocol
 
-### 릴리즈 프로세스
+Each chunk is transmitted with a 22-byte header:
 
-1. **develop 브랜치**: 자동 베타 버전 릴리즈
-2. **master 브랜치**: 자동 정식 버전 릴리즈 및 배포
-3. **릴리즈 노트**: semantic-release가 자동 생성
-
-자세한 내용은 [버전 관리 문서](./docs/VERSION_MANAGEMENT.md)를 참조하세요.
-
-## 🚀 사용 방법
-
-### 파일 전송하기
-
-1. **발신자 (Sender)**:
-   - 웹사이트 접속
-   - 전송할 파일/폴더를 드래그 앤 드롭
-   - 생성된 QR 코드 또는 링크 공유
-
-2. **수신자 (Receiver)**:
-   - QR 코드 스캔 또는 링크 접속
-   - 자동으로 P2P 연결 설정
-   - 파일 다운로드 시작
-
-### 주요 기능
-
-- **실시간 전송 속도 모니터링**
-- **일시 정지/재개 기능**
-- **다중 파일 동시 전송**
-- **암호화된 P2P 통신**
-- **크로스 플랫폼 호환성**
-
-## 🔧 고급 설정
-
-### 환경 변수
-
-```bash
-# 시그널링 서버 주소
-VITE_SIGNALING_SERVER_URL=ws://localhost:3001
-
-# TURN 서버 설정 (NAT 통과)
-VITE_TURN_SERVER_URL=turn:your-turn-server.com
-VITE_TURN_USERNAME=username
-VITE_TURN_CREDENTIAL=credential
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Offset  │  Size  │  Field       │  Description              │
+├──────────┼────────┼──────────────┼───────────────────────────┤
+│  0       │  2     │  FileIndex   │  File ID (0xFFFF = EOS)   │
+│  2       │  4     │  ChunkIndex  │  Sequence number          │
+│  6       │  8     │  Offset      │  Byte offset in file      │
+│  14      │  4     │  DataLength  │  Payload size             │
+│  18      │  4     │  CRC32       │  Checksum for integrity   │
+│  22      │  N     │  Data        │  Actual file data         │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### 성능 튜닝
+### Congestion Control
+
+PonsWarp implements a delay-based AIMD (Additive Increase Multiplicative Decrease) algorithm:
 
 ```typescript
-// 청크 크기 설정 (기본: 64KB)
-const CHUNK_SIZE = 64 * 1024;
-
-// 동시 연결 수 (기본: 4)
-const MAX_CONCURRENT_CONNECTIONS = 4;
-
-// 버퍼 크기 (기본: 1MB)
-const BUFFER_SIZE = 1024 * 1024;
+// Congestion detection based on RTT ratio
+if (rttRatio > 2.0 || bufferedAmount > cwnd) {
+  cwnd = Math.max(MIN_CWND, cwnd * 0.7);  // Multiplicative Decrease
+} else if (rttRatio < 1.2 && bufferedAmount < cwnd * 0.8) {
+  cwnd = Math.min(MAX_CWND, cwnd + 64KB);  // Additive Increase
+}
 ```
 
-## 🐛 문제 해결
+### Buffer Management
 
-### 일반적인 문제
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `MAX_BUFFERED_AMOUNT` | 16 MB | WebRTC channel buffer limit |
+| `HIGH_WATER_MARK` | 12 MB | Stop requesting new chunks |
+| `LOW_WATER_MARK` | 4 MB | Resume chunk requests |
+| `CHUNK_SIZE_MAX` | 128 KB | Maximum chunk size |
+| `BATCH_SIZE_MAX` | 128 | Max chunks per worker request |
 
-1. **연결 실패**:
-   - 방화벽 설정 확인
-   - TURN 서버 사용
-   - 브라우저 호환성 확인
+### Multi-Receiver Queue System
 
-2. **전송 속도 저하**:
-   - 네트워크 상태 확인
-   - 브라우저 리소스 사용량 확인
-   - 청크 크기 조절
+```
+1:1 Scenario: Immediate transfer start when receiver is ready
+1:N Scenario: 10-second countdown after first receiver ready
+              → All ready receivers start simultaneously
+              → Late joiners queued for next transfer batch
+```
 
-3. **메모리 부족**:
-   - OPFS 지원 확인
-   - 브라우저 버전 업데이트
-   - 파일 크기 제한 확인
+## 📈 Version History
 
-### 브라우저 호환성
+### v0.x (Current Development)
 
-| 브라우저 | 최소 버전 | WebRTC | OPFS | Web Workers |
-|---------|---------|--------|------|------------|
-| Chrome | 86+ | ✅ | ✅ | ✅ |
-| Firefox | 82+ | ✅ | ⚠️ | ✅ |
-| Safari | 15+ | ✅ | ⚠️ | ✅ |
-| Edge | 86+ | ✅ | ✅ | ✅ |
+#### Architecture Improvements
+- **Unified Peer Connection:** Consolidated sender/receiver logic into `SinglePeerConnection`
+- **SwarmManager:** Dedicated 1:N orchestrator with slot management (max 3 peers)
+- **Native Browser APIs:** Migrated from WASM to native SubtleCrypto and fflate
 
-## 🤝 기여하기
+#### Performance Optimizations
+- **RTT-based Congestion Control:** Delay-based AIMD algorithm
+- **Double Buffering:** Prefetch chunks while sending for zero-wait transfers
+- **Aggressive Pipelining:** 16MB buffer with 64-chunk batches
 
-기여를 환영합니다! 다음 단계를 따라주세요:
+#### Reliability Fixes
+- **Send Queue Overflow:** Backpressure handling prevents `RTCDataChannel` overflow
+- **CRC32 Checksums:** Per-chunk integrity verification
+- **Drain Event Retry:** Automatic retry of failed chunks on buffer drain
 
-1. 이슈 생성 또는 기존 이슈 검토
-2. 기능 브랜치 생성: `git checkout -b feature/amazing-feature`
-3. 변경사항 커밋: `git commit -m 'feat: add amazing feature'`
-4. 브랜치 푸시: `git push origin feature/amazing-feature`
-5. Pull Request 생성
+#### Developer Experience
+- **Semantic Release:** Automated versioning with conventional commits
+- **CI/CD Pipeline:** GitHub Actions for test, build, and deploy
+- **Husky + Commitlint:** Enforced commit message standards
 
-### 개발 환경 설정
+## 🧪 Development
+
+### Commands
 
 ```bash
-# 의존성 설치
-pnpm install
+# Development
+pnpm dev              # Start Vite dev server (port 3500)
+pnpm build            # Production build
+pnpm preview          # Preview production build
 
-# 개발 서버 시작
-pnpm dev
+# Quality
+pnpm lint             # ESLint check & fix
+pnpm type-check       # TypeScript validation
+pnpm test             # Run tests (Vitest)
+pnpm test:coverage    # Test coverage report
 
-# 테스트 실행
-pnpm test
-
-# 빌드
-pnpm build
+# Release
+pnpm commit           # Interactive commit (Commitizen)
+pnpm release:dry-run  # Preview version bump
 ```
 
-## 📄 라이선스
+### Commit Convention
 
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. [LICENSE](LICENSE) 파일을 참조하세요.
+```bash
+feat: Add new feature          # → Minor version bump
+fix: Bug fix                   # → Patch version bump
+perf: Performance improvement  # → Patch version bump
+docs: Documentation only       # → No version bump
+chore: Build/tooling changes   # → No version bump
 
-## 🙏 감사
+# Breaking change
+feat!: Breaking API change     # → Major version bump
+```
 
-- [WebRTC](https://webrtc.org/) - P2P 통신 기술
-- [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API) - 파일 시스템 API
-- [React Three Fiber](https://github.com/pmndrs/react-three-fiber) - 3D 그래픽
-- [Vite](https://vitejs.dev/) - 빠른 빌드 도구
+### Branch Strategy
 
-## 📞 연락처
+```
+master     ← Production releases (auto-deploy)
+├── develop ← Integration branch (beta releases)
+├── feature/* ← New features
+├── hotfix/*  ← Emergency fixes
+└── release/* ← Release preparation
+```
 
-- 프로젝트 홈페이지: [https://github.com/your-username/ponswarp](https://github.com/your-username/ponswarp)
-- 이슈 리포트: [Issues](https://github.com/your-username/ponswarp/issues)
-- 기능 요청: [Discussions](https://github.com/your-username/ponswarp/discussions)
+## 🌐 Browser Compatibility
+
+| Browser | Min Version | WebRTC | OPFS | Web Workers |
+|---------|-------------|--------|------|-------------|
+| Chrome | 86+ | ✅ | ✅ | ✅ |
+| Edge | 86+ | ✅ | ✅ | ✅ |
+| Firefox | 113+ | ✅ | ⚠️ | ✅ |
+| Safari | 16.4+ | ✅ | ⚠️ | ✅ |
+
+> ⚠️ OPFS support varies. Falls back to StreamSaver.js for broader compatibility.
+
+## 🐛 Troubleshooting
+
+### Connection Issues
+- **Firewall:** Ensure WebRTC ports are not blocked
+- **NAT Traversal:** TURN server credentials are automatically fetched
+- **Browser:** Update to latest version for best WebRTC support
+
+### Transfer Speed
+- **Network:** Check both sender and receiver bandwidth
+- **Buffer:** Monitor `bufferedAmount` in DevTools console
+- **Chunk Size:** Automatically adapts based on RTT
+
+### Memory Issues
+- **Large Files:** OPFS streams to disk, not RAM
+- **Browser Limits:** Chrome handles 10GB+ files reliably
+- **Worker Threads:** Offloads processing from main thread
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create feature branch: `git checkout -b feature/amazing-feature`
+3. Commit changes: `git commit -m 'feat: add amazing feature'`
+4. Push branch: `git push origin feature/amazing-feature`
+5. Open Pull Request
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## 🙏 Acknowledgments
+
+- [WebRTC](https://webrtc.org/) - P2P communication
+- [simple-peer](https://github.com/feross/simple-peer) - WebRTC wrapper
+- [fflate](https://github.com/101arrowz/fflate) - High-performance compression
+- [StreamSaver.js](https://github.com/nicbarker/StreamSaver.js) - Disk streaming
+- [React Three Fiber](https://github.com/pmndrs/react-three-fiber) - 3D graphics
+- [Vite](https://vitejs.dev/) - Build tooling
 
 ---
 
-**⭐ 만약 이 프로젝트가 유용하다면 스타를 눌러주세요!**
+**⭐ If you find PonsWarp useful, please star the repository!**
