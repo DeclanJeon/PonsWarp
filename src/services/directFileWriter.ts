@@ -20,13 +20,18 @@
 
 import streamSaver from 'streamsaver';
 import { ReorderingBuffer } from './reorderingBuffer';
-import { logInfo, logError, logWarn } from '../utils/logger';
+import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
 
 // StreamSaver MITM 설정
 if (typeof window !== 'undefined') {
   streamSaver.mitm = `${window.location.origin}/mitm.html`;
 }
+
+// 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
+// 32MB 이상 쌓이면 PAUSE 요청, 16MB 이하로 떨어지면 RESUME 요청
+const WRITE_BUFFER_HIGH_MARK = 32 * 1024 * 1024;
+const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
 
 export class DirectFileWriter {
   private manifest: any = null;
@@ -55,10 +60,15 @@ export class DirectFileWriter {
   
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
   private pendingBytesInBuffer = 0;
+  
+  // 🚀 버퍼 추적 및 흐름 제어 변수
+  private isPaused = false;
 
   private onProgressCallback: ((data: any) => void) | null = null;
   private onCompleteCallback: ((actualSize: number) => void) | null = null;
   private onErrorCallback: ((error: string) => void) | null = null;
+  // 🚀 [추가] 흐름 제어 콜백
+  private onFlowControlCallback: ((action: 'PAUSE' | 'RESUME') => void) | null = null;
 
   /**
    * 스토리지 초기화
@@ -72,6 +82,7 @@ export class DirectFileWriter {
     this.writeBuffer = [];
     this.currentBatchSize = 0;
     this.pendingBytesInBuffer = 0;
+    this.isPaused = false;
 
     const fileCount = manifest.totalFiles || manifest.files.length;
     console.log('[DirectFileWriter] Initializing for', fileCount, 'files');
@@ -224,6 +235,9 @@ export class DirectFileWriter {
       this.pendingBytesInBuffer += chunk.byteLength; // 버퍼에 적재된 바이트 추적
     }
 
+    // 🚀 [Flow Control] High Water Mark 체크
+    this.checkBackpressure();
+
     // 3. 임계값(8MB) 넘으면 디스크에 쓰기 (Flushing)
     if (this.currentBatchSize >= this.BATCH_THRESHOLD) {
       await this.flushBuffer();
@@ -263,6 +277,10 @@ export class DirectFileWriter {
     this.pendingBytesInBuffer -= this.currentBatchSize; // 버퍼에서 디스크로 이동했으므로 감소
     this.writeBuffer = [];
     this.currentBatchSize = 0;
+    
+    // 🚀 [Flow Control] Low Water Mark 체크 (Resume)
+    this.checkBackpressure();
+    
     this.reportProgress();
   }
 
@@ -358,6 +376,26 @@ export class DirectFileWriter {
     this.onErrorCallback = callback;
   }
 
+  // 🚀 [추가] 콜백 등록 메서드
+  public onFlowControl(callback: (action: 'PAUSE' | 'RESUME') => void): void {
+    this.onFlowControlCallback = callback;
+  }
+
+  /**
+   * 🚀 [Flow Control] 버퍼 상태에 따른 PAUSE/RESUME 이벤트 발생
+   */
+  private checkBackpressure() {
+    if (!this.isPaused && this.pendingBytesInBuffer >= WRITE_BUFFER_HIGH_MARK) {
+      this.isPaused = true;
+      logWarn('[DirectFileWriter]', `High memory usage (${formatBytes(this.pendingBytesInBuffer)}). Pausing sender.`);
+      this.onFlowControlCallback?.('PAUSE');
+    } else if (this.isPaused && this.pendingBytesInBuffer <= WRITE_BUFFER_LOW_MARK) {
+      this.isPaused = false;
+      logInfo('[DirectFileWriter]', `Memory drained (${formatBytes(this.pendingBytesInBuffer)}). Resuming sender.`);
+      this.onFlowControlCallback?.('RESUME');
+    }
+  }
+
   /**
    * 정리
    * 🚀 [개선] ReorderingBuffer 정리 추가
@@ -365,6 +403,7 @@ export class DirectFileWriter {
   public async cleanup(): Promise<void> {
     this.isFinalized = true;
     this.writeBuffer = []; // 메모리 해제
+    this.isPaused = false;
 
     // 버퍼 정리
     if (this.reorderingBuffer) {
@@ -382,4 +421,14 @@ export class DirectFileWriter {
 
     this.writer = null;
   }
+}
+
+// 헬퍼 함수
+function formatBytes(bytes: number, decimals = 2) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }

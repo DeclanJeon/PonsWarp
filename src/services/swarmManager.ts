@@ -21,7 +21,7 @@ import { SinglePeerConnection, PeerConfig, PeerState } from './singlePeerConnect
 import { signalingService } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
-import { logInfo, logError } from '../utils/logger';
+import { logInfo, logError, logDebug } from '../utils/logger';
 import {
   HIGH_WATER_MARK,
   HEADER_SIZE,
@@ -103,7 +103,10 @@ export class SwarmManager {
   // Keep-alive 타이머
   private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 
-  // 🚀 [대기열 시스템] 
+  // 🚀 [Flow Control] 원격 피어의 일시정지 상태 추적
+  private pausedPeers: Set<string> = new Set();
+
+  // 🚀 [대기열 시스템]
   private transferQueue: string[] = []; // ready 대기열
   private completedPeersInSession: Set<string> = new Set(); // 현재 세션에서 완료된 피어
   private currentTransferPeers: Set<string> = new Set(); // 현재 전송 중인 피어들
@@ -422,10 +425,24 @@ export class SwarmManager {
   }
 
   /**
-   * 추가 청크 요청 가능 여부
+   * 🚀 [Flow Control] 추가 청크 요청 가능 여부
+   * 기존: WebRTC 버퍼만 확인
+   * 변경: WebRTC 버퍼 + Receiver들의 PAUSE 상태 확인
    */
   public canRequestMoreChunks(): boolean {
-    return this.getHighestBufferedAmount() < HIGH_WATER_MARK;
+    // 1. WebRTC 버퍼 체크
+    const bufferOkay = this.getHighestBufferedAmount() < HIGH_WATER_MARK;
+    
+    // 2. Receiver 상태 체크 (현재 전송 중인 피어들 중 하나라도 PAUSE 상태면 중단)
+    let receiversReady = true;
+    for (const peerId of this.currentTransferPeers) {
+      if (this.pausedPeers.has(peerId)) {
+        receiversReady = false;
+        break;
+      }
+    }
+    
+    return bufferOkay && receiversReady;
   }
 
   private handleDrain(peerId: string): void {
@@ -464,6 +481,23 @@ export class SwarmManager {
       case 'KEEP_ALIVE':
         // Keep-alive 메시지는 무시 (연결 유지 목적)
         return;
+        
+      // 🚀 [Flow Control] PAUSE/RESUME 처리
+      case 'CONTROL':
+        if (msg.action === 'PAUSE') {
+          logInfo('[SwarmManager]', `Peer ${peerId} requested PAUSE (Disk busy)`);
+          this.pausedPeers.add(peerId);
+        } else if (msg.action === 'RESUME') {
+          logInfo('[SwarmManager]', `Peer ${peerId} requested RESUME`);
+          this.pausedPeers.delete(peerId);
+          
+          // 모든 피어가 준비되었으면(혹은 내가 보내는 중인 피어들이 풀렸으면) 다시 요청
+          if (this.isTransferring && this.canRequestMoreChunks()) {
+            logDebug('[SwarmManager]', 'Resuming transfer loop via explicit request');
+            this.requestMoreChunks();
+          }
+        }
+        break;
         
       case 'TRANSFER_READY':
         if (peer) {
@@ -1272,6 +1306,7 @@ export class SwarmManager {
     this.transferQueue = [];
     this.completedPeersInSession.clear();
     this.currentTransferPeers.clear();
+    this.pausedPeers.clear();
     this.files = [];
   }
 

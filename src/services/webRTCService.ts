@@ -4,7 +4,7 @@ console.log('[webRTCService] ✅ [DEBUG] - Receiver-only service (Sender logic r
 console.log('[webRTCService] ✅ [DEBUG] - Architecture unified with SwarmManager');
 
 import { signalingService, TurnConfigResponse } from './signaling';
-import { logInfo, logError, logWarn } from '../utils/logger';
+import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
 
 type EventHandler = (data: any) => void;
@@ -17,6 +17,8 @@ interface IFileWriter {
   onProgress(cb: (progress: number) => void): void;
   onComplete(cb: (actualSize: number) => void): void;
   onError(cb: (err: string) => void): void;
+  // 🚀 [추가] 흐름 제어 인터페이스
+  onFlowControl?(cb: (action: 'PAUSE' | 'RESUME') => void): void;
 }
 
 class ReceiverService {
@@ -102,6 +104,20 @@ class ReceiverService {
     });
 
     this.writer.onError((err) => this.emit('error', err));
+
+    // 🚀 [Flow Control] 이벤트 연결
+    if (this.writer.onFlowControl) {
+      this.writer.onFlowControl((action) => {
+        if (this.peer && this.peer.connected) {
+          logDebug('[Receiver]', `Sending flow control: ${action}`);
+          try {
+            this.peer.send(JSON.stringify({ type: 'CONTROL', action }));
+          } catch (e) {
+            logError('[Receiver]', 'Failed to send control message', e);
+          }
+        }
+      });
+    }
   }
 
   /**
