@@ -1,11 +1,11 @@
 /**
  * SinglePeerConnection - 단일 피어와의 WebRTC 연결 캡슐화
- * 
- * 각 피어 연결을 독립적으로 관리하며, 자체 상태와 이벤트를 가짐.
- * SwarmManager에서 여러 인스턴스를 생성하여 1:N 연결 관리.
+ *
+ * Sender와 Receiver 모두에서 사용할 수 있는 범용 WebRTC 연결 래퍼입니다.
+ * SwarmManager와 webRTCService 모두에서 사용하여 아키텍처를 통일합니다.
  */
 import SimplePeer from 'simple-peer/simplepeer.min.js';
-import { LOW_WATER_MARK } from '../constants';
+import { LOW_WATER_MARK } from '../utils/constants';
 import { logInfo, logError } from '../utils/logger';
 
 type EventHandler = (data: any) => void;
@@ -27,7 +27,8 @@ export class SinglePeerConnection {
   public connected: boolean = false;
   public ready: boolean = false;
   
-  private pc: SimplePeer.Instance | null = null;
+  // @ts-ignore
+  public pc: SimplePeer.Instance | null = null;
   private destroyed: boolean = false;
   private drainEmitted: boolean = false;
   private eventListeners: Record<string, EventHandler[]> = {};

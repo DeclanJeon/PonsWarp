@@ -1,12 +1,10 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background-color: #000;
+  background-color: #000000;
   font-family: 'Rajdhani', sans-serif;
   color: white;
   -webkit-font-smoothing: antialiased;
@@ -17,6 +15,20 @@ h2,
 h3,
 .brand-font {
   font-family: 'Orbitron', sans-serif;
+}
+
+.brand-font {
+  background: linear-gradient(90deg, #00f5ff, #ff00ff, #00f5ff);
+  background-size: 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: glow 4s linear infinite;
+}
+
+@keyframes glow {
+   0%, 100% { background-position: 0% }
+  50% { background-position: 200% }
 }
 
 ::-webkit-scrollbar {

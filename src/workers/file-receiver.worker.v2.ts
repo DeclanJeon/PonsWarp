@@ -6,11 +6,34 @@ declare const self: DedicatedWorkerGlobalScope;
 // - OPFS 제거 - 브라우저 저장소 quota 제한 없음
 // - 메인 스레드의 DirectFileWriter로 청크 전달
 // - 진행률 및 속도 측정만 담당
+// - Checksum: CRC32 for data integrity verification
 // ============================================================================
 
-const HEADER_SIZE = 18;
+const HEADER_SIZE = 22; // 18 -> 22로 변경 (Checksum 4byte 추가)
 const PROGRESS_REPORT_INTERVAL = 100;
 const SPEED_SAMPLE_SIZE = 10;
+
+// CRC32 Checksum 계산 함수
+function calculateCRC32(data: Uint8Array): number {
+  const CRC_TABLE = new Int32Array(256);
+  
+  // CRC 테이블 초기화 (한 번만 실행)
+  if (CRC_TABLE[0] === 0) {
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      CRC_TABLE[i] = c;
+    }
+  }
+  
+  let crc = -1; // 0xFFFFFFFF
+  for (let i = 0; i < data.length; i++) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ data[i]) & 0xFF];
+  }
+  return (crc ^ -1) >>> 0; // 부호 없는 정수로 변환
+}
 
 class ReceiverWorker {
   private totalBytesReceived = 0;
@@ -73,10 +96,27 @@ class ReceiverWorker {
     }
 
     const size = view.getUint32(14, true);
+    const receivedChecksum = view.getUint32(18, true); // 🚀 Checksum 읽기
 
-    // 패킷 무결성 검증
+    // 1. 패킷 길이 무결성 검증
     if (packet.byteLength !== HEADER_SIZE + size) {
-      console.error('[Receiver Worker] Corrupt packet');
+      console.error('[Receiver Worker] ❌ Corrupt packet size');
+      // 추후 NACK 요청 로직 추가 가능
+      return;
+    }
+
+    // 2. 🚀 데이터 무결성 검증 (CRC32)
+    // 헤더를 제외한 실제 데이터 부분 추출
+    const dataPart = new Uint8Array(packet, HEADER_SIZE, size);
+    const calculatedChecksum = calculateCRC32(dataPart);
+
+    if (receivedChecksum !== calculatedChecksum) {
+      console.error(`[Receiver Worker] ❌ Checksum mismatch! Expected: ${receivedChecksum.toString(16)}, Calc: ${calculatedChecksum.toString(16)}`);
+      // 치명적 오류 보고 (현재는 로그만, 추후 재전송 요청으로 연결)
+      self.postMessage({
+        type: 'error',
+        payload: 'Data corruption detected (Checksum mismatch)'
+      });
       return;
     }
 
@@ -84,9 +124,9 @@ class ReceiverWorker {
     this.chunksProcessed++;
 
     // 청크를 메인 스레드로 전달 (DirectFileWriter가 처리)
-    self.postMessage({ 
-      type: 'write-chunk', 
-      payload: packet 
+    self.postMessage({
+      type: 'write-chunk',
+      payload: packet
     }, [packet]); // Transferable로 전달 (복사 없이)
     
     // 진행률 및 속도 보고
@@ -111,15 +151,15 @@ class ReceiverWorker {
       this.lastSpeedCalcTime = now;
       this.lastSpeedCalcBytes = this.totalBytesReceived;
       
-      self.postMessage({ 
-        type: 'progress', 
-        payload: { 
+      self.postMessage({
+        type: 'progress',
+        payload: {
           progress,
           bytesWritten: this.totalBytesReceived,
           totalBytes: this.totalSize,
           chunksProcessed: this.chunksProcessed,
           speed
-        } 
+        }
       });
       this.lastReportTime = now;
     }

@@ -1,7 +1,0 @@
-{
-  "name": "PonsWarp",
-  "description": "High-speed, 1:1 WebRTC file transfer system featuring galaxy warp visuals, OPFS storage, and multi-channel architecture.",
-  "requestFramePermissions": [
-    "camera"
-  ]
-}

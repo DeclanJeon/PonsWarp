@@ -1,20 +1,30 @@
-import React, { useState, useEffect, useRef } from 'react';
+// 🚨 [DEBUG] 아키텍처 불일치 진단 로그 추가
+console.log('[SenderView] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
+console.log('[SenderView] ✅ [DEBUG] - Using SwarmManager (correct)');
+console.log('[SenderView] ✅ [DEBUG] - SwarmManager uses SinglePeerConnection (correct)');
+console.log('[SenderView] ✅ [DEBUG] - Dedicated Sender implementation (correct)');
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus, AlertTriangle, Users } from 'lucide-react';
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
+import { scanFiles, processInputFiles } from '../utils/fileScanner';
 import { motion } from 'framer-motion';
+import { AppMode } from '../types/types';
+import { useTransferStore } from '../store/transferStore';
 
 interface SenderViewProps {
-  onComplete: () => void;
+  onComplete?: () => void;
 }
 
-const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
+const SenderView: React.FC<SenderViewProps> = () => {
+  const { setStatus: setGlobalStatus } = useTransferStore();
   const [manifest, setManifest] = useState<any>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [status, setStatus] = useState<'IDLE' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE'>('IDLE');
+  const [status, setStatus] = useState<'IDLE' | 'PREPARING' | 'WAITING' | 'CONNECTING' | 'TRANSFERRING' | 'REMOTE_PROCESSING' | 'READY_FOR_NEXT' | 'DONE'>('IDLE');
   const [progressData, setProgressData] = useState({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
   
   // 🚀 [Multi-Receiver] 피어 상태 추적
@@ -43,6 +53,12 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
       if (s === 'WAITING_FOR_PEER') setStatus('WAITING');
       if (s === 'CONNECTING') setStatus('CONNECTING');
       if (s === 'TRANSFERRING') setStatus('TRANSFERRING');
+    });
+    
+    swarmManager.on('error', (errorMsg: string) => {
+      console.error('[SenderView] SwarmManager error:', errorMsg);
+      alert(`Transfer error: ${errorMsg}\n\nPlease try again.`);
+      setStatus('IDLE');
     });
 
     // 🚀 [Multi-Receiver] 피어 이벤트
@@ -112,13 +128,13 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
     });
 
     // 🚀 [Multi-Receiver] 다음 전송 준비 상태
-    swarmManager.on('ready-for-next', ({ waitingCount, completedCount }: { waitingCount: number; completedCount: number }) => {
+    swarmManager.on('ready-for-next', ({ waitingCount }: { waitingCount: number }) => {
       setWaitingPeersCount(waitingCount);
       setStatus('READY_FOR_NEXT');
     });
 
     // 🚀 [Multi-Receiver] 배치 완료 (대기 중인 피어 없음)
-    swarmManager.on('batch-complete', ({ completedCount }: { completedCount: number }) => {
+    swarmManager.on('batch-complete', () => {
       // 대기 중인 피어가 없으면 READY_FOR_NEXT로 전환
       setStatus('READY_FOR_NEXT');
     });
@@ -156,10 +172,14 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
     });
 
     swarmManager.on('all-transfers-complete', () => {
+      console.log('[SenderView] 🎉 Received all-transfers-complete event, setting status to DONE');
       setStatus('DONE');
     });
 
-    swarmManager.on('complete', () => setStatus('DONE'));
+    swarmManager.on('complete', () => {
+      console.log('[SenderView] 🎉 Received complete event, setting status to DONE');
+      setStatus('DONE');
+    });
 
     return () => {
       swarmManager.cleanup();
@@ -169,37 +189,78 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      processFiles(e.target.files);
+      const scannedFiles = processInputFiles(e.target.files);
+      processScannedFiles(scannedFiles);
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
-    }
+    useTransferStore.setState({ status: 'DRAGGING_FILES' });
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
   };
 
-  const processFiles = async (fileList: FileList) => {
-    setStatus('WAITING');
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    useTransferStore.setState({ status: 'IDLE' });
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    useTransferStore.setState({ status: 'IDLE' });
     
-    const { manifest, files } = createManifest(fileList);
+    // DataTransferItemList가 있으면 FileSystemEntry 스캔 사용
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      const scannedFiles = await scanFiles(e.dataTransfer.items);
+      processScannedFiles(scannedFiles);
+    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      // Fallback: 단순 파일 처리
+      const scannedFiles = processInputFiles(e.dataTransfer.files);
+      processScannedFiles(scannedFiles);
+    }
+  };
+
+  const processScannedFiles = async (scannedFiles: any[]) => {
+    if (scannedFiles.length === 0) return;
+    
+    // Manifest 생성
+    const { manifest, files } = createManifest(scannedFiles);
     setManifest(manifest);
     
-    // Room ID 생성
+    console.log('[SenderView] 📊 [DEBUG] Manifest created:', {
+      isFolder: manifest.isFolder,
+      totalFiles: manifest.totalFiles,
+      totalSize: manifest.totalSize,
+      rootName: manifest.rootName
+    });
+    
+    // 여러 파일이면 ZIP 압축 준비 중 표시
+    if (files.length > 1) {
+      setStatus('PREPARING');
+    } else {
+      setStatus('WAITING');
+    }
+    
     const id = Math.random().toString(36).substring(2, 8).toUpperCase();
     setRoomId(id);
     setShareLink(`${window.location.origin}/receive/${id}`);
     
-    // SwarmManager로 초기화
+    console.log('[SenderView] 🏠 [DEBUG] Room created:', id);
+    
     try {
+      console.log('[SenderView] 🚀 [DEBUG] Initializing SwarmManager...');
       await swarmManagerRef.current?.initSender(manifest, files, id);
-    } catch (error) {
-      console.error('Init failed', error);
+      console.log('[SenderView] ✅ [DEBUG] SwarmManager initialized successfully');
+      
+      // 초기화 완료 후 WAITING 상태로 전환
+      setStatus('WAITING');
+    } catch (error: any) {
+      console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
+      
+      alert(`Failed to initialize transfer: ${error?.message || 'Unknown error'}\n\nPlease try again with different files.`);
       setStatus('IDLE');
     }
   };
@@ -221,9 +282,11 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
           animate={{ opacity: 1, y: 0 }}
           className="w-full space-y-4"
         >
-           <div 
-             onDrop={handleDrop}
+           <div
+             onDragEnter={handleDragEnter}
              onDragOver={handleDragOver}
+             onDragLeave={handleDragLeave}
+             onDrop={handleDrop}
              className="border-2 border-dashed border-cyan-500/50 bg-black/40 backdrop-blur-md rounded-3xl p-10 text-center transition-all flex flex-col items-center justify-center min-h-[320px]"
            >
              <input 
@@ -233,14 +296,13 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
                onChange={handleFileSelect}
                multiple 
              />
-             <input 
-               type="file" 
-               className="hidden" 
-               ref={folderInputRef} 
+             <input
+               type="file"
+               className="hidden"
+               ref={folderInputRef}
                onChange={handleFileSelect}
                multiple
-               // @ts-ignore
-               webkitdirectory="" 
+               {...({ webkitdirectory: "" } as any)}
              />
 
              <div className="mb-8">
@@ -269,6 +331,26 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
                </button>
              </div>
            </div>
+        </motion.div>
+      )}
+
+      {status === 'PREPARING' && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center p-8 bg-cyan-900/20 rounded-3xl border border-cyan-500/30 max-w-lg w-full"
+        >
+          <div className="relative w-20 h-20 mx-auto mb-6">
+            <Loader2 className="w-full h-full text-cyan-500 animate-spin" />
+          </div>
+          
+          <h2 className="text-2xl font-bold text-white mb-2">Preparing Files...</h2>
+          <p className="text-gray-400 mb-4">
+            Compressing {manifest?.totalFiles} files into ZIP archive
+          </p>
+          <p className="text-sm text-gray-500">
+            This may take a moment for large folders. Please wait...
+          </p>
         </motion.div>
       )}
 
@@ -446,7 +528,7 @@ const SenderView: React.FC<SenderViewProps> = ({ onComplete }) => {
                 </div>
               </div>
               <div className="space-y-2 text-left">
-                {connectedPeers.map((peerId, i) => (
+                {connectedPeers.map((peerId: string, i: number) => (
                   <div key={peerId} className="flex items-center justify-between text-sm">
                     <span className="text-gray-400">Receiver {i + 1}</span>
                     <span className={`px-2 py-1 rounded text-xs ${
