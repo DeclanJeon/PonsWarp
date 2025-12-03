@@ -1,16 +1,3 @@
-/**
- * SwarmManager - 여러 피어 연결을 관리하는 오케스트레이터
- *
- * 1:N 브로드캐스팅과 슬롯 관리를 담당.
- * 최대 3개의 직접 피어 연결을 관리 (Sender 보호).
- *
- * 🚀 [핵심 로직]
- * - 1:1 상황: 피어가 ready되면 즉시 전송 시작
- * - 1:N 상황: 첫 피어 ready 후 10초 대기, 그 사이 ready된 피어 모두에게 동시 전송
- * - 전송 중 새 피어 ready: 대기열에 추가, 현재 전송 완료 후 자동 시작
- * - 모든 피어 완료: Transfer Success UI 표시
- */
-
 // 🚨 [DEBUG] 아키텍처 불일치 진단 로그 추가
 console.log('[SwarmManager] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
 console.log(
@@ -31,7 +18,7 @@ import {
 import { signalingService } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
-import { logInfo, logError, logDebug } from '../utils/logger';
+import { logInfo, logError, logDebug, logWarn } from '../utils/logger';
 import {
   HIGH_WATER_MARK,
   HEADER_SIZE,
@@ -191,6 +178,26 @@ export class SwarmManager {
     this.clearConnectionTimeout(peerId);
     peer.destroy();
     this.peers.delete(peerId);
+
+    // 🚀 [중요] 상태 정리
+    this.pausedPeers.delete(peerId);
+    this.transferQueue = this.transferQueue.filter(id => id !== peerId);
+    
+    // 전송 중이던 피어가 나가면 즉시 제거하여 다른 피어가 기다리지 않게 함
+    if (this.currentTransferPeers.has(peerId)) {
+        this.currentTransferPeers.delete(peerId);
+        logWarn('[SwarmManager]', `Active peer ${peerId} dropped. Removed from transfer set.`);
+        
+        // 만약 이 피어가 나가서 남은 피어가 없다면 완료 처리 시도
+        if (this.isTransferring && this.currentTransferPeers.size === 0) {
+             this.checkTransferComplete();
+        } else if (this.isTransferring) {
+            // 다른 피어가 있다면 Flow Control 재평가 (나간 피어가 PAUSE 상태였을 수 있음)
+            if (this.canRequestMoreChunks()) {
+                this.requestMoreChunks();
+            }
+        }
+    }
 
     logInfo('[SwarmManager]', `Peer removed: ${peerId} (reason: ${reason})`);
     this.emit('peer-disconnected', { peerId, reason });
