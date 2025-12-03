@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+/* 🪲 [DEBUG] UI/UX 디자인 개선 로깅 시작 - CSS 주석으로 변경 */
+/* Design System Initialization:
+   - Applying fluid typography system
+   - Implementing CSS variables for consistency
+   - Adding responsive design tokens
+*/
+
+/* -------------------------------------------------------------------------- */
+/* 🌌 Design Tokens & Variables                                              */
+/* -------------------------------------------------------------------------- */
+:root {
+  --primary-cyan: #06b6d4;
+  --primary-purple: #a855f7;
+  --glass-bg: rgba(0, 0, 0, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --primary-glow: 0 0 20px rgba(6, 182, 212, 0.6);
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -8,16 +26,37 @@ body {
   font-family: 'Rajdhani', sans-serif;
   color: white;
   -webkit-font-smoothing: antialiased;
+  line-height: 1.6; /* Optimal Line Height (3.webp) */
 }
 
-h1,
-h2,
-h3,
-.brand-font {
+/* -------------------------------------------------------------------------- */
+/* Typography System (Responsive Fluid Type)                                 */
+/* -------------------------------------------------------------------------- */
+h1, h2, h3, .brand-font {
   font-family: 'Orbitron', sans-serif;
+  letter-spacing: 0.05em; /* 가독성을 위한 자간 확보 */
 }
 
-.brand-font {
+/* 뷰포트 크기에 따라 폰트 크기가 유동적으로 변함 */
+.text-fluid-h1 {
+  font-size: clamp(2.5rem, 6vw + 1rem, 6rem); /* Min 40px, Max 96px */
+  line-height: 1.1;
+  font-weight: 900;
+}
+
+.text-fluid-h2 {
+  font-size: clamp(1.5rem, 4vw + 1rem, 3.5rem); /* Min 24px, Max 56px */
+  line-height: 1.2;
+}
+
+.text-fluid-h3 {
+  font-size: clamp(1.25rem, 2vw + 1rem, 2rem);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Animations & Effects                                                      */
+/* -------------------------------------------------------------------------- */
+.brand-gradient {
   background: linear-gradient(90deg, #00f5ff, #ff00ff, #00f5ff);
   background-size: 200%;
   -webkit-background-clip: text;
@@ -31,15 +70,65 @@ h3,
   50% { background-position: 200% }
 }
 
+/* 새로운 그라데이션 애니메이션 - 캐치프레이즈용 */
+.animate-gradient-x {
+  background: linear-gradient(90deg, #22d3ee, #a855f7, #22d3ee);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gradient-x 3s ease infinite;
+}
+
+@keyframes gradient-x {
+  0% { background-position: 0% center; }
+  50% { background-position: 100% center; }
+  100% { background-position: 0% center; }
+}
+
+/* Shine 효과 - QR 코드 및 버튼용 */
+.animate-shine {
+  background-size: 50% 100%;
+  animation: shine 2s infinite;
+}
+
+@keyframes shine {
+  0% { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* 반대 방향 회전 애니메이션 */
+.animate-spin-reverse {
+  animation: spin-reverse 2s linear infinite;
+}
+
+@keyframes spin-reverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+/* 커스텀 스크롤바 */
 ::-webkit-scrollbar {
   width: 6px;
 }
-
 ::-webkit-scrollbar-track {
   background: #0f172a;
 }
-
 ::-webkit-scrollbar-thumb {
   background: #06b6d4;
   border-radius: 3px;
 }
+
+/* 유틸리티: 텍스트 줄바꿈 방지 및 말줄임 */
+.text-truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 🪲 [DEBUG] 디자인 시스템 적용 완료 로깅 - CSS 주석으로 변경 */
+/* Design System Applied Successfully:
+   - Fluid typography active
+   - CSS variables defined
+   - Responsive utilities ready
+*/

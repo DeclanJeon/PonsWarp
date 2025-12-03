@@ -1,14 +1,8 @@
-// 🚀 [리팩토링 완료] 아키텍처 통일 완료
-console.log('[ReceiverView] ✅ [DEBUG] ARCHITECTURE FIXED:');
-console.log(
-  '[ReceiverView] ✅ [DEBUG] - Using webRTCService (now Receiver-only)'
-);
-console.log(
-  '[ReceiverView] ✅ [DEBUG] - webRTCService now uses SinglePeerConnection'
-);
-console.log(
-  '[ReceiverView] ✅ [DEBUG] - Architecture unified with SwarmManager'
-);
+/* 🪲 [DEBUG] ReceiverView UI/UX 개선 시작 */
+console.log('[ReceiverView] 🪲 [DEBUG] UI/UX Enhancement Started:');
+console.log('[ReceiverView] 🪲 [DEBUG] - Applying HUD-style circular progress');
+console.log('[ReceiverView] 🪲 [DEBUG] - Implementing mobile-optimized input');
+console.log('[ReceiverView] 🪲 [DEBUG] - Adding focal point principles');
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -21,11 +15,16 @@ import {
   FileCheck,
   RefreshCw,
   Radio,
+  File as FileIcon,
+  Folder,
+  Wifi,
+  HardDrive,
 } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../utils/constants';
 import { DirectFileWriter } from '../services/directFileWriter';
 import { formatBytes } from '../utils/fileUtils';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
 
 const ReceiverView: React.FC = () => {
@@ -463,107 +462,135 @@ const ReceiverView: React.FC = () => {
     }
   }, [manifest]);
 
-  const safeProgress =
-    isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
-  const strokeDashoffset = 283 - (283 * safeProgress) / 100;
+  // Progress Calculation
+  const safeProgress = isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
+  const strokeDashoffset = 283 - (283 * safeProgress) / 100; // 2 * PI * 45 ≈ 283
 
-  // Glass Panel 스타일
-  const glassPanelClass =
-    'bg-black/30 backdrop-blur-2xl border border-white/10 rounded-[2rem] p-10 shadow-[0_0_40px_rgba(0,0,0,0.5)] w-full max-w-md relative overflow-hidden group';
-  const glowEffectClass =
-    'absolute inset-0 bg-gradient-to-br from-purple-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none';
+  // Common Styles
+  const glassPanelClass = "bg-black/40 backdrop-blur-2xl border border-white/10 rounded-[2rem] shadow-2xl w-full max-w-md mx-4 overflow-hidden relative";
 
   return (
-    <div className="flex flex-col items-center justify-center w-full">
-      {/* 1. IDLE / INPUT */}
-      {status === 'IDLE' && (
-        <div className={glassPanelClass}>
-          <div className={glowEffectClass} />
-          <div className="text-center relative z-10">
-            <div className="w-20 h-20 mx-auto mb-6 bg-white/5 rounded-full flex items-center justify-center animate-pulse border border-white/10">
-              <Scan className="w-10 h-10 text-cyan-400" />
-            </div>
-            <h2 className="text-2xl font-bold mb-6 tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-purple-300">
-              ENTER WARP KEY
-            </h2>
-            <div className="relative">
-              <input
-                value={roomId || ''}
-                onChange={e => setRoomId(e.target.value.toUpperCase())}
-                placeholder="######"
-                maxLength={6}
-                className="w-full bg-black/40 border-2 border-white/10 rounded-xl p-4 text-center text-3xl font-mono text-cyan-400 tracking-[0.5em] outline-none focus:border-cyan-500/50 focus:shadow-[0_0_20px_rgba(6,182,212,0.3)] transition-all placeholder-white/10"
-              />
-              <div className="absolute inset-0 pointer-events-none border border-cyan-500/20 rounded-xl mix-blend-overlay" />
-            </div>
-            <button
-              onClick={() => handleJoin(roomId!)}
-              disabled={!roomId || roomId.length < 6}
-              className="mt-6 w-full bg-white text-black py-4 rounded-xl font-bold tracking-widest hover:bg-cyan-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              ESTABLISH LINK
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 2. CONNECTING */}
-      {status === 'CONNECTING' && (
-        <div className="text-center">
-          <div className="relative w-32 h-32 mx-auto mb-8">
-            <div className="absolute inset-0 border-4 border-t-cyan-500 border-r-transparent border-b-purple-500 border-l-transparent rounded-full animate-spin" />
-            <div className="absolute inset-4 border-4 border-t-transparent border-r-white/30 border-b-transparent border-l-white/30 rounded-full animate-spin-reverse" />
-            <Radio
-              className="absolute inset-0 m-auto text-cyan-400 animate-pulse"
-              size={32}
-            />
-          </div>
-          <h3 className="text-2xl font-bold mb-2 tracking-widest">
-            SEARCHING FREQUENCY...
-          </h3>
-          <p className="text-cyan-400/60 font-mono">
-            Waiting for sender signal
-          </p>
-        </div>
-      )}
-
-      {/* 3. WAITING */}
-      {status === 'WAITING' && (
-        <div className={glassPanelClass}>
-          <div className={glowEffectClass} />
-          <div className="text-center relative z-10">
-            <Archive className="w-20 h-20 text-cyan-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
-            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">
-              INCOMING TRANSMISSION
-            </h2>
-            <p className="text-cyan-400/80 text-sm mb-6 font-mono">
-              {manifest?.totalFiles === 1
-                ? manifest?.files[0]?.name
-                : `${manifest?.totalFiles} files`}
-            </p>
-            <p className="text-gray-400 text-sm mb-8">
-              Size:{' '}
-              {manifest ? (manifest.totalSize / (1024 * 1024)).toFixed(2) : '0'}{' '}
-              MB
-            </p>
-
-            {errorMsg && (
-              <div className="mb-4 p-3 bg-red-900/30 border border-red-500/30 rounded-lg text-sm text-red-200 flex items-center gap-2 text-left backdrop-blur-sm">
-                <AlertCircle size={16} className="flex-shrink-0" />
-                <span>{errorMsg}</span>
+    <div className="flex flex-col items-center justify-center w-full h-full px-4 md:px-0 z-10 relative">
+      <AnimatePresence mode="wait">
+        {/* --- STATE: IDLE (Enter Code) --- */}
+        {status === 'IDLE' && (
+          <motion.div
+            key="idle"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
+            className={glassPanelClass}
+          >
+            <div className="text-center relative z-10 p-6 md:p-8">
+              <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-6 bg-gradient-to-br from-cyan-500/20 to-purple-500/20 rounded-3xl flex items-center justify-center border border-white/10 shadow-[0_0_30px_rgba(168,85,247,0.2)]">
+                <Scan className="w-8 h-8 md:w-10 md:h-10 text-white drop-shadow-lg" />
               </div>
-            )}
+              
+              <h2 className="text-2xl md:text-3xl font-bold mb-6 brand-font tracking-widest text-white">
+                ENTER <span className="text-cyan-400">WARP KEY</span>
+              </h2>
+              
+              <div className="relative group mb-6">
+                <input
+                  value={roomId || ''}
+                  onChange={e => setRoomId(e.target.value.toUpperCase())}
+                  placeholder="000000"
+                  maxLength={6}
+                  className="w-full bg-black/60 border-2 border-gray-700 rounded-2xl py-4 md:py-6 px-4 text-center text-3xl md:text-5xl font-mono text-cyan-400 tracking-[0.3em] md:tracking-[0.5em] outline-none focus:border-cyan-500 focus:shadow-[0_0_30px_rgba(6,182,212,0.3)] transition-all placeholder-white/10"
+                />
+                <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-cyan-500/50 rounded-tl-lg -translate-x-2 -translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
+                <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-purple-500/50 rounded-br-lg translate-x-2 translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
+              </div>
 
-            <button
-              onClick={startDirectDownload}
-              className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto w-full justify-center font-bold tracking-wider"
-            >
-              <Download size={20} />
-              MATERIALIZE
-            </button>
-          </div>
-        </div>
-      )}
+              <button
+                onClick={() => handleJoin(roomId!)}
+                disabled={!roomId || roomId.length < 6}
+                className="w-full bg-white text-black py-4 rounded-xl font-bold text-base md:text-lg tracking-[0.2em] hover:bg-cyan-300 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+              >
+                ESTABLISH LINK
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {/* --- STATE: CONNECTING --- */}
+        {status === 'CONNECTING' && (
+          <motion.div
+            key="connecting"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="text-center"
+          >
+            <div className="relative w-32 h-32 mx-auto mb-8">
+              <div className="absolute inset-0 border-4 border-t-cyan-500 border-r-transparent border-b-purple-500 border-l-transparent rounded-full animate-spin" />
+              <div className="absolute inset-4 border-4 border-t-transparent border-r-white/30 border-b-transparent border-l-white/30 rounded-full animate-spin-reverse" />
+              <Radio className="absolute inset-0 m-auto text-cyan-400 animate-pulse" size={32} />
+            </div>
+            <h3 className="text-2xl font-bold mb-2 tracking-widest">SEARCHING FREQUENCY...</h3>
+            <p className="text-cyan-400/60 font-mono">Waiting for sender signal</p>
+          </motion.div>
+        )}
+
+        {/* --- STATE: WAITING (Metadata Received) --- */}
+        {status === 'WAITING' && (
+          <motion.div
+            key="waiting"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.1 }}
+            className={glassPanelClass}
+          >
+            <div className="text-center relative z-10">
+              <div className="w-20 h-20 mx-auto mb-6 bg-cyan-500/10 rounded-full flex items-center justify-center border border-cyan-500/20">
+                <Archive className="w-10 h-10 text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
+              </div>
+              
+              <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 tracking-wider brand-font">
+                INCOMING TRANSMISSION
+              </h2>
+              
+              {/* File Info Box */}
+              <div className="bg-gray-800/50 p-6 rounded-2xl mb-8 border border-gray-700/50 text-left">
+                <div className="flex items-start gap-4 mb-4">
+                  <div className="bg-gray-700/50 p-3 rounded-lg">
+                    {manifest?.isFolder ? <Folder className="text-yellow-400" size={24}/> : <FileIcon className="text-blue-400" size={24}/>}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-bold text-lg text-white truncate break-all">{manifest?.rootName}</p>
+                    <p className="text-sm text-gray-400">{manifest?.isFolder ? 'Folder Archive' : 'Single File'}</p>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4 border-t border-gray-700 pt-4">
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total Size</p>
+                    <p className="font-mono text-cyan-300 font-bold">{formatBytes(manifest?.totalSize || 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">File Count</p>
+                    <p className="font-mono text-white font-bold">{manifest?.totalFiles}</p>
+                  </div>
+                </div>
+              </div>
+
+              {errorMsg && (
+                <div className="mb-6 p-4 bg-red-900/30 border border-red-500/30 rounded-xl text-sm text-red-200 flex items-start gap-3 text-left">
+                  <AlertCircle size={18} className="flex-shrink-0 mt-0.5" />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
+
+              <button
+                onClick={startDirectDownload}
+                className="w-full bg-white text-black py-4 rounded-xl font-bold tracking-widest hover:bg-cyan-300 transition-all flex items-center justify-center gap-3 shadow-[0_0_20px_rgba(255,255,255,0.2)] group"
+              >
+                <Download size={20} className="group-hover:scale-110 transition-transform"/>
+                MATERIALIZE
+              </button>
+            </div>
+          </motion.div>
+        )}
 
       {/* 4. RECEIVING (REVERSE WARP VISIBLE) */}
       {status === 'RECEIVING' && (
@@ -642,48 +669,61 @@ const ReceiverView: React.FC = () => {
         </div>
       )}
 
-      {/* 5. DONE */}
-      {status === 'DONE' && (
-        <div className={glassPanelClass}>
-          <div className="text-center relative z-10">
-            <CheckCircle className="w-20 h-20 text-green-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
-            <h2 className="text-3xl font-bold text-white mb-2 tracking-wider">
-              MATERIALIZED
-            </h2>
-            <p className="text-gray-400 mb-8">File reconstruction complete.</p>
-            {actualSize > 0 && (
-              <p className="text-gray-500 text-sm mb-6 font-mono">
-                {(actualSize / (1024 * 1024)).toFixed(2)} MB transferred
-              </p>
-            )}
-            <button
-              onClick={() => window.location.reload()}
-              className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto"
-            >
-              <RefreshCw size={18} /> Process Next
-            </button>
-          </div>
-        </div>
-      )}
+        {/* --- STATE: DONE --- */}
+        {status === 'DONE' && (
+          <motion.div
+            key="done"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className={glassPanelClass + " border-green-500/30"}
+          >
+            <div className="text-center relative z-10">
+              <div className="relative w-24 h-24 mx-auto mb-6 bg-green-500/10 rounded-full flex items-center justify-center border border-green-500/20">
+                <CheckCircle className="w-12 h-12 text-green-400 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
+              </div>
+              <h2 className="text-3xl font-bold text-white mb-2 tracking-wider brand-font">
+                MATERIALIZED
+              </h2>
+              <p className="text-gray-400 mb-8">File reconstruction complete.</p>
+              {actualSize > 0 && (
+                <p className="text-gray-500 text-sm mb-6 font-mono">
+                  {(actualSize / (1024 * 1024)).toFixed(2)} MB transferred
+                </p>
+              )}
+              <button
+                onClick={() => window.location.reload()}
+                className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto"
+              >
+                <RefreshCw size={18} /> Process Next
+              </button>
+            </div>
+          </motion.div>
+        )}
 
-      {/* 6. ERROR */}
-      {status === 'ERROR' && (
-        <div className={glassPanelClass}>
-          <div className="text-center relative z-10">
-            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]" />
-            <h2 className="text-2xl font-bold mb-2 text-white tracking-wider">
-              CONNECTION FAILED
-            </h2>
-            <p className="text-gray-300 mb-6">{errorMsg}</p>
-            <button
-              onClick={() => window.location.reload()}
-              className="bg-white/10 border border-white/20 text-white px-6 py-3 rounded-full hover:bg-white/20 flex items-center gap-2 mx-auto transition-all"
-            >
-              <RefreshCw size={18} /> Retry
-            </button>
-          </div>
-        </div>
-      )}
+        {/* --- STATE: ERROR --- */}
+        {status === 'ERROR' && (
+          <motion.div
+            key="error"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className={glassPanelClass + " border-red-500/30"}
+          >
+            <div className="text-center relative z-10">
+              <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]" />
+              <h2 className="text-2xl font-bold mb-2 text-white tracking-wider">
+                CONNECTION FAILED
+              </h2>
+              <p className="text-gray-300 mb-6">{errorMsg}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="bg-white/10 border border-white/20 text-white px-6 py-3 rounded-full hover:bg-white/20 flex items-center gap-2 mx-auto transition-all"
+              >
+                <RefreshCw size={18} /> Retry
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
