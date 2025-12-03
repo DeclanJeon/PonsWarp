@@ -1,0 +1,267 @@
+name: Code Quality & Performance
+
+on:
+  push:
+    branches: [ develop, master ]
+  pull_request:
+    branches: [ develop, master ]
+
+jobs:
+  code-quality:
+    name: Code Quality Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: '8'
+        
+    - name: Get pnpm store directory
+      shell: bash
+      run: |
+        echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        
+    - name: Setup pnpm cache
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.STORE_PATH }}
+        key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-store-
+          
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+      
+    # 타입 검사
+    - name: TypeScript type check
+      run: |
+        echo "🔍 Running TypeScript type check..."
+        pnpm type-check
+        
+    # 린트 검사
+    - name: ESLint check
+      run: |
+        echo "🔍 Running ESLint..."
+        pnpm lint
+        
+    # 코드 포맷 검사
+    - name: Prettier check
+      run: |
+        echo "🔍 Running Prettier check..."
+        npx prettier --check "src/**/*.{ts,tsx,js,jsx,json,md}"
+        
+    # 코드 복잡도 분석
+    - name: Code complexity analysis
+      run: |
+        echo "🔍 Analyzing code complexity..."
+        npx plato -r -d complexity-report -t "PonsWarp Complexity" src/
+        
+    # 번들 크기 분석
+    - name: Bundle size analysis
+      run: |
+        echo "🔍 Analyzing bundle size..."
+        pnpm build
+        npx bundlesize
+        
+    # 성능 분석
+    - name: Performance analysis
+      run: |
+        echo "🔍 Running performance analysis..."
+        npx lighthouse --chrome-flags="--headless" --output=json --output-path=./lighthouse-report.json http://localhost:4173 &
+        
+        # 빌드된 앱 서버 시작
+        npx serve -s dist -l 4173 &
+        SERVE_PID=$!
+        
+        # Lighthouse 실행을 위한 대기
+        sleep 30
+        
+        # 서버 종료
+        kill $SERVE_PID
+        
+    # 테스트 커버리지
+    - name: Test coverage
+      run: |
+        echo "🔍 Running test coverage..."
+        pnpm test:coverage
+        
+    # 결과 보고서 생성
+    - name: Generate quality report
+      run: |
+        echo "📊 Generating quality report..."
+        
+        # 보고서 디렉토리 생성
+        mkdir -p quality-report
+        
+        # 요약 정보 생성
+        cat > quality-report/summary.md << EOF
+        # Code Quality Report
+        
+        ## 📊 Metrics
+        
+        - **TypeScript**: ✅ No type errors
+        - **ESLint**: ✅ No linting errors
+        - **Prettier**: ✅ Code formatted correctly
+        - **Test Coverage**: $(npx nyc report --reporter=text-summary | grep "Lines" | awk '{print $2}')
+        - **Bundle Size**: $(du -h dist/ | cut -f1)
+        
+        ## 🔍 Details
+        
+        ### Complexity Analysis
+        ![Complexity Report](complexity-report/overview.html)
+        
+        ### Performance Metrics
+        - Performance Score: $(cat lighthouse-report.json | jq '.categories.performance.score * 100')
+        - Accessibility Score: $(cat lighthouse-report.json | jq '.categories.accessibility.score * 100')
+        - Best Practices Score: $(cat lighthouse-report.json | jq '.categories["best-practices"].score * 100')
+        - SEO Score: $(cat lighthouse-report.json | jq '.categories.seo.score * 100')
+        
+        ### Test Coverage
+        ![Coverage Report](coverage/lcov-report/index.html)
+        
+        ---
+        
+        📅 Generated on: $(date)
+        🔄 Commit: ${{ github.sha }}
+        EOF
+        
+    - name: Upload quality reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: quality-reports
+        path: |
+          quality-report/
+          complexity-report/
+          coverage/
+          lighthouse-report.json
+        retention-days: 30
+        
+    - name: Comment PR with quality metrics
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          
+          // 테스트 커버리지 읽기
+          let coverageInfo = "N/A";
+          if (fs.existsSync('coverage/coverage-summary.json')) {
+            const coverage = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
+            coverageInfo = `${coverage.total.lines.pct}%`;
+          }
+          
+          // 번들 크기 읽기
+          let bundleSize = "N/A";
+          if (fs.existsSync('dist')) {
+            const { execSync } = require('child_process');
+            bundleSize = execSync('du -h dist/ | cut -f1').toString().trim();
+          }
+          
+          // Lighthouse 점수 읽기
+          let perfScore = "N/A";
+          if (fs.existsSync('lighthouse-report.json')) {
+            const lighthouse = JSON.parse(fs.readFileSync('lighthouse-report.json', 'utf8'));
+            perfScore = Math.round(lighthouse.categories.performance.score * 100);
+          }
+          
+          const comment = `## 📊 Code Quality Metrics
+          
+          | Metric | Value | Status |
+          |--------|--------|--------|
+          | 🧪 Test Coverage | ${coverageInfo} | ${coverageInfo !== "N/A" && parseFloat(coverageInfo) >= 80 ? "✅" : "⚠️"} |
+          | 📦 Bundle Size | ${bundleSize} | ${bundleSize !== "N/A" ? "✅" : "⚠️"} |
+          | ⚡ Performance Score | ${perfScore} | ${perfScore !== "N/A" && perfScore >= 90 ? "✅" : "⚠️"} |
+          | 🔍 Type Check | ✅ | ✅ |
+          | 📝 Lint Check | ✅ | ✅ |
+          | 🎨 Format Check | ✅ | ✅ |
+          
+          ### 📈 Recommendations
+          
+          ${coverageInfo !== "N/A" && parseFloat(coverageInfo) < 80 ? "- 🧪 Consider adding more tests to improve coverage\n" : ""}
+          ${perfScore !== "N/A" && perfScore < 90 ? "- ⚡ Optimize performance for better user experience\n" : ""}
+          
+          ---
+          
+          📊 [Detailed Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          `;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  # 성능 회귀 테스트
+  performance-regression:
+    name: Performance Regression Test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: '8'
+        
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+      
+    - name: Build current branch
+      run: pnpm build
+      
+    - name: Analyze current bundle
+      run: |
+        npx webpack-bundle-analyzer dist/static/js/*.js -m json -r bundle-current.json
+        
+    - name: Checkout base branch
+      run: |
+        git checkout origin/${{ github.base_ref }}
+        pnpm install --frozen-lockfile
+        pnpm build
+        
+    - name: Analyze base bundle
+      run: |
+        npx webpack-bundle-analyzer dist/static/js/*.js -m json -r bundle-base.json
+        
+    - name: Compare bundle sizes
+      run: |
+        node -e "
+        const current = require('./bundle-current.json');
+        const base = require('./bundle-base.json');
+        
+        const currentSize = current.reduce((sum, chunk) => sum + chunk.parsedSize, 0);
+        const baseSize = base.reduce((sum, chunk) => sum + chunk.parsedSize, 0);
+        
+        const change = ((currentSize - baseSize) / baseSize * 100).toFixed(2);
+        
+        console.log('Current bundle size:', currentSize, 'bytes');
+        console.log('Base bundle size:', baseSize, 'bytes');
+        console.log('Size change:', change + '%');
+        
+        if (Math.abs(parseFloat(change)) > 10) {
+          console.log('⚠️ Significant bundle size change detected!');
+          process.exit(1);
+        }
+        "

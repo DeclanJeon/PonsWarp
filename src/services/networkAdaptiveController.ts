@@ -13,19 +13,19 @@ import {
   CHUNK_SIZE_MAX,
   BATCH_SIZE_MIN,
   BATCH_SIZE_MAX,
-  MAX_BUFFERED_AMOUNT
+  MAX_BUFFERED_AMOUNT,
 } from '../utils/constants';
 
 export interface CongestionState {
-  cwnd: number;       // Congestion Window (현재 허용 가능한 버퍼 크기)
+  cwnd: number; // Congestion Window (현재 허용 가능한 버퍼 크기)
   estimatedBw: number; // Bytes per second
   estimatedRtt: number; // Milliseconds
-  rttVar: number;     // RTT Variance (Jitter)
+  rttVar: number; // RTT Variance (Jitter)
 }
 
 export interface AdaptiveParams {
-  batchSize: number;  // 워커에 요청할 청크 개수
-  chunkSize: number;  // 청크 크기 (현재는 고정)
+  batchSize: number; // 워커에 요청할 청크 개수
+  chunkSize: number; // 청크 크기 (현재는 고정)
 }
 
 export interface TransferMetrics {
@@ -40,12 +40,12 @@ export class NetworkAdaptiveController {
     cwnd: 1024 * 1024, // 초기 시작: 1MB (Slow Start)
     estimatedBw: 0,
     estimatedRtt: 50,
-    rttVar: 0
+    rttVar: 0,
   };
 
   private adaptiveParams: AdaptiveParams = {
     batchSize: 32, // 초기값
-    chunkSize: CHUNK_SIZE_MAX
+    chunkSize: CHUNK_SIZE_MAX,
   };
 
   // 통계 계산용
@@ -54,7 +54,7 @@ export class NetworkAdaptiveController {
   private minRtt = Infinity;
   private lastUpdateTime = 0;
   private lastBytesSent = 0;
-  
+
   // 상수 설정
   private readonly MIN_CWND = 256 * 1024; // 최소 256KB
   private readonly MAX_CWND = MAX_BUFFERED_AMOUNT; // 16MB
@@ -79,7 +79,7 @@ export class NetworkAdaptiveController {
    * @param stats RTCPeerConnection.getStats() 결과
    */
   public updateFromWebRTCStats(stats: RTCStatsReport): void {
-    stats.forEach((report) => {
+    stats.forEach(report => {
       if (report.type === 'candidate-pair' && report.state === 'succeeded') {
         // RTT 업데이트
         if (report.currentRoundTripTime) {
@@ -87,7 +87,8 @@ export class NetworkAdaptiveController {
         }
         // 가용 대역폭 업데이트 (브라우저가 제공하는 경우)
         if (report.availableOutgoingBitrate) {
-          this.congestionState.estimatedBw = report.availableOutgoingBitrate / 8;
+          this.congestionState.estimatedBw =
+            report.availableOutgoingBitrate / 8;
         }
       }
     });
@@ -100,18 +101,18 @@ export class NetworkAdaptiveController {
   public updateBufferState(currentBufferedAmount: number): void {
     const now = performance.now();
     const elapsed = now - this.lastUpdateTime;
-    
+
     if (elapsed < 100) return; // 너무 빈번한 업데이트 방지
 
     // 1. 처리량(Throughput) 계산 (이동 평균)
     // 실제 전송량은 bufferedAmount가 줄어든 만큼 + 새로 보낸 만큼 등으로 계산해야 정확하지만,
     // 여기서는 단순화를 위해 전송 시도량을 기준으로 하되 RTT를 반영합니다.
-    
+
     // 2. 혼잡 제어 (Congestion Control) - Delay-based approach
     // RTT가 최소 RTT보다 많이 커지면 혼잡으로 간주
-    
+
     const rttRatio = this.congestionState.estimatedRtt / (this.minRtt || 50);
-    
+
     if (rttRatio > 2.0 || currentBufferedAmount > this.congestionState.cwnd) {
       // [Congestion Detected] Multiplicative Decrease
       // 윈도우 크기를 줄여서 네트워크 부하 감소
@@ -119,21 +120,29 @@ export class NetworkAdaptiveController {
         this.MIN_CWND,
         this.congestionState.cwnd * 0.7
       );
-      logDebug('[Network]', `Congestion! Reducing cwnd to ${(this.congestionState.cwnd / 1024).toFixed(0)}KB (RTT: ${this.congestionState.estimatedRtt.toFixed(0)}ms)`);
-    } else if (rttRatio < 1.2 && currentBufferedAmount < this.congestionState.cwnd * 0.8) {
+      logDebug(
+        '[Network]',
+        `Congestion! Reducing cwnd to ${(this.congestionState.cwnd / 1024).toFixed(0)}KB (RTT: ${this.congestionState.estimatedRtt.toFixed(0)}ms)`
+      );
+    } else if (
+      rttRatio < 1.2 &&
+      currentBufferedAmount < this.congestionState.cwnd * 0.8
+    ) {
       // [Network Clear] Additive Increase
       // 여유가 있으면 윈도우 크기 증가
       this.congestionState.cwnd = Math.min(
         this.MAX_CWND,
-        this.congestionState.cwnd + (64 * 1024) // 64KB씩 증가
+        this.congestionState.cwnd + 64 * 1024 // 64KB씩 증가
       );
     }
 
     // 3. 배치 크기 조정
     // 윈도우 크기에 비례하여 한 번에 가져올 배치 크기 결정
     const targetBatchBytes = this.congestionState.cwnd * 0.2; // 윈도우의 20% 정도를 배치로
-    const calculatedBatchSize = Math.floor(targetBatchBytes / this.adaptiveParams.chunkSize);
-    
+    const calculatedBatchSize = Math.floor(
+      targetBatchBytes / this.adaptiveParams.chunkSize
+    );
+
     this.adaptiveParams.batchSize = Math.max(
       BATCH_SIZE_MIN,
       Math.min(BATCH_SIZE_MAX, calculatedBatchSize)
@@ -171,7 +180,7 @@ export class NetworkAdaptiveController {
     return {
       throughput: this.congestionState.estimatedBw,
       avgRtt: this.congestionState.estimatedRtt,
-      lossCount: 0
+      lossCount: 0,
     };
   }
 
@@ -180,11 +189,11 @@ export class NetworkAdaptiveController {
       cwnd: 1024 * 1024, // 1MB Start
       estimatedBw: 0,
       estimatedRtt: 50,
-      rttVar: 0
+      rttVar: 0,
     };
     this.adaptiveParams = {
       batchSize: 32,
-      chunkSize: CHUNK_SIZE_MAX
+      chunkSize: CHUNK_SIZE_MAX,
     };
     this.rttSamples = [];
     this.throughputSamples = [];
@@ -197,7 +206,7 @@ export class NetworkAdaptiveController {
       cwnd: (this.congestionState.cwnd / 1024 / 1024).toFixed(2) + ' MB',
       rtt: this.congestionState.estimatedRtt.toFixed(0) + ' ms',
       batch: this.adaptiveParams.batchSize,
-      minRtt: this.minRtt === Infinity ? 0 : this.minRtt.toFixed(0)
+      minRtt: this.minRtt === Infinity ? 0 : this.minRtt.toFixed(0),
     };
   }
 }

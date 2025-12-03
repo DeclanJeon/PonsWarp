@@ -1,0 +1,95 @@
+name: Dependency Update
+
+on:
+  schedule:
+    # 매주 월요일 오전 9시 (KST)에 실행
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+jobs:
+  update-dependencies:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: '8'
+        
+    - name: Get pnpm store directory
+      shell: bash
+      run: |
+        echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        
+    - name: Setup pnpm cache
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.STORE_PATH }}
+        key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-store-
+          
+    - name: Update dependencies
+      run: |
+        pnpm update --latest
+        pnpm install
+        
+    - name: Check for changes
+      id: verify-changed-files
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Run tests
+      if: steps.verify-changed-files.outputs.changed == 'true'
+      run: |
+        pnpm test
+        
+    - name: Create Pull Request
+      if: steps.verify-changed-files.outputs.changed == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore: update dependencies'
+        title: '🔄 Automatic Dependency Update'
+        body: |
+          ## 자동 의존성 업데이트
+          
+          이 PR은 자동으로 의존성을 업데이트합니다:
+          
+          - 최신 버전으로 패키지 업데이트
+          - 테스트 통과 확인
+          - 보안 패치 포함
+          
+          ### 변경사항
+          ```diff
+          ${{ steps.diff.outputs.diff }}
+          ```
+          
+          ### 검토 항목
+          - [ ] 모든 테스트 통과
+          - [ ] 호환성 문제 없음
+          - [ ] 보안 취약점 해결
+          
+          ---
+          
+          🤖 이 PR은 자동으로 생성되었습니다.
+        branch: chore/dependency-update
+        delete-branch: true
+        labels: |
+          dependencies
+          automated

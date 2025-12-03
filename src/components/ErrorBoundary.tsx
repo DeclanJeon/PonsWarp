@@ -30,7 +30,9 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="w-screen h-screen bg-black text-white flex flex-col items-center justify-center p-8">
           <div className="bg-red-900/20 border border-red-500/30 p-8 rounded-3xl max-w-lg text-center backdrop-blur-lg">
             <AlertOctagon className="w-16 h-16 text-red-500 mx-auto mb-6" />
-            <h1 className="text-3xl font-bold mb-4 brand-font">SYSTEM FAILURE</h1>
+            <h1 className="text-3xl font-bold mb-4 brand-font">
+              SYSTEM FAILURE
+            </h1>
             <p className="text-gray-400 mb-6">
               An unexpected error occurred in the warp field.
               <br />

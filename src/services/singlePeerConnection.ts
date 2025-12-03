@@ -26,7 +26,7 @@ export class SinglePeerConnection {
   public readonly id: string;
   public connected: boolean = false;
   public ready: boolean = false;
-  
+
   // @ts-ignore
   public pc: SimplePeer.Instance | null = null;
   private destroyed: boolean = false;
@@ -45,7 +45,9 @@ export class SinglePeerConnection {
 
   public off(event: string, handler: EventHandler): void {
     if (!this.eventListeners[event]) return;
-    this.eventListeners[event] = this.eventListeners[event].filter(h => h !== handler);
+    this.eventListeners[event] = this.eventListeners[event].filter(
+      h => h !== handler
+    );
   }
 
   private emit(event: string, data?: any): void {
@@ -65,8 +67,8 @@ export class SinglePeerConnection {
         channelConfig: {
           ordered: true,
           bufferedAmountLowThreshold: LOW_WATER_MARK,
-          ...config.channelConfig
-        }
+          ...config.channelConfig,
+        },
       } as any);
 
       this.setupEventHandlers();
@@ -104,9 +106,13 @@ export class SinglePeerConnection {
 
     this.pc.on('data', (data: any) => {
       // Uint8Array -> ArrayBuffer 변환
-      const buffer = data instanceof Uint8Array
-        ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
-        : data;
+      const buffer =
+        data instanceof Uint8Array
+          ? data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength
+            )
+          : data;
       this.emit('data', buffer);
     });
 
@@ -132,7 +138,9 @@ export class SinglePeerConnection {
         this.drainEmitted = true;
         this.emit('drain', this.id);
         // 다음 drain 이벤트를 위해 리셋
-        setTimeout(() => { this.drainEmitted = false; }, 0);
+        setTimeout(() => {
+          this.drainEmitted = false;
+        }, 0);
       }
     };
   }
@@ -156,7 +164,7 @@ export class SinglePeerConnection {
       // 연결되지 않은 상태에서는 조용히 무시 (throw하지 않음)
       return;
     }
-    
+
     // @ts-ignore
     const channel = this.pc._channel as RTCDataChannel;
     if (!channel || channel.readyState !== 'open') {
@@ -184,7 +192,7 @@ export class SinglePeerConnection {
       id: this.id,
       connected: this.connected,
       bufferedAmount: this.getBufferedAmount(),
-      ready: this.ready
+      ready: this.ready,
     };
   }
 
@@ -193,16 +201,16 @@ export class SinglePeerConnection {
    */
   public destroy(): void {
     if (this.destroyed) return;
-    
+
     this.destroyed = true;
     this.connected = false;
     this.ready = false;
-    
+
     if (this.pc) {
       this.pc.destroy();
       this.pc = null;
     }
-    
+
     this.removeAllListeners();
     logInfo(`[Peer ${this.id}]`, 'Destroyed');
   }
