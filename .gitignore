@@ -92,3 +92,5 @@ ecosystem.config.*
 docs
 nginx.conf
 nginx.conf.*
+
+CHANGELOG.md

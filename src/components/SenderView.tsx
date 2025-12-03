@@ -1,12 +1,8 @@
-// 🚨 [DEBUG] 아키텍처 불일치 진단 로그 추가
-console.log('[SenderView] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
-console.log('[SenderView] ✅ [DEBUG] - Using SwarmManager (correct)');
-console.log(
-  '[SenderView] ✅ [DEBUG] - SwarmManager uses SinglePeerConnection (correct)'
-);
-console.log(
-  '[SenderView] ✅ [DEBUG] - Dedicated Sender implementation (correct)'
-);
+/* 🪲 [DEBUG] SenderView UI/UX 개선 시작 */
+console.log('[SenderView] 🪲 [DEBUG] UI/UX Enhancement Started:');
+console.log('[SenderView] 🪲 [DEBUG] - Applying focal point principles');
+console.log('[SenderView] 🪲 [DEBUG] - Implementing gestalt proximity grouping');
+console.log('[SenderView] 🪲 [DEBUG] - Adding responsive layout improvements');
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -25,7 +21,7 @@ import {
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { scanFiles, processInputFiles } from '../utils/fileScanner';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { AppMode } from '../types/types';
 import { useTransferStore } from '../store/transferStore';
 
@@ -332,65 +328,63 @@ const SenderView: React.FC<SenderViewProps> = () => {
     }
   };
 
+  // 공통 Glass Panel 스타일 (통일성 유지)
+  const glassPanelClass = "bg-black/40 backdrop-blur-2xl border border-cyan-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden";
+
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full max-w-2xl mx-auto p-6 z-10 relative">
-      {status === 'IDLE' && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full space-y-4"
-        >
-          <div
-            onDragEnter={handleDragEnter}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className="border-2 border-dashed border-cyan-500/50 bg-black/40 backdrop-blur-md rounded-3xl p-10 text-center transition-all flex flex-col items-center justify-center min-h-[320px]"
+    <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
+      <AnimatePresence mode="wait">
+        
+        {/* --- STATE: IDLE (File Selection) --- */}
+        {status === 'IDLE' && (
+          <motion.div
+            key="idle"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
+            className={`w-full max-w-2xl p-2 ${glassPanelClass}`}
           >
-            <input
-              type="file"
-              className="hidden"
-              ref={fileInputRef}
-              onChange={handleFileSelect}
-              multiple
-            />
-            <input
-              type="file"
-              className="hidden"
-              ref={folderInputRef}
-              onChange={handleFileSelect}
-              multiple
-              {...({ webkitdirectory: '' } as any)}
-            />
+            {/* Drag & Drop Zone (Focal Point) */}
+            <div
+              onDragEnter={handleDragEnter}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className="border-2 border-dashed border-cyan-500/30 rounded-[1.8rem] py-8 px-4 md:py-16 md:px-10 flex flex-col items-center justify-center text-center transition-all hover:border-cyan-400/60 hover:bg-cyan-500/5"
+            >
+              <input type="file" className="hidden" ref={fileInputRef} onChange={handleFileSelect} multiple />
+              <input type="file" className="hidden" ref={folderInputRef} onChange={handleFileSelect} multiple {...({ webkitdirectory: '' } as any)} />
 
-            <div className="mb-8">
-              <div className="w-20 h-20 bg-cyan-900/20 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-                <Upload className="w-10 h-10 text-cyan-400" />
+              <div className="w-16 h-16 md:w-20 md:h-20 bg-cyan-900/20 rounded-full flex items-center justify-center mb-6 md:mb-8 shadow-[0_0_30px_rgba(6,182,212,0.2)] group-hover:scale-110 transition-transform duration-300">
+                <Upload className="w-8 h-8 md:w-10 md:h-10 text-cyan-400 animate-pulse" />
               </div>
-              <h2 className="text-3xl font-bold mb-2">Drag & Drop</h2>
-              <p className="text-cyan-200/60 text-lg">Files or Folders</p>
-            </div>
+              
+              <h2 className="text-2xl md:text-3xl font-bold mb-3 md:mb-4 brand-font text-white">DROP FILES</h2>
+              <p className="text-cyan-100/60 text-sm md:text-lg mb-6 md:mb-8 font-rajdhani tracking-wide">
+                or select from device
+              </p>
 
-            <div className="flex gap-4 w-full max-w-md">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-white py-4 rounded-xl flex flex-col items-center gap-2 transition-all group"
-              >
-                <FilePlus className="w-6 h-6 text-cyan-400 group-hover:scale-110 transition-transform" />
-                <span className="font-bold">Select Files</span>
-              </button>
+              {/* 버튼 세로 배치(모바일) -> 가로 배치(태블릿 이상) 유지하되 크기 조절 */}
+              <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex-1 bg-gray-800/80 hover:bg-gray-700 border border-gray-600 hover:border-cyan-500 text-white py-3 md:py-4 px-4 rounded-xl flex items-center justify-center gap-2 transition-all group/btn shadow-lg"
+                >
+                  <FilePlus className="w-4 h-4 md:w-5 md:h-5 text-cyan-400 group-hover/btn:scale-110 transition-transform" />
+                  <span className="font-bold tracking-wider text-sm md:text-base">FILES</span>
+                </button>
 
-              <button
-                onClick={() => folderInputRef.current?.click()}
-                className="flex-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-white py-4 rounded-xl flex flex-col items-center gap-2 transition-all group"
-              >
-                <Folder className="w-6 h-6 text-yellow-400 group-hover:scale-110 transition-transform" />
-                <span className="font-bold">Select Folder</span>
-              </button>
+                <button
+                  onClick={() => folderInputRef.current?.click()}
+                  className="flex-1 bg-gray-800/80 hover:bg-gray-700 border border-gray-600 hover:border-yellow-500 text-white py-3 md:py-4 px-4 rounded-xl flex items-center justify-center gap-2 transition-all group/btn shadow-lg"
+                >
+                  <Folder className="w-4 h-4 md:w-5 md:h-5 text-yellow-400 group-hover/btn:scale-110 transition-transform" />
+                  <span className="font-bold tracking-wider text-sm md:text-base">FOLDER</span>
+                </button>
+              </div>
             </div>
-          </div>
-        </motion.div>
-      )}
+          </motion.div>
+        )}
 
       {status === 'PREPARING' && (
         <motion.div
@@ -414,164 +408,157 @@ const SenderView: React.FC<SenderViewProps> = () => {
         </motion.div>
       )}
 
-      {status === 'WAITING' && roomId && shareLink && (
-        <motion.div className="bg-black/60 backdrop-blur-xl p-8 rounded-3xl border border-cyan-500/30 flex flex-col items-center max-w-md w-full">
-          <h3 className="text-xl mb-4 font-bold tracking-widest text-cyan-400">
-            READY TO WARP
-          </h3>
-          <div className="bg-white p-4 rounded-xl mb-6 shadow-[0_0_20px_rgba(6,182,212,0.3)]">
-            <QRCodeSVG value={shareLink} size={180} />
-          </div>
-          <p className="text-3xl font-mono font-bold mb-4 tracking-widest">
-            {roomId}
-          </p>
+        {/* --- STATE: WAITING (QR & Room ID) --- */}
+        {status === 'WAITING' && roomId && shareLink && (
+          <motion.div
+            key="waiting"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className={`w-full max-w-sm p-6 md:p-8 flex flex-col items-center ${glassPanelClass}`}
+          >
+            {/* Status Badge */}
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 mb-6 md:mb-8">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
+              </span>
+              <span className="text-xs font-bold text-cyan-300 tracking-[0.2em]">WARP GATE OPEN</span>
+            </div>
 
-          {/* 🚀 [Multi-Receiver] 피어 상태 표시 */}
-          <div className="w-full bg-gray-900/50 p-3 rounded-lg mb-4 border border-gray-700">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Users className="w-4 h-4 text-cyan-400" />
-                <span className="text-sm text-gray-300">Receivers</span>
+            {/* QR Code */}
+            <div className="bg-white p-3 md:p-4 rounded-2xl mb-6 md:mb-8 shadow-[0_0_40px_rgba(6,182,212,0.25)] cursor-pointer" onClick={copyToClipboard}>
+              <QRCodeSVG value={shareLink} size={140} className="md:w-[180px] md:h-[180px]" />
+            </div>
+
+            {/* Room ID Display */}
+            <div className="text-center mb-6 md:mb-8 w-full group cursor-pointer" onClick={copyToClipboard}>
+              <p className="text-gray-500 text-[10px] tracking-[0.3em] uppercase mb-2">Warp Key</p>
+              <div className="relative">
+                <p className="text-4xl md:text-6xl font-mono font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-white to-cyan-400 bg-300% animate-shine group-hover:scale-105 transition-transform">
+                  {roomId}
+                </p>
+                {copied && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                    className="absolute -right-8 top-1/2 -translate-y-1/2 text-green-400"
+                  >
+                    <Check size={24} />
+                  </motion.div>
+                )}
               </div>
-              <div className="flex items-center gap-1">
+            </div>
+
+            {/* Peer Status Indicators (Visual Hierarchy) */}
+            <div className="w-full bg-gray-900/40 p-4 rounded-xl mb-4 border border-gray-700/50 backdrop-blur-sm">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2 text-sm text-gray-300">
+                  <Users size={14} className="text-cyan-400"/>
+                  <span>Receivers</span>
+                </div>
+                <span className="text-xs font-mono text-gray-500">{connectedPeers.length}/{MAX_DIRECT_PEERS} MAX</span>
+              </div>
+              <div className="flex gap-2">
                 {[...Array(MAX_DIRECT_PEERS)].map((_, i) => (
-                  <div
-                    key={i}
-                    className={`w-3 h-3 rounded-full transition-colors ${
-                      i < connectedPeers.length
-                        ? readyPeers.length > i
-                          ? 'bg-green-500'
-                          : 'bg-cyan-500'
-                        : 'bg-gray-700'
-                    }`}
-                  />
+                  <div key={i} className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${
+                    i < connectedPeers.length
+                      ? (readyPeers.length > i ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-cyan-500 shadow-[0_0_10px_#06b6d4]')
+                      : 'bg-gray-800'
+                  }`} />
                 ))}
-                <span className="ml-2 text-sm font-mono text-gray-400">
-                  {connectedPeers.length}/{MAX_DIRECT_PEERS}
-                </span>
               </div>
             </div>
-          </div>
 
-          <div className="w-full bg-gray-900/50 p-4 rounded-lg mb-4 text-left border border-gray-700">
-            <div className="flex items-center gap-3 mb-2">
-              {manifest?.isFolder ? (
-                <Folder className="text-yellow-500" />
+            {/* File Info Card (Left Aligned for Readability - 7.webp) */}
+            <div className="w-full bg-gray-800/30 p-4 rounded-xl border border-gray-700/50 flex items-center gap-4 text-left">
+              <div className="w-10 h-10 rounded-lg bg-gray-700/50 flex items-center justify-center flex-shrink-0">
+                {manifest?.isFolder ? <Folder className="text-yellow-400 w-5 h-5"/> : <FileIcon className="text-blue-400 w-5 h-5"/>}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-white text-sm truncate">{manifest?.rootName}</p>
+                <p className="text-xs text-gray-400 font-mono mt-0.5">
+                  {manifest?.totalFiles} files • {formatBytes(manifest?.totalSize || 0)}
+                </p>
+              </div>
+            </div>
+
+            {/* Waiting Message / Countdown */}
+            <div className="mt-6 text-center h-6">
+              {readyCountdown !== null ? (
+                <p className="text-yellow-400 text-sm font-bold animate-pulse tracking-wide">
+                  Auto-starting in {readyCountdown}s...
+                </p>
               ) : (
-                <FileIcon className="text-blue-500" />
+                <p className="text-xs text-gray-500 font-mono">
+                  {connectedPeers.length === 0 ? "Waiting for connection..." : "Waiting for receiver to accept..."}
+                </p>
               )}
-              <span className="font-bold truncate text-lg">
-                {manifest?.rootName}
-              </span>
             </div>
-            <p className="text-xs text-gray-400 pl-9">
-              {manifest?.totalFiles} files •{' '}
-              {formatBytes(manifest?.totalSize || 0)}
-            </p>
-          </div>
+          </motion.div>
+        )}
 
-          <div className="flex gap-2 w-full">
-            <div className="flex-1 bg-gray-800 rounded px-3 py-2 text-xs text-gray-400 truncate leading-8 font-mono">
-              {shareLink}
-            </div>
-            <button
-              onClick={copyToClipboard}
-              className="bg-cyan-600 hover:bg-cyan-500 text-white p-2 rounded transition-colors"
-            >
-              {copied ? <Check size={16} /> : <Copy size={16} />}
-            </button>
-          </div>
-
-          <div className="mt-6 text-center">
-            {readyCountdown !== null ? (
-              <div className="space-y-2">
-                <p className="text-yellow-400 font-bold animate-pulse">
-                  Starting in {readyCountdown}s...
-                </p>
-                <p className="text-xs text-gray-500">
-                  {readyPeers.length} receiver(s) ready. Others can still join.
-                </p>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-500 flex items-center justify-center gap-2">
-                <Loader2 className="animate-spin w-4 h-4" />
-                {connectedPeers.length === 0
-                  ? 'Waiting for receivers...'
-                  : `${readyPeers.length}/${connectedPeers.length} receivers ready`}
+        {/* --- STATE: TRANSFERRING (Progress Bar) --- */}
+        {(status === 'TRANSFERRING' || status === 'CONNECTING') && (
+          <motion.div
+            key="transferring"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-xl space-y-8"
+          >
+            {/* Header */}
+            <div className="text-center">
+              <h2 className="text-3xl font-bold mb-2 animate-pulse brand-font text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400">
+                WARPING DATA...
+              </h2>
+              <p className="text-6xl font-mono font-black text-white drop-shadow-[0_0_20px_rgba(6,182,212,0.5)]">
+                {progressData.progress.toFixed(1)}<span className="text-2xl text-gray-500">%</span>
               </p>
-            )}
-          </div>
-        </motion.div>
-      )}
-
-      {(status === 'TRANSFERRING' || status === 'CONNECTING') && (
-        <div className="w-full space-y-6 max-w-lg">
-          <div className="text-center">
-            <h2 className="text-2xl font-bold mb-2 animate-pulse">
-              Warping Data...
-            </h2>
-            <p className="text-cyan-400 text-2xl font-mono">
-              {progressData.progress.toFixed(1)}%
-            </p>
-          </div>
-
-          {/* 🚀 [Multi-Receiver] 피어 상태 표시 */}
-          <div className="flex justify-center gap-2 mb-4">
-            <div className="flex items-center gap-2 bg-gray-900/50 px-4 py-2 rounded-full border border-gray-700">
-              <Users className="w-4 h-4 text-cyan-400" />
-              <span className="text-sm text-gray-300">
-                Sending to {currentTransferPeerCount || readyPeers.length}{' '}
-                receiver
-                {(currentTransferPeerCount || readyPeers.length) !== 1
-                  ? 's'
-                  : ''}
-              </span>
             </div>
-            {queuedPeers.length > 0 && (
-              <div className="flex items-center gap-2 bg-yellow-900/30 px-4 py-2 rounded-full border border-yellow-700">
-                <span className="text-sm text-yellow-300">
-                  {queuedPeers.length} in queue
+
+            {/* Peer Status Badge */}
+            <div className="flex justify-center gap-3">
+              <div className="flex items-center gap-2 bg-gray-900/60 px-4 py-2 rounded-full border border-gray-700 backdrop-blur-sm">
+                <Users size={14} className="text-cyan-400" />
+                <span className="text-xs text-gray-300 font-mono">
+                  Sending to {currentTransferPeerCount || readyPeers.length} peer(s)
                 </span>
               </div>
-            )}
-          </div>
+              {queuedPeers.length > 0 && (
+                <div className="flex items-center gap-2 bg-yellow-900/40 px-4 py-2 rounded-full border border-yellow-700/50 backdrop-blur-sm">
+                  <span className="text-xs text-yellow-400 font-bold">+{queuedPeers.length} Queued</span>
+                </div>
+              )}
+            </div>
 
-          <div className="relative h-4 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
-            <motion.div
-              className="absolute top-0 left-0 h-full bg-gradient-to-r from-cyan-500 to-purple-600"
-              initial={{ width: 0 }}
-              animate={{ width: `${progressData.progress}%` }}
-            />
-          </div>
+            {/* Progress Bar (Visual) */}
+            <div className="relative h-6 bg-gray-900/50 rounded-full overflow-hidden border border-gray-700 shadow-inner">
+              <motion.div
+                className="absolute top-0 left-0 h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-600"
+                initial={{ width: 0 }}
+                animate={{ width: `${progressData.progress}%` }}
+                transition={{ type: "spring", stiffness: 50, damping: 15 }}
+              />
+              {/* Shine effect on bar */}
+              <div className="absolute top-0 left-0 w-full h-full bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.2),transparent)] bg-[length:50%_100%] animate-shine opacity-50" />
+            </div>
 
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-                Speed
-              </p>
-              <p className="font-mono font-bold text-cyan-300">
-                {formatBytes(progressData.speed)}/s
-              </p>
+            {/* Stats Grid */}
+            <div className="grid grid-cols-3 gap-3 md:gap-4">
+              <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Speed</p>
+                <p className="font-mono font-bold text-cyan-300 text-base md:text-lg">{formatBytes(progressData.speed)}/s</p>
+              </div>
+              <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Sent</p>
+                <p className="font-mono text-white text-base md:text-lg">{formatBytes(progressData.bytesTransferred)}</p>
+              </div>
+              <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Total</p>
+                <p className="font-mono text-gray-400 text-base md:text-lg">{formatBytes(progressData.totalBytes)}</p>
+              </div>
             </div>
-            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-                Sent
-              </p>
-              <p className="font-mono text-gray-300">
-                {formatBytes(progressData.bytesTransferred)}
-              </p>
-            </div>
-            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-800">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-                Total
-              </p>
-              <p className="font-mono text-gray-300">
-                {formatBytes(progressData.totalBytes)}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+          </motion.div>
+        )}
 
       {status === 'REMOTE_PROCESSING' && (
         <motion.div
@@ -696,23 +683,34 @@ const SenderView: React.FC<SenderViewProps> = () => {
         </motion.div>
       )}
 
-      {status === 'DONE' && (
-        <div className="text-center">
-          <CheckCircle className="w-24 h-24 text-green-500 mx-auto mb-6" />
-          <h2 className="text-3xl font-bold mb-2">Transfer Successful!</h2>
-          <p className="text-gray-400 mb-8">
-            {connectedPeers.length > 1
-              ? `All ${connectedPeers.length} receivers have successfully saved the files.`
-              : 'The receiver has successfully saved the files.'}
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-cyan-50 transition-colors"
+        {/* --- STATE: DONE --- */}
+        {status === 'DONE' && (
+          <motion.div
+            key="done"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-center"
           >
-            Send Another
-          </button>
-        </div>
-      )}
+            <div className="w-24 h-24 mx-auto mb-6 bg-green-500/20 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(34,197,94,0.4)]">
+              <CheckCircle className="w-12 h-12 text-green-400" />
+            </div>
+            <h2 className="text-4xl font-bold text-white mb-4 brand-font tracking-wide">
+              SUCCESS
+            </h2>
+            <p className="text-gray-400 text-lg mb-10 max-w-md mx-auto">
+              All transfers have been completed successfully.
+            </p>
+            
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-white/10 border border-white/20 text-white px-10 py-4 rounded-full font-bold hover:bg-white/20 transition-all flex items-center gap-3 mx-auto"
+            >
+              <FilePlus size={20} />
+              Send More Files
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
