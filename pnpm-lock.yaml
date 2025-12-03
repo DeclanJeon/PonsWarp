@@ -84,6 +84,9 @@ importers:
       '@semantic-release/github':
         specifier: ^9.2.6
         version: 9.2.6(semantic-release@22.0.12(typescript@5.9.3))
+      '@semantic-release/npm':
+        specifier: ^11.0.2
+        version: 11.0.3(semantic-release@22.0.12(typescript@5.9.3))
       '@types/events':
         specifier: ^3.0.3
         version: 3.0.3
@@ -117,6 +120,9 @@ importers:
       commitizen:
         specifier: ^4.3.0
         version: 4.3.1(@types/node@24.10.1)(typescript@5.9.3)
+      conventional-changelog-conventionalcommits:
+        specifier: ^7.0.2
+        version: 7.0.2
       cz-conventional-changelog:
         specifier: ^3.3.0
         version: 3.3.0(@types/node@24.10.1)(typescript@5.9.3)
