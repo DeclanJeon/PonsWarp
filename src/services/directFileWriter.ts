@@ -1,21 +1,13 @@
 /**
  * Direct File Writer Service
- * OPFS 없이 청크를 받으면서 바로 다운로드
+ * StreamSaver 우선 적용 및 File System Access API 폴백(Fallback) 구현
  *
  * 전략:
- * - 송신자가 폴더를 ZIP으로 압축해서 보냄
- * - 수신자는 항상 단일 파일로 받음 (ZIP 또는 원본 파일)
- * - File System Access API (Chrome/Edge) 또는 StreamSaver (Firefox) 사용
+ * 1. StreamSaver.js 시도 (사용자 개입 없는 다운로드, 백그라운드 스트리밍)
+ * 2. 실패 시 File System Access API 시도 (저장 위치 지정 다이얼로그)
+ * 3. 모두 실패 시 에러 처리
  *
- * 장점:
- * - 브라우저 저장소 quota 제한 없음
- * - 무제한 파일 크기 지원
- * - 메모리 효율적 (청크 단위 처리)
- * - 간단하고 안정적
- *
- * 🚀 [개선] ReorderingBuffer 통합
- * - Multi-Channel 전송 시 패킷 순서 보장
- * - StreamSaver 모드에서 파일 손상 방지
+ * 🚀 [개선] ReorderingBuffer 통합으로 순차적 데이터 쓰기 보장
  */
 
 import streamSaver from 'streamsaver';
@@ -23,9 +15,17 @@ import { ReorderingBuffer } from './reorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
 
-// StreamSaver MITM 설정
+// StreamSaver MITM 설정 (필수)
 if (typeof window !== 'undefined') {
-  streamSaver.mitm = `${window.location.origin}/mitm.html`;
+
+  const originUrl = `${window.location.origin}/mitm.html`;
+  const fallbackUrl = `${window.location.origin}/public/mitm.html`;
+
+  // 기본 MITM URL 설정
+  streamSaver.mitm = originUrl || fallbackUrl;
+  
+  // 🚀 [진단] MITM URL 설정 확인 및 폴백 로직
+  console.log('[DirectFileWriter] Initial MITM URL:', streamSaver.mitm);
 }
 
 // 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
@@ -107,8 +107,9 @@ export class DirectFileWriter {
     }
 
     try {
-      await this.initFileWriter(fileName, manifest.totalSize);
-      logInfo('[DirectFileWriter]', `✅ Initialized: ${fileName}`);
+      // 🚀 핵심 변경: StreamSaver 우선, FSA 폴백 로직 적용
+      await this.initStrategy(fileName, manifest.totalSize);
+      logInfo('[DirectFileWriter]', `✅ Initialized with mode: ${this.writerMode}`);
     } catch (e: any) {
       if (e.name === 'AbortError') {
         throw new Error('USER_CANCELLED|사용자가 파일 저장을 취소했습니다.');
@@ -118,61 +119,218 @@ export class DirectFileWriter {
   }
 
   /**
-   * 파일 Writer 초기화
+   * 🚀 [핵심 변경] 저장 전략 선택 및 초기화 (StreamSaver -> FSA)
    */
-  private async initFileWriter(
-    fileName: string,
-    fileSize: number
-  ): Promise<void> {
-    // @ts-ignore
-    const hasFileSystemAccess = !!window.showSaveFilePicker;
-
-    if (hasFileSystemAccess) {
-      // File System Access API (Chrome/Edge)
-      const ext = fileName.split('.').pop() || '';
-      const accept: Record<string, string[]> = {};
-
-      if (ext === 'zip') {
-        accept['application/zip'] = ['.zip'];
-      } else {
-        accept['application/octet-stream'] = [`.${ext}`];
+  private async initStrategy(fileName: string, fileSize: number): Promise<void> {
+    logInfo('[DirectFileWriter]', `🔍 Starting initialization for file: ${fileName}, size: ${fileSize} bytes`);
+    
+    // 1. StreamSaver 우선 시도
+    try {
+      logInfo('[DirectFileWriter]', 'Attempting StreamSaver initialization...');
+      
+      // StreamSaver 지원 여부 확인 (Service Worker 등)
+      logDebug('[DirectFileWriter]', `StreamSaver supported: ${streamSaver.supported}`);
+      logDebug('[DirectFileWriter]', `Service Worker registered: ${!!navigator.serviceWorker}`);
+      logDebug('[DirectFileWriter]', `User agent: ${navigator.userAgent}`);
+      logDebug('[DirectFileWriter]', `HTTPS context: ${location.protocol === 'https:'}`);
+      logDebug('[DirectFileWriter]', `MITM URL: ${streamSaver.mitm}`);
+      
+      // 🚀 [진단] Service Worker 상태 상세 확인
+      if (navigator.serviceWorker) {
+        try {
+          const registration = await navigator.serviceWorker.ready;
+          logDebug('[DirectFileWriter]', `Service Worker active: ${!!registration.active}`);
+          logDebug('[DirectFileWriter]', `Service Worker scope: ${registration.scope}`);
+        } catch (swError) {
+          logError('[DirectFileWriter]', 'Service Worker registration check failed:', swError);
+        }
+      }
+      
+      // 🚀 [진단] MITM 파일 접근 가능성 확인
+      try {
+        const mitmResponse = await fetch(streamSaver.mitm, { method: 'HEAD' });
+        logDebug('[DirectFileWriter]', `MITM file accessible: ${mitmResponse.ok}`);
+        logDebug('[DirectFileWriter]', `MITM status: ${mitmResponse.status}`);
+      } catch (mitmError) {
+        logError('[DirectFileWriter]', 'MITM file check failed:', mitmError);
+      }
+      
+      // StreamSaver가 실패할 수 있는 다양한 원인 확인
+      if (!streamSaver.supported) {
+        throw new Error('StreamSaver not supported in this browser environment');
       }
 
-      // @ts-ignore
-      const handle = await window.showSaveFilePicker({
-        suggestedName: fileName,
-        types: [
-          {
-            description: 'File',
-            accept,
-          },
-        ],
-      });
+      // Service Worker 등록 확인
+      if (!navigator.serviceWorker) {
+        throw new Error('Service Worker not available - required for StreamSaver');
+      }
 
-      this.writer = await handle.createWritable();
-      this.writerMode = 'file-system-access';
-      // 🚀 [중요] 두 모드 모두 ReorderingBuffer를 사용하여 순차 데이터 보장
-      // 순차 데이터여야만 Batch Merge가 가능함
-      this.reorderingBuffer = new ReorderingBuffer(0);
-      logInfo(
-        '[DirectFileWriter]',
-        `File System Access ready: ${fileName} (Batch Mode ON)`
-      );
-    } else {
-      // StreamSaver (Firefox 등)
-      // 🚨 [수정] ZIP 파일(여러 파일 전송)인 경우 fileSize가 정확하지 않음.
-      // size를 undefined로 보내면 StreamSaver는 Content-Length를 설정하지 않아 브라우저가 크기 불일치 오류를 뱉지 않음.
-      const isZip = fileName.endsWith('.zip');
-      const streamConfig = isZip ? {} : { size: fileSize };
+      // HTTPS 확인
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        throw new Error('StreamSaver requires HTTPS context (except localhost)');
+      }
+
+      await this.initStreamSaver(fileName, fileSize);
+      logInfo('[DirectFileWriter]', '✅ StreamSaver initialization successful');
+      return; // 성공 시 리턴
+    } catch (ssError) {
+      logWarn('[DirectFileWriter]', 'StreamSaver failed, attempting fallback to File System Access API...', ssError);
+      logDebug('[DirectFileWriter]', `StreamSaver error details: ${ssError.message}`);
+      logDebug('[DirectFileWriter]', `StreamSaver error stack: ${ssError.stack}`);
+      
+      // StreamSaver 실패 원인 분석 로그
+      if (ssError.message.includes('Service Worker')) {
+        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to Service Worker issues');
+      } else if (ssError.message.includes('HTTPS')) {
+        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to security context issues');
+      } else if (ssError.message.includes('not supported')) {
+        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to browser compatibility');
+      } else {
+        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to unknown reasons');
+      }
+    }
+
+    // 2. File System Access API (FSA) 폴백 시도
+    // @ts-ignore
+    const hasFileSystemAccess = !!window.showSaveFilePicker;
+    logDebug('[DirectFileWriter]', `File System Access API available: ${hasFileSystemAccess}`);
+    
+    if (hasFileSystemAccess) {
+      try {
+        await this.initFileSystemAccess(fileName);
+        logInfo('[DirectFileWriter]', '✅ File System Access API initialization successful');
+        return; // 성공 시 리턴
+      } catch (fsaError) {
+        logError('[DirectFileWriter]', 'File System Access API failed:', fsaError);
+        logDebug('[DirectFileWriter]', `FSA error details: ${fsaError.message}`);
+        logDebug('[DirectFileWriter]', `FSA error stack: ${fsaError.stack}`);
+        
+        // FSA 실패 원인 분석 로그
+        if (fsaError.name === 'AbortError') {
+          logWarn('[DirectFileWriter]', '⚠️ User cancelled the file save dialog');
+        } else if (fsaError.name === 'SecurityError') {
+          logWarn('[DirectFileWriter]', '⚠️ File System Access API blocked due to security restrictions');
+        } else {
+          logWarn('[DirectFileWriter]', '⚠️ File System Access API failed due to unknown reasons');
+        }
+        
+        throw fsaError; // 여기서 실패하면 더 이상 방법이 없음
+      }
+    }
+
+    throw new Error('No supported file saving method available (StreamSaver and FSA failed).');
+  }
+
+  /**
+   * StreamSaver 초기화 로직 (분리됨)
+   */
+  private async initStreamSaver(fileName: string, fileSize: number): Promise<void> {
+    logDebug('[DirectFileWriter]', `🚀 Initializing StreamSaver with fileName: ${fileName}`);
+    
+    const isZip = fileName.endsWith('.zip');
+    // ZIP이거나 사이즈 추정 모드일 경우 size를 지정하지 않아 브라우저가 크기 오류를 내지 않게 함
+    const streamConfig = (isZip || this.manifest?.isSizeEstimated) ? {} : { size: fileSize };
+    
+    logDebug('[DirectFileWriter]', `StreamSaver config: ${JSON.stringify(streamConfig)}`);
+    logDebug('[DirectFileWriter]', `MITM URL: ${streamSaver.mitm}`);
+    logDebug('[DirectFileWriter]', `Is ZIP file: ${isZip}`);
+    logDebug('[DirectFileWriter]', `Is size estimated: ${this.manifest?.isSizeEstimated}`);
+    
+    try {
+      // StreamSaver.createWriteStream 호출 전 추가 확인
+      logDebug('[DirectFileWriter]', 'Calling streamSaver.createWriteStream...');
+      
       const fileStream = streamSaver.createWriteStream(fileName, streamConfig);
+      logDebug('[DirectFileWriter]', 'StreamSaver.createWriteStream succeeded, getting writer...');
+      
       this.writer = fileStream.getWriter();
       this.writerMode = 'streamsaver';
-      // 🚀 [중요] 두 모드 모두 ReorderingBuffer를 사용하여 순차 데이터 보장
+      
+      // 순차 데이터 보장
       this.reorderingBuffer = new ReorderingBuffer(0);
-      logInfo(
-        '[DirectFileWriter]',
-        `StreamSaver ready: ${fileName} (Batch Mode ON)`
-      );
+      logInfo('[DirectFileWriter]', `✅ StreamSaver ready: ${fileName}`);
+      
+      // Writer 상태 확인
+      logDebug('[DirectFileWriter]', `Writer ready state: ${this.writer.ready}`);
+      
+    } catch (error) {
+      logError('[DirectFileWriter]', '❌ StreamSaver initialization failed:', error);
+      logDebug('[DirectFileWriter]', `Error type: ${error.constructor.name}`);
+      logDebug('[DirectFileWriter]', `Error message: ${error.message}`);
+      logDebug('[DirectFileWriter]', `Error stack: ${error.stack}`);
+      
+      // StreamSaver 특정 오류 분석
+      if (error.message.includes('Service Worker')) {
+        logError('[DirectFileWriter]', '🔍 Service Worker related error detected');
+      } else if (error.message.includes('MITM')) {
+        logError('[DirectFileWriter]', '🔍 MITM (Man-in-the-Middle) related error detected');
+      } else if (error.message.includes('secure')) {
+        logError('[DirectFileWriter]', '🔍 Security context error detected');
+      }
+      
+      throw error;
+    }
+  }
+
+  /**
+   * File System Access API 초기화 로직 (분리됨)
+   */
+  private async initFileSystemAccess(fileName: string): Promise<void> {
+    logDebug('[DirectFileWriter]', `📁 Initializing File System Access API with fileName: ${fileName}`);
+    
+    const ext = fileName.split('.').pop() || '';
+    const accept: Record<string, string[]> = {};
+
+    if (ext === 'zip') {
+      accept['application/zip'] = ['.zip'];
+    } else {
+      accept['application/octet-stream'] = [`.${ext}`];
+    }
+
+    const pickerOptions = {
+      suggestedName: fileName,
+      types: [{ description: 'File', accept }]
+    };
+    
+    logDebug('[DirectFileWriter]', `File picker options: ${JSON.stringify(pickerOptions)}`);
+    logDebug('[DirectFileWriter]', `File extension: ${ext}`);
+
+    try {
+      logDebug('[DirectFileWriter]', 'Calling window.showSaveFilePicker...');
+      
+      // @ts-ignore
+      const handle = await window.showSaveFilePicker(pickerOptions);
+      logDebug('[DirectFileWriter]', 'File picker succeeded, creating writable stream...');
+      
+      this.writer = await handle.createWritable();
+      this.writerMode = 'file-system-access';
+      
+      // 순차 데이터 보장 (Batch Merge를 위해 필수)
+      this.reorderingBuffer = new ReorderingBuffer(0);
+      logInfo('[DirectFileWriter]', `✅ File System Access ready: ${fileName}`);
+      
+      // Writer 상태 확인
+      logDebug('[DirectFileWriter]', `Writer created successfully`);
+      
+    } catch (error) {
+      logError('[DirectFileWriter]', '❌ File System Access API initialization failed:', error);
+      logDebug('[DirectFileWriter]', `Error type: ${error.constructor.name}`);
+      logDebug('[DirectFileWriter]', `Error name: ${error.name}`);
+      logDebug('[DirectFileWriter]', `Error message: ${error.message}`);
+      logDebug('[DirectFileWriter]', `Error stack: ${error.stack}`);
+      
+      // File System Access API 특정 오류 분석
+      if (error.name === 'AbortError') {
+        logWarn('[DirectFileWriter]', '🔍 User cancelled the file save dialog');
+      } else if (error.name === 'SecurityError') {
+        logError('[DirectFileWriter]', '🔍 File System Access API blocked due to security restrictions');
+      } else if (error.name === 'NotAllowedError') {
+        logError('[DirectFileWriter]', '🔍 File System Access API permission denied');
+      } else if (error.name === 'TypeError') {
+        logError('[DirectFileWriter]', '🔍 File System Access API not available or incorrect usage');
+      }
+      
+      throw error;
     }
   }
 
@@ -384,10 +542,7 @@ export class DirectFileWriter {
           const streamWriter = this.writer as WritableStreamDefaultWriter;
           await streamWriter.close();
         }
-        logInfo(
-          '[DirectFileWriter]',
-          `✅ File saved: ${this.totalBytesWritten} bytes`
-        );
+        logInfo('[DirectFileWriter]', `✅ File saved (${this.writerMode}): ${this.totalBytesWritten} bytes`);
       } catch (e: any) {
         // 이미 닫힌 스트림 에러는 무시
         if (!e.message?.includes('close') && !e.message?.includes('closed')) {
