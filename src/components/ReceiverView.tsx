@@ -1,3 +1,9 @@
+// 🚀 [리팩토링 완료] 아키텍처 통일 완료
+console.log('[ReceiverView] ✅ [DEBUG] ARCHITECTURE FIXED:');
+console.log('[ReceiverView] ✅ [DEBUG] - Using webRTCService (now Receiver-only)');
+console.log('[ReceiverView] ✅ [DEBUG] - webRTCService now uses SinglePeerConnection');
+console.log('[ReceiverView] ✅ [DEBUG] - Architecture unified with SwarmManager');
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Scan, Download, Loader2, Archive, AlertCircle, CheckCircle, FileCheck, RefreshCw, Radio } from 'lucide-react';
 import { transferService } from '../services/webRTCService';

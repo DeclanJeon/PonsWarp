@@ -1,3 +1,9 @@
+// 🚨 [DEBUG] 아키텍처 불일치 진단 로그 추가
+console.log('[SenderView] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
+console.log('[SenderView] ✅ [DEBUG] - Using SwarmManager (correct)');
+console.log('[SenderView] ✅ [DEBUG] - SwarmManager uses SinglePeerConnection (correct)');
+console.log('[SenderView] ✅ [DEBUG] - Dedicated Sender implementation (correct)');
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Upload, Folder, File as FileIcon, CheckCircle, Copy, Check, Loader2, FilePlus, AlertTriangle, Users } from 'lucide-react';

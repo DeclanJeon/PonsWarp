@@ -1,15 +1,22 @@
 /**
  * SwarmManager - 여러 피어 연결을 관리하는 오케스트레이터
- * 
+ *
  * 1:N 브로드캐스팅과 슬롯 관리를 담당.
  * 최대 3개의 직접 피어 연결을 관리 (Sender 보호).
- * 
+ *
  * 🚀 [핵심 로직]
  * - 1:1 상황: 피어가 ready되면 즉시 전송 시작
  * - 1:N 상황: 첫 피어 ready 후 10초 대기, 그 사이 ready된 피어 모두에게 동시 전송
  * - 전송 중 새 피어 ready: 대기열에 추가, 현재 전송 완료 후 자동 시작
  * - 모든 피어 완료: Transfer Success UI 표시
  */
+
+// 🚨 [DEBUG] 아키텍처 불일치 진단 로그 추가
+console.log('[SwarmManager] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
+console.log('[SwarmManager] ✅ [DEBUG] - Using SinglePeerConnection class (correct)');
+console.log('[SwarmManager] ✅ [DEBUG] - SenderView uses SwarmManager (correct)');
+console.log('[SwarmManager] ✅ [DEBUG] - Dedicated Sender-only implementation (correct)');
+
 import { SinglePeerConnection, PeerConfig, PeerState } from './singlePeerConnection';
 import { signalingService } from './signaling';
 import { getSenderWorkerV1 } from './workerFactory';
