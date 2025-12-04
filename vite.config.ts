@@ -21,13 +21,29 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
         fs: {
           allow: ['..']
+        },
+        headers: {
+          'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Embedder-Policy': 'require-corp'
         }
       },
+      assetsInclude: ['**/*.wasm'],
       plugins: [
         react({
           jsxImportSource: 'react',
           jsxRuntime: 'automatic'
-        })
+        }),
+        {
+          name: 'wasm-content-type',
+          configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+              if (req.url?.endsWith('.wasm')) {
+                res.setHeader('Content-Type', 'application/wasm');
+              }
+              next();
+            });
+          }
+        }
       ],
 
       define: {
