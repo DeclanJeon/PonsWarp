@@ -24,6 +24,7 @@ import {
   HEADER_SIZE,
   BATCH_SIZE_INITIAL,
 } from '../utils/constants';
+import { CryptoService } from './cryptoService';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -112,8 +113,46 @@ export class SwarmManager {
   private currentTransferPeers: Set<string> = new Set(); // 현재 전송 중인 피어들
   private files: File[] = []; // 전송할 파일 저장
 
+  // 🔐 [E2E Encryption]
+  private cryptoService: CryptoService | null = null;
+  private encryptionEnabled: boolean = false;
+  private sessionKey: Uint8Array | null = null;
+  private randomPrefix: Uint8Array | null = null;
+
   constructor() {
     this.setupSignalingHandlers();
+  }
+
+  /**
+   * 🔐 E2E 암호화 활성화
+   */
+  public enableEncryption(): void {
+    this.cryptoService = new CryptoService();
+    this.encryptionEnabled = true;
+    logInfo('[SwarmManager]', '🔐 E2E encryption enabled');
+  }
+
+  /**
+   * 🔐 암호화 서비스 반환 (핸드셰이크용)
+   */
+  public getCryptoService(): CryptoService | null {
+    return this.cryptoService;
+  }
+
+  /**
+   * 🔐 세션 키 설정 (핸드셰이크 완료 후)
+   */
+  public setSessionKey(sessionKey: Uint8Array, randomPrefix: Uint8Array): void {
+    this.sessionKey = sessionKey;
+    this.randomPrefix = randomPrefix;
+    logInfo('[SwarmManager]', '🔐 Session key set');
+  }
+
+  /**
+   * 🔐 암호화 활성화 여부
+   */
+  public isEncryptionEnabled(): boolean {
+    return this.encryptionEnabled && this.sessionKey !== null;
   }
 
   private setupSignalingHandlers(): void {
@@ -1173,10 +1212,32 @@ export class SwarmManager {
             files.length,
             'files'
           );
+          
+          // 🔐 암호화 키 설정 (활성화된 경우)
+          if (this.isEncryptionEnabled() && this.sessionKey && this.randomPrefix) {
+            console.log('[SwarmManager] 🔐 Setting encryption key on worker');
+            this.worker!.postMessage({
+              type: 'set-encryption-key',
+              payload: {
+                sessionKey: this.sessionKey,
+                randomPrefix: this.randomPrefix,
+              },
+            });
+          }
+          
           this.worker!.postMessage({
             type: 'init',
             payload: { files, manifest },
           });
+          break;
+        
+        case 'encryption-ready':
+          console.log('[SwarmManager] 🔐 Worker encryption ready');
+          break;
+        
+        case 'encryption-error':
+          console.error('[SwarmManager] 🔐 Worker encryption error:', payload);
+          this.emit('encryption-error', payload);
           break;
 
         case 'init-complete':

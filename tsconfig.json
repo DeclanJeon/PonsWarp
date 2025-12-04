@@ -24,6 +24,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "pons-core-wasm": [
+        "../pons-core-wasm/pkg/pons_core_wasm.d.ts"
       ]
     },
     "allowImportingTsExtensions": true,

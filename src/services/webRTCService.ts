@@ -12,6 +12,7 @@ console.log(
 import { signalingService, TurnConfigResponse } from './signaling';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
+import { CryptoService } from './cryptoService';
 
 type EventHandler = (data: any) => void;
 
@@ -25,6 +26,8 @@ interface IFileWriter {
   onError(cb: (err: string) => void): void;
   // 🚀 [추가] 흐름 제어 인터페이스
   onFlowControl?(cb: (action: 'PAUSE' | 'RESUME') => void): void;
+  // 🔐 [E2E] 암호화 키 설정
+  setEncryptionKey?(sessionKey: Uint8Array, randomPrefix: Uint8Array): void;
 }
 
 class ReceiverService {
@@ -44,8 +47,52 @@ class ReceiverService {
     { urls: 'stun:stun.l.google.com:19302' },
   ];
 
+  // 🔐 [E2E Encryption]
+  private cryptoService: CryptoService | null = null;
+  private encryptionEnabled: boolean = false;
+  private sessionKey: Uint8Array | null = null;
+  private randomPrefix: Uint8Array | null = null;
+
   constructor() {
     this.setupSignalingHandlers();
+  }
+
+  /**
+   * 🔐 E2E 암호화 활성화
+   */
+  public enableEncryption(): void {
+    this.cryptoService = new CryptoService();
+    this.encryptionEnabled = true;
+    logInfo('[Receiver]', '🔐 E2E encryption enabled');
+  }
+
+  /**
+   * 🔐 암호화 서비스 반환 (핸드셰이크용)
+   */
+  public getCryptoService(): CryptoService | null {
+    return this.cryptoService;
+  }
+
+  /**
+   * 🔐 세션 키 설정 (핸드셰이크 완료 후)
+   */
+  public setSessionKey(sessionKey: Uint8Array, randomPrefix: Uint8Array): void {
+    this.sessionKey = sessionKey;
+    this.randomPrefix = randomPrefix;
+    
+    // Writer에도 키 전달
+    if (this.writer?.setEncryptionKey) {
+      this.writer.setEncryptionKey(sessionKey, randomPrefix);
+    }
+    
+    logInfo('[Receiver]', '🔐 Session key set');
+  }
+
+  /**
+   * 🔐 암호화 활성화 여부
+   */
+  public isEncryptionEnabled(): boolean {
+    return this.encryptionEnabled;
   }
 
   private setupSignalingHandlers() {
