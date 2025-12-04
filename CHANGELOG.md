@@ -26,7 +26,7 @@
 
 * ⚡ LAN 환경 최적화 및 대용량 전송 성능 극대화 ([778f71a](https://github.com/DeclanJeon/PonsWarp/commit/778f71af2b5d4a333046662a0d6a831373a13c0c))
 
-# [0.7.0-beta.1](https://github.com/DeclanJeon/PonsWarp/compare/v0.6.0...v0.7.0-beta.1) (2025-12-03)
+# [0.7.0](https://github.com/DeclanJeon/PonsWarp/compare/v0.6.0...v0.7.0) (2025-12-03)
 
 
 ### Bug Fixes
