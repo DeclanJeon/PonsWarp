@@ -42,6 +42,14 @@ export default defineConfig(({ mode }) => {
               }
               next();
             });
+          },
+          configurePreviewServer(server) {
+            server.middlewares.use((req, res, next) => {
+              if (req.url?.endsWith('.wasm')) {
+                res.setHeader('Content-Type', 'application/wasm');
+              }
+              next();
+            });
           }
         }
       ],
@@ -67,10 +75,26 @@ export default defineConfig(({ mode }) => {
         }
       },
       worker: {
-        format: 'es'
+        format: 'es',
+        plugins: () => [
+          {
+            name: 'wasm-worker-loader',
+            resolveId(id) {
+              if (id.endsWith('.wasm')) {
+                return { id, external: false };
+              }
+            },
+            load(id) {
+              if (id.endsWith('.wasm')) {
+                return null;
+              }
+            }
+          }
+        ]
       },
       optimizeDeps: {
         include: ['three', '@react-three/fiber', '@react-three/drei', 'lucide-react'],
+        exclude: ['pons-core-wasm'],
         esbuildOptions: {
           define: {
             global: 'globalThis'
