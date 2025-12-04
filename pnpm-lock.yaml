@@ -35,6 +35,9 @@ importers:
       lucide-react:
         specifier: ^0.555.0
         version: 0.555.0(react@19.2.0)
+      pons-core-wasm:
+        specifier: latest
+        version: 0.2.2
       process:
         specifier: ^0.11.10
         version: 0.11.10
@@ -3302,6 +3305,9 @@ packages:
   pkg-conf@2.1.0:
     resolution: {integrity: sha512-C+VUP+8jis7EsQZIhDYmS5qlNtjv2yP4SNtjXK9AP1ZcTRlnSfuumaTnRfYZnYgUUYVIKqL0fRvmUGDV2fmp6g==}
     engines: {node: '>=4'}
+
+  pons-core-wasm@0.2.2:
+    resolution: {integrity: sha512-o+jDHHVjjqPtSg+6uhS+mZS2rSB0vi+pjiniF/oMMphQyUgcQlC6s+J/qaZA4dZ29wyMdoBNA6SUWUKmbi8VZg==}
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -7596,6 +7602,8 @@ snapshots:
     dependencies:
       find-up: 2.1.0
       load-json-file: 4.0.0
+
+  pons-core-wasm@0.2.2: {}
 
   possible-typed-array-names@1.1.0: {}
 
