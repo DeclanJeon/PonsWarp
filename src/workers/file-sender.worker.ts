@@ -287,7 +287,8 @@ async function initZipStream() {
   resolveZipResume = null;
 
   // 🦀 WASM ZIP64 스트림 초기화 (4GB+ 파일 지원)
-  zip64Stream = new Zip64Stream(6); // 압축 레벨 6
+  // ⚡ STORE 모드 (압축 없음) - 전송 속도 최적화
+  zip64Stream = new Zip64Stream(0); // 0 = STORE (압축 없음)
 
   const zipDataQueue: Uint8Array[] = [];
   let resolveDataAvailable: (() => void) | null = null;
@@ -337,10 +338,10 @@ async function initZipStream() {
 
             zipSourceBytesRead += value.length;
 
-            // 🦀 WASM DEFLATE 압축
-            const compressed = zip64Stream!.compress_chunk(value);
-            if (compressed.length > 0) {
-              pushToQueue(compressed);
+            // 🦀 WASM 패키징 (압축 없음)
+            const processed = zip64Stream!.process_chunk(value);
+            if (processed.length > 0) {
+              pushToQueue(processed);
             }
           }
         } finally {
