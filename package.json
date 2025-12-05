@@ -90,7 +90,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx}": [
-      "eslint --fix",
+      "eslint --fix --max-warnings=-1",
       "prettier --write"
     ],
     "*.{json,md}": [
