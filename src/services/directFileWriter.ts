@@ -1,13 +1,25 @@
 /**
  * Direct File Writer Service
- * StreamSaver 우선 적용 및 File System Access API 폴백(Fallback) 구현
+ * 브라우저별 최적화된 파일 저장 전략 구현
  *
  * 전략:
- * 1. StreamSaver.js 시도 (사용자 개입 없는 다운로드, 백그라운드 스트리밍)
- * 2. 실패 시 File System Access API 시도 (저장 위치 지정 다이얼로그)
- * 3. 모두 실패 시 에러 처리
+ * - Firefox: File System Access API 우선 → Blob 폴백(500MB↓) → OPFS 폴백(10GB↓) → StreamSaver 최후
+ *   (StreamSaver의 차단 페이지 문제 회피)
+ * - 기타 브라우저: StreamSaver 우선 → File System Access API 폴백 → Blob/OPFS 폴백
+ *   (사용자 개입 없는 다운로드 선호)
+ *
+ * ⚠️ 현실적인 제약사항:
+ * - OPFS: Firefox 기본 10GB 제한 (Persistent Storage 승인 시 더 큰 용량 가능)
+ * - Blob: 메모리 제한으로 500MB 이하 권장
+ * - StreamSaver: Firefox에서 차단될 수 있음
+ *
+ * 💡 대용량 파일(10GB+) 권장사항:
+ * - Firefox 사용자에게 Chrome/Edge 사용 권장
+ * - 또는 File System Access API 사용 유도 (사용자가 저장 위치 선택)
  *
  * 🚀 [개선] ReorderingBuffer 통합으로 순차적 데이터 쓰기 보장
+ * 🚀 [Firefox 최적화] Blob 기반 폴백 추가 (메모리 제약 있지만 호환성 최고)
+ * 🚀 [대용량 파일] OPFS 폴백 추가 (Storage Quota 체크 포함)
  */
 
 import streamSaver from 'streamsaver';
@@ -17,15 +29,15 @@ import { HEADER_SIZE } from '../utils/constants';
 
 // StreamSaver MITM 설정 (필수)
 if (typeof window !== 'undefined') {
-
   const originUrl = `${window.location.origin}/mitm.html`;
   const fallbackUrl = `${window.location.origin}/public/mitm.html`;
 
   // 기본 MITM URL 설정
   streamSaver.mitm = originUrl || fallbackUrl;
-  
+
   // 🚀 [진단] MITM URL 설정 확인 및 폴백 로직
-  console.log('[DirectFileWriter] Initial MITM URL:', streamSaver.mitm);
+  // MITM URL 설정 확인 (디버깅용)
+  logDebug('[DirectFileWriter]', `Initial MITM URL: ${streamSaver.mitm}`);
 }
 
 // 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
@@ -34,7 +46,16 @@ const WRITE_BUFFER_HIGH_MARK = 32 * 1024 * 1024;
 const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
 
 export class DirectFileWriter {
-  private manifest: any = null;
+  private manifest: {
+    totalSize: number;
+    totalFiles?: number;
+    files?: Array<{ path: string }>;
+    rootName?: string;
+    isSizeEstimated?: boolean;
+    downloadFileName?: string;
+  } = {
+    totalSize: 0,
+  };
   private totalBytesWritten = 0;
   private totalSize = 0;
   private startTime = 0;
@@ -46,7 +67,18 @@ export class DirectFileWriter {
     | WritableStreamDefaultWriter
     | FileSystemWritableFileStream
     | null = null;
-  private writerMode: 'file-system-access' | 'streamsaver' = 'streamsaver';
+  private writerMode:
+    | 'file-system-access'
+    | 'streamsaver'
+    | 'blob-fallback'
+    | 'opfs-fallback' = 'streamsaver';
+
+  // 🚀 [Blob 폴백용] 메모리 버퍼 (작은 파일용)
+  private blobChunks: Uint8Array[] = [];
+
+  // 🚀 [OPFS 폴백용] 대용량 파일 임시 저장
+  private opfsFileHandle: FileSystemFileHandle | null = null;
+  private opfsWriter: FileSystemWritableFileStream | null = null;
 
   // 🚀 [추가] 재정렬 버퍼 (StreamSaver 모드용)
   private reorderingBuffer: ReorderingBuffer | null = null;
@@ -67,7 +99,14 @@ export class DirectFileWriter {
   // 🚀 버퍼 추적 및 흐름 제어 변수
   private isPaused = false;
 
-  private onProgressCallback: ((data: any) => void) | null = null;
+  private onProgressCallback:
+    | ((data: {
+        progress: number;
+        speed: number;
+        bytesTransferred: number;
+        totalBytes: number;
+      }) => void)
+    | null = null;
   private onCompleteCallback: ((actualSize: number) => void) | null = null;
   private onErrorCallback: ((error: string) => void) | null = null;
   // 🚀 [추가] 흐름 제어 콜백
@@ -77,7 +116,14 @@ export class DirectFileWriter {
   /**
    * 스토리지 초기화
    */
-  public async initStorage(manifest: any): Promise<void> {
+  public async initStorage(manifest: {
+    totalSize: number;
+    totalFiles?: number;
+    files?: Array<{ path: string }>;
+    rootName?: string;
+    isSizeEstimated?: boolean;
+    downloadFileName?: string;
+  }): Promise<void> {
     this.manifest = manifest;
     this.totalSize = manifest.totalSize;
     this.startTime = Date.now();
@@ -87,13 +133,13 @@ export class DirectFileWriter {
     this.currentBatchSize = 0;
     this.pendingBytesInBuffer = 0;
     this.isPaused = false;
+    this.blobChunks = [];
 
-    const fileCount = manifest.totalFiles || manifest.files.length;
-    console.log('[DirectFileWriter] Initializing for', fileCount, 'files');
-    console.log(
-      '[DirectFileWriter] Total size:',
-      (manifest.totalSize / (1024 * 1024)).toFixed(2),
-      'MB'
+    const fileCount = manifest.totalFiles || manifest.files?.length || 0;
+    logInfo('[DirectFileWriter]', `Initializing for ${fileCount} files`);
+    logInfo(
+      '[DirectFileWriter]',
+      `Total size: ${((manifest.totalSize as number) / (1024 * 1024)).toFixed(2)} MB`
     );
 
     // 파일명 결정
@@ -109,165 +155,621 @@ export class DirectFileWriter {
     try {
       // 🚀 핵심 변경: StreamSaver 우선, FSA 폴백 로직 적용
       await this.initStrategy(fileName, manifest.totalSize);
-      logInfo('[DirectFileWriter]', `✅ Initialized with mode: ${this.writerMode}`);
-    } catch (e: any) {
-      if (e.name === 'AbortError') {
+      logInfo(
+        '[DirectFileWriter]',
+        `✅ Initialized with mode: ${this.writerMode}`
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         throw new Error('USER_CANCELLED|사용자가 파일 저장을 취소했습니다.');
       }
-      throw e;
+      logError('[DirectFileWriter]', 'Storage initialization failed:', error);
+      throw error;
     }
   }
 
   /**
-   * 🚀 [핵심 변경] 저장 전략 선택 및 초기화 (StreamSaver -> FSA)
+   * 🚀 [핵심 변경] 저장 전략 선택 및 초기화 (Firefox: FSA 우선, 기타: StreamSaver 우선)
    */
-  private async initStrategy(fileName: string, fileSize: number): Promise<void> {
-    logInfo('[DirectFileWriter]', `🔍 Starting initialization for file: ${fileName}, size: ${fileSize} bytes`);
-    
-    // 1. StreamSaver 우선 시도
+  private async initStrategy(
+    fileName: string,
+    fileSize: number
+  ): Promise<void> {
+    logInfo(
+      '[DirectFileWriter]',
+      `🔍 Starting initialization for file: ${fileName}, size: ${fileSize} bytes`
+    );
+
+    // Firefox 감지
+    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+    logDebug('[DirectFileWriter]', `Browser detected - Firefox: ${isFirefox}`);
+
+    // @ts-expect-error - showSaveFilePicker may not be available in all browsers
+    const hasFileSystemAccess = !!window.showSaveFilePicker;
+    logDebug(
+      '[DirectFileWriter]',
+      `File System Access API available: ${hasFileSystemAccess}`
+    );
+
+    // 🚀 [Firefox 최적화] Firefox는 Service Worker 없는 방법 우선
+    // StreamSaver는 Service Worker + iframe을 사용하여 Firefox의 Enhanced Tracking Protection에 차단됨
+    if (isFirefox) {
+      logInfo(
+        '[DirectFileWriter]',
+        '🦊 Firefox detected - avoiding StreamSaver (Service Worker blocked by Enhanced Tracking Protection)'
+      );
+
+      // 1. File System Access API 우선 시도 (Firefox)
+      if (hasFileSystemAccess) {
+        try {
+          await this.initFileSystemAccess(fileName);
+          logInfo(
+            '[DirectFileWriter]',
+            '✅ File System Access API initialization successful'
+          );
+          return;
+        } catch (fsaError: unknown) {
+          // FSA 실패 원인 분석 로그
+          if (fsaError instanceof Error && fsaError.name === 'AbortError') {
+            logWarn(
+              '[DirectFileWriter]',
+              '⚠️ User cancelled the file save dialog - trying automatic fallback methods'
+            );
+            // 사용자 취소 시에도 자동 폴백 시도 (Blob/OPFS)
+          } else if (
+            fsaError instanceof Error &&
+            fsaError.name === 'SecurityError'
+          ) {
+            logWarn(
+              '[DirectFileWriter]',
+              '⚠️ File System Access API blocked due to security restrictions'
+            );
+          } else {
+            logWarn(
+              '[DirectFileWriter]',
+              '⚠️ File System Access API failed due to unknown reasons'
+            );
+          }
+
+          logWarn(
+            '[DirectFileWriter]',
+            'File System Access API failed, attempting automatic fallback...',
+            fsaError
+          );
+          if (fsaError instanceof Error) {
+            logDebug(
+              '[DirectFileWriter]',
+              `FSA error details: ${fsaError.message}`
+            );
+          }
+        }
+      } else {
+        logWarn(
+          '[DirectFileWriter]',
+          '⚠️ File System Access API not available in this Firefox version'
+        );
+      }
+
+      // 2. Blob 다운로드 폴백 시도 (Firefox - 500MB 이하만)
+      const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
+      if (isSmallFile) {
+        try {
+          logInfo(
+            '[DirectFileWriter]',
+            'Attempting Blob-based download as fallback...'
+          );
+          await this.initBlobFallback(fileName);
+          logInfo(
+            '[DirectFileWriter]',
+            '✅ Blob fallback initialization successful'
+          );
+          return;
+        } catch (blobError: unknown) {
+          logWarn(
+            '[DirectFileWriter]',
+            'Blob fallback failed, trying OPFS...',
+            blobError
+          );
+        }
+      } else {
+        logInfo(
+          '[DirectFileWriter]',
+          `File too large (${formatBytes(fileSize)}) for Blob fallback, trying OPFS...`
+        );
+      }
+
+      // 3. OPFS 폴백 시도 (Firefox - 대용량 파일, 단 Storage Quota 제한 있음)
+      try {
+        logInfo(
+          '[DirectFileWriter]',
+          'Attempting OPFS (Origin Private File System) as fallback...'
+        );
+        await this.initOPFSFallback(fileName);
+        logInfo(
+          '[DirectFileWriter]',
+          '✅ OPFS fallback initialization successful'
+        );
+        logInfo(
+          '[DirectFileWriter]',
+          '📦 File will be temporarily saved to browser storage, then automatically downloaded when transfer completes.'
+        );
+        return;
+      } catch (opfsError: unknown) {
+        logWarn(
+          '[DirectFileWriter]',
+          'OPFS fallback failed (likely quota exceeded), trying StreamSaver as last resort...',
+          opfsError
+        );
+
+        // Storage Quota 초과 시 사용자에게 명확한 안내
+        if (
+          opfsError instanceof Error &&
+          opfsError.message &&
+          opfsError.message.includes('quota')
+        ) {
+          logError(
+            '[DirectFileWriter]',
+            '❌ Browser storage quota exceeded. For large files (10GB+), please use Chrome/Edge or try File System Access API.'
+          );
+        }
+      }
+
+      // 4. StreamSaver 최후 시도 (Firefox - 거의 항상 차단됨)
+      try {
+        logWarn(
+          '[DirectFileWriter]',
+          '⚠️ Attempting StreamSaver as last resort (likely to be blocked by Firefox)...'
+        );
+        await this.initStreamSaver(fileName, fileSize);
+        logInfo(
+          '[DirectFileWriter]',
+          '✅ StreamSaver initialization successful (unexpected!)'
+        );
+        return;
+      } catch (ssError: unknown) {
+        logError('[DirectFileWriter]', 'All download methods failed:', ssError);
+
+        // Firefox 사용자에게 명확한 안내
+        const errorMsg =
+          'Firefox에서 파일 다운로드에 실패했습니다.\n\n' +
+          '해결 방법:\n' +
+          '1. 파일 저장 위치 선택 다이얼로그가 나타나면 승인해주세요 (File System Access API)\n' +
+          '2. 또는 Chrome/Edge 브라우저를 사용해주세요\n' +
+          '3. Firefox Enhanced Tracking Protection이 StreamSaver를 차단하고 있습니다';
+
+        throw new Error(errorMsg);
+      }
+    }
+
+    // 🚀 [기타 브라우저] StreamSaver 우선 시도
     try {
       logInfo('[DirectFileWriter]', 'Attempting StreamSaver initialization...');
-      
+
       // StreamSaver 지원 여부 확인 (Service Worker 등)
-      logDebug('[DirectFileWriter]', `StreamSaver supported: ${streamSaver.supported}`);
-      logDebug('[DirectFileWriter]', `Service Worker registered: ${!!navigator.serviceWorker}`);
+      logDebug(
+        '[DirectFileWriter]',
+        `StreamSaver supported: ${streamSaver.supported}`
+      );
+      logDebug(
+        '[DirectFileWriter]',
+        `Service Worker registered: ${!!navigator.serviceWorker}`
+      );
       logDebug('[DirectFileWriter]', `User agent: ${navigator.userAgent}`);
-      logDebug('[DirectFileWriter]', `HTTPS context: ${location.protocol === 'https:'}`);
+      logDebug(
+        '[DirectFileWriter]',
+        `HTTPS context: ${location.protocol === 'https:'}`
+      );
       logDebug('[DirectFileWriter]', `MITM URL: ${streamSaver.mitm}`);
-      
+
       // 🚀 [진단] Service Worker 상태 상세 확인
       if (navigator.serviceWorker) {
         try {
           const registration = await navigator.serviceWorker.ready;
-          logDebug('[DirectFileWriter]', `Service Worker active: ${!!registration.active}`);
-          logDebug('[DirectFileWriter]', `Service Worker scope: ${registration.scope}`);
-        } catch (swError) {
-          logError('[DirectFileWriter]', 'Service Worker registration check failed:', swError);
+          logDebug(
+            '[DirectFileWriter]',
+            `Service Worker active: ${!!registration.active}`
+          );
+          logDebug(
+            '[DirectFileWriter]',
+            `Service Worker scope: ${registration.scope}`
+          );
+        } catch (swError: unknown) {
+          logError(
+            '[DirectFileWriter]',
+            'Service Worker registration check failed:',
+            swError
+          );
         }
       }
-      
+
       // 🚀 [진단] MITM 파일 접근 가능성 확인
       try {
         const mitmResponse = await fetch(streamSaver.mitm, { method: 'HEAD' });
-        logDebug('[DirectFileWriter]', `MITM file accessible: ${mitmResponse.ok}`);
+        logDebug(
+          '[DirectFileWriter]',
+          `MITM file accessible: ${mitmResponse.ok}`
+        );
         logDebug('[DirectFileWriter]', `MITM status: ${mitmResponse.status}`);
-      } catch (mitmError) {
+      } catch (mitmError: unknown) {
         logError('[DirectFileWriter]', 'MITM file check failed:', mitmError);
       }
-      
+
       // StreamSaver가 실패할 수 있는 다양한 원인 확인
       if (!streamSaver.supported) {
-        throw new Error('StreamSaver not supported in this browser environment');
+        throw new Error(
+          'StreamSaver not supported in this browser environment'
+        );
       }
 
       // Service Worker 등록 확인
       if (!navigator.serviceWorker) {
-        throw new Error('Service Worker not available - required for StreamSaver');
+        throw new Error(
+          'Service Worker not available - required for StreamSaver'
+        );
       }
 
       // HTTPS 확인
       if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
-        throw new Error('StreamSaver requires HTTPS context (except localhost)');
+        throw new Error(
+          'StreamSaver requires HTTPS context (except localhost)'
+        );
       }
 
       await this.initStreamSaver(fileName, fileSize);
       logInfo('[DirectFileWriter]', '✅ StreamSaver initialization successful');
       return; // 성공 시 리턴
-    } catch (ssError) {
-      logWarn('[DirectFileWriter]', 'StreamSaver failed, attempting fallback to File System Access API...', ssError);
-      logDebug('[DirectFileWriter]', `StreamSaver error details: ${ssError.message}`);
-      logDebug('[DirectFileWriter]', `StreamSaver error stack: ${ssError.stack}`);
-      
+    } catch (ssError: unknown) {
+      logWarn(
+        '[DirectFileWriter]',
+        'StreamSaver failed, attempting fallback to File System Access API...',
+        ssError
+      );
+      if (ssError instanceof Error) {
+        logDebug(
+          '[DirectFileWriter]',
+          `StreamSaver error details: ${ssError.message}`
+        );
+        logDebug(
+          '[DirectFileWriter]',
+          `StreamSaver error stack: ${ssError.stack}`
+        );
+      }
+
       // StreamSaver 실패 원인 분석 로그
-      if (ssError.message.includes('Service Worker')) {
-        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to Service Worker issues');
-      } else if (ssError.message.includes('HTTPS')) {
-        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to security context issues');
-      } else if (ssError.message.includes('not supported')) {
-        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to browser compatibility');
+      if (
+        ssError instanceof Error &&
+        ssError.message.includes('Service Worker')
+      ) {
+        logWarn(
+          '[DirectFileWriter]',
+          '⚠️ StreamSaver failed due to Service Worker issues'
+        );
+      } else if (
+        ssError instanceof Error &&
+        ssError.message.includes('HTTPS')
+      ) {
+        logWarn(
+          '[DirectFileWriter]',
+          '⚠️ StreamSaver failed due to security context issues'
+        );
+      } else if (
+        ssError instanceof Error &&
+        ssError.message.includes('not supported')
+      ) {
+        logWarn(
+          '[DirectFileWriter]',
+          '⚠️ StreamSaver failed due to browser compatibility'
+        );
       } else {
-        logWarn('[DirectFileWriter]', '⚠️ StreamSaver failed due to unknown reasons');
+        logWarn(
+          '[DirectFileWriter]',
+          '⚠️ StreamSaver failed due to unknown reasons'
+        );
       }
     }
 
-    // 2. File System Access API (FSA) 폴백 시도
-    // @ts-ignore
-    const hasFileSystemAccess = !!window.showSaveFilePicker;
-    logDebug('[DirectFileWriter]', `File System Access API available: ${hasFileSystemAccess}`);
-    
+    // File System Access API (FSA) 폴백 시도 (기타 브라우저)
     if (hasFileSystemAccess) {
       try {
         await this.initFileSystemAccess(fileName);
-        logInfo('[DirectFileWriter]', '✅ File System Access API initialization successful');
+        logInfo(
+          '[DirectFileWriter]',
+          '✅ File System Access API initialization successful'
+        );
         return; // 성공 시 리턴
-      } catch (fsaError) {
-        logError('[DirectFileWriter]', 'File System Access API failed:', fsaError);
-        logDebug('[DirectFileWriter]', `FSA error details: ${fsaError.message}`);
-        logDebug('[DirectFileWriter]', `FSA error stack: ${fsaError.stack}`);
-        
-        // FSA 실패 원인 분석 로그
-        if (fsaError.name === 'AbortError') {
-          logWarn('[DirectFileWriter]', '⚠️ User cancelled the file save dialog');
-        } else if (fsaError.name === 'SecurityError') {
-          logWarn('[DirectFileWriter]', '⚠️ File System Access API blocked due to security restrictions');
-        } else {
-          logWarn('[DirectFileWriter]', '⚠️ File System Access API failed due to unknown reasons');
+      } catch (fsaError: unknown) {
+        logWarn(
+          '[DirectFileWriter]',
+          'File System Access API failed:',
+          fsaError
+        );
+        if (fsaError instanceof Error) {
+          logDebug(
+            '[DirectFileWriter]',
+            `FSA error details: ${fsaError.message}`
+          );
         }
-        
-        throw fsaError; // 여기서 실패하면 더 이상 방법이 없음
+
+        // FSA 실패 원인 분석 로그
+        if (fsaError instanceof Error && fsaError.name === 'AbortError') {
+          logWarn(
+            '[DirectFileWriter]',
+            '⚠️ User cancelled the file save dialog'
+          );
+          throw fsaError; // 사용자 취소는 재시도하지 않음
+        } else if (
+          fsaError instanceof Error &&
+          fsaError.name === 'SecurityError'
+        ) {
+          logWarn(
+            '[DirectFileWriter]',
+            '⚠️ File System Access API blocked due to security restrictions'
+          );
+        } else {
+          logWarn(
+            '[DirectFileWriter]',
+            '⚠️ File System Access API failed due to unknown reasons'
+          );
+        }
       }
     }
 
-    throw new Error('No supported file saving method available (StreamSaver and FSA failed).');
+    // 🚀 [최후 폴백] Blob 또는 OPFS 다운로드 시도 (모든 브라우저)
+    const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
+    if (isSmallFile) {
+      try {
+        logInfo(
+          '[DirectFileWriter]',
+          'Attempting Blob-based download as last resort...'
+        );
+        await this.initBlobFallback(fileName);
+        logInfo(
+          '[DirectFileWriter]',
+          '✅ Blob fallback initialization successful'
+        );
+        return;
+      } catch (blobError: unknown) {
+        logWarn(
+          '[DirectFileWriter]',
+          'Blob fallback failed, trying OPFS...',
+          blobError
+        );
+      }
+    } else {
+      logInfo(
+        '[DirectFileWriter]',
+        `File too large (${formatBytes(fileSize)}) for Blob fallback, trying OPFS...`
+      );
+    }
+
+    // OPFS 최후 시도 (대용량 파일)
+    try {
+      logInfo('[DirectFileWriter]', 'Attempting OPFS as final fallback...');
+      await this.initOPFSFallback(fileName);
+      logInfo(
+        '[DirectFileWriter]',
+        '✅ OPFS fallback initialization successful'
+      );
+      logInfo(
+        '[DirectFileWriter]',
+        '📦 File will be temporarily saved to browser storage, then automatically downloaded when transfer completes.'
+      );
+      return;
+    } catch (opfsError: unknown) {
+      logError('[DirectFileWriter]', 'OPFS fallback also failed:', opfsError);
+    }
+
+    throw new Error(
+      'No supported file saving method available (all methods failed).'
+    );
   }
 
   /**
    * StreamSaver 초기화 로직 (분리됨)
    */
-  private async initStreamSaver(fileName: string, fileSize: number): Promise<void> {
-    logDebug('[DirectFileWriter]', `🚀 Initializing StreamSaver with fileName: ${fileName}`);
-    
+  private async initStreamSaver(
+    fileName: string,
+    fileSize: number
+  ): Promise<void> {
+    logDebug(
+      '[DirectFileWriter]',
+      `🚀 Initializing StreamSaver with fileName: ${fileName}`
+    );
+
     const isZip = fileName.endsWith('.zip');
     // ZIP이거나 사이즈 추정 모드일 경우 size를 지정하지 않아 브라우저가 크기 오류를 내지 않게 함
-    const streamConfig = (isZip || this.manifest?.isSizeEstimated) ? {} : { size: fileSize };
-    
-    logDebug('[DirectFileWriter]', `StreamSaver config: ${JSON.stringify(streamConfig)}`);
+    const streamConfig =
+      isZip || this.manifest?.isSizeEstimated ? {} : { size: fileSize };
+
+    logDebug(
+      '[DirectFileWriter]',
+      `StreamSaver config: ${JSON.stringify(streamConfig)}`
+    );
     logDebug('[DirectFileWriter]', `MITM URL: ${streamSaver.mitm}`);
     logDebug('[DirectFileWriter]', `Is ZIP file: ${isZip}`);
-    logDebug('[DirectFileWriter]', `Is size estimated: ${this.manifest?.isSizeEstimated}`);
-    
+    logDebug(
+      '[DirectFileWriter]',
+      `Is size estimated: ${this.manifest?.isSizeEstimated}`
+    );
+
     try {
       // StreamSaver.createWriteStream 호출 전 추가 확인
-      logDebug('[DirectFileWriter]', 'Calling streamSaver.createWriteStream...');
-      
+      logDebug(
+        '[DirectFileWriter]',
+        'Calling streamSaver.createWriteStream...'
+      );
+
       const fileStream = streamSaver.createWriteStream(fileName, streamConfig);
-      logDebug('[DirectFileWriter]', 'StreamSaver.createWriteStream succeeded, getting writer...');
-      
+      logDebug(
+        '[DirectFileWriter]',
+        'StreamSaver.createWriteStream succeeded, getting writer...'
+      );
+
       this.writer = fileStream.getWriter();
       this.writerMode = 'streamsaver';
-      
+
       // 순차 데이터 보장
       this.reorderingBuffer = new ReorderingBuffer(0);
       logInfo('[DirectFileWriter]', `✅ StreamSaver ready: ${fileName}`);
-      
+
       // Writer 상태 확인
-      logDebug('[DirectFileWriter]', `Writer ready state: ${this.writer.ready}`);
-      
-    } catch (error) {
-      logError('[DirectFileWriter]', '❌ StreamSaver initialization failed:', error);
-      logDebug('[DirectFileWriter]', `Error type: ${error.constructor.name}`);
-      logDebug('[DirectFileWriter]', `Error message: ${error.message}`);
-      logDebug('[DirectFileWriter]', `Error stack: ${error.stack}`);
-      
+      logDebug(
+        '[DirectFileWriter]',
+        `Writer ready state: ${this.writer.ready}`
+      );
+    } catch (error: unknown) {
+      logError(
+        '[DirectFileWriter]',
+        '❌ StreamSaver initialization failed:',
+        error
+      );
+      if (error instanceof Error) {
+        logDebug('[DirectFileWriter]', `Error type: ${error.constructor.name}`);
+        logDebug('[DirectFileWriter]', `Error message: ${error.message}`);
+        logDebug('[DirectFileWriter]', `Error stack: ${error.stack}`);
+      }
+
       // StreamSaver 특정 오류 분석
-      if (error.message.includes('Service Worker')) {
-        logError('[DirectFileWriter]', '🔍 Service Worker related error detected');
-      } else if (error.message.includes('MITM')) {
-        logError('[DirectFileWriter]', '🔍 MITM (Man-in-the-Middle) related error detected');
-      } else if (error.message.includes('secure')) {
+      if (error instanceof Error && error.message.includes('Service Worker')) {
+        logError(
+          '[DirectFileWriter]',
+          '🔍 Service Worker related error detected'
+        );
+      } else if (error instanceof Error && error.message.includes('MITM')) {
+        logError(
+          '[DirectFileWriter]',
+          '🔍 MITM (Man-in-the-Middle) related error detected'
+        );
+      } else if (error instanceof Error && error.message.includes('secure')) {
         logError('[DirectFileWriter]', '🔍 Security context error detected');
       }
-      
+
+      throw error;
+    }
+  }
+
+  /**
+   * 🚀 [신규] Blob 기반 다운로드 폴백 초기화
+   * 메모리에 모든 데이터를 모았다가 마지막에 한 번에 다운로드
+   * 장점: 모든 브라우저 호환, Service Worker 불필요
+   * 단점: 메모리 제약 (500MB 이하 권장)
+   */
+  private async initBlobFallback(fileName: string): Promise<void> {
+    logDebug(
+      '[DirectFileWriter]',
+      `💾 Initializing Blob fallback with fileName: ${fileName}`
+    );
+
+    this.writerMode = 'blob-fallback';
+    this.blobChunks = [];
+
+    // Blob 모드에서도 순차 데이터 보장
+    this.reorderingBuffer = new ReorderingBuffer(0);
+
+    // 파일명 저장 (finalize에서 사용)
+    this.manifest.downloadFileName = fileName;
+
+    logInfo(
+      '[DirectFileWriter]',
+      `✅ Blob fallback ready: ${fileName} (memory-based download)`
+    );
+  }
+
+  /**
+   * 🚀 [신규] OPFS 기반 다운로드 폴백 초기화
+   * 브라우저의 Origin Private File System에 임시 저장 후 수동 다운로드
+   *
+   * ⚠️ 용량 제한:
+   * - Firefox: 기본 10GB, Persistent Storage 승인 시 디스크의 50%까지
+   * - Chrome: 디스크 여유 공간의 60%까지
+   *
+   * 장점: 메모리 제약 없음, Service Worker 불필요
+   * 단점: 브라우저 Storage Quota 제한, 전송 완료 후 수동 다운로드
+   */
+  private async initOPFSFallback(fileName: string): Promise<void> {
+    logDebug(
+      '[DirectFileWriter]',
+      `🗄️ Initializing OPFS fallback with fileName: ${fileName}`
+    );
+
+    // OPFS 지원 여부 확인
+    if (!navigator.storage || !navigator.storage.getDirectory) {
+      throw new Error(
+        'OPFS (Origin Private File System) not supported in this browser'
+      );
+    }
+
+    try {
+      // Storage Quota 확인
+      if (navigator.storage.estimate) {
+        const estimate = await navigator.storage.estimate();
+        const available = (estimate.quota || 0) - (estimate.usage || 0);
+        const requiredSize = this.totalSize || this.manifest?.totalSize || 0;
+
+        logDebug(
+          '[DirectFileWriter]',
+          `Storage quota - Available: ${formatBytes(available)}, Required: ${formatBytes(requiredSize)}`
+        );
+
+        if (requiredSize > available) {
+          logWarn(
+            '[DirectFileWriter]',
+            `⚠️ Insufficient storage quota. Available: ${formatBytes(available)}, Required: ${formatBytes(requiredSize)}`
+          );
+
+          // Persistent Storage 요청 시도
+          if (navigator.storage.persist) {
+            const isPersisted = await navigator.storage.persist();
+            if (isPersisted) {
+              logInfo(
+                '[DirectFileWriter]',
+                '✅ Persistent storage granted, retrying quota check...'
+              );
+              const newEstimate = await navigator.storage.estimate();
+              const newAvailable =
+                (newEstimate.quota || 0) - (newEstimate.usage || 0);
+
+              if (requiredSize > newAvailable) {
+                throw new Error(
+                  `Insufficient storage quota even after persistence. Available: ${formatBytes(newAvailable)}, Required: ${formatBytes(requiredSize)}`
+                );
+              }
+            } else {
+              throw new Error(
+                `Insufficient storage quota. Available: ${formatBytes(available)}, Required: ${formatBytes(requiredSize)}`
+              );
+            }
+          } else {
+            throw new Error(
+              `Insufficient storage quota. Available: ${formatBytes(available)}, Required: ${formatBytes(requiredSize)}`
+            );
+          }
+        }
+      }
+
+      // OPFS 루트 디렉토리 접근
+      const opfsRoot = await navigator.storage.getDirectory();
+
+      // 임시 파일 생성
+      this.opfsFileHandle = await opfsRoot.getFileHandle(fileName, {
+        create: true,
+      });
+      this.opfsWriter = await this.opfsFileHandle.createWritable();
+
+      this.writerMode = 'opfs-fallback';
+
+      // 순차 데이터 보장
+      this.reorderingBuffer = new ReorderingBuffer(0);
+
+      // 파일명 저장 (finalize에서 사용)
+      this.manifest.downloadFileName = fileName;
+
+      logInfo(
+        '[DirectFileWriter]',
+        `✅ OPFS fallback ready: ${fileName} (temporary storage, manual download required)`
+      );
+    } catch (error: unknown) {
+      logError('[DirectFileWriter]', 'OPFS initialization failed:', error);
       throw error;
     }
   }
@@ -276,8 +778,11 @@ export class DirectFileWriter {
    * File System Access API 초기화 로직 (분리됨)
    */
   private async initFileSystemAccess(fileName: string): Promise<void> {
-    logDebug('[DirectFileWriter]', `📁 Initializing File System Access API with fileName: ${fileName}`);
-    
+    logDebug(
+      '[DirectFileWriter]',
+      `📁 Initializing File System Access API with fileName: ${fileName}`
+    );
+
     const ext = fileName.split('.').pop() || '';
     const accept: Record<string, string[]> = {};
 
@@ -289,47 +794,67 @@ export class DirectFileWriter {
 
     const pickerOptions = {
       suggestedName: fileName,
-      types: [{ description: 'File', accept }]
+      types: [{ description: 'File', accept }],
     };
-    
-    logDebug('[DirectFileWriter]', `File picker options: ${JSON.stringify(pickerOptions)}`);
+
+    logDebug(
+      '[DirectFileWriter]',
+      `File picker options: ${JSON.stringify(pickerOptions)}`
+    );
     logDebug('[DirectFileWriter]', `File extension: ${ext}`);
 
     try {
       logDebug('[DirectFileWriter]', 'Calling window.showSaveFilePicker...');
-      
-      // @ts-ignore
+
+      // @ts-expect-error - showSaveFilePicker may not be available in all browsers
       const handle = await window.showSaveFilePicker(pickerOptions);
-      logDebug('[DirectFileWriter]', 'File picker succeeded, creating writable stream...');
-      
+      logDebug(
+        '[DirectFileWriter]',
+        'File picker succeeded, creating writable stream...'
+      );
+
       this.writer = await handle.createWritable();
       this.writerMode = 'file-system-access';
-      
+
       // 순차 데이터 보장 (Batch Merge를 위해 필수)
       this.reorderingBuffer = new ReorderingBuffer(0);
       logInfo('[DirectFileWriter]', `✅ File System Access ready: ${fileName}`);
-      
+
       // Writer 상태 확인
       logDebug('[DirectFileWriter]', `Writer created successfully`);
-      
-    } catch (error) {
-      logError('[DirectFileWriter]', '❌ File System Access API initialization failed:', error);
-      logDebug('[DirectFileWriter]', `Error type: ${error.constructor.name}`);
-      logDebug('[DirectFileWriter]', `Error name: ${error.name}`);
-      logDebug('[DirectFileWriter]', `Error message: ${error.message}`);
-      logDebug('[DirectFileWriter]', `Error stack: ${error.stack}`);
-      
-      // File System Access API 특정 오류 분석
-      if (error.name === 'AbortError') {
-        logWarn('[DirectFileWriter]', '🔍 User cancelled the file save dialog');
-      } else if (error.name === 'SecurityError') {
-        logError('[DirectFileWriter]', '🔍 File System Access API blocked due to security restrictions');
-      } else if (error.name === 'NotAllowedError') {
-        logError('[DirectFileWriter]', '🔍 File System Access API permission denied');
-      } else if (error.name === 'TypeError') {
-        logError('[DirectFileWriter]', '🔍 File System Access API not available or incorrect usage');
+    } catch (error: unknown) {
+      logError(
+        '[DirectFileWriter]',
+        '❌ File System Access API initialization failed:',
+        error
+      );
+      if (error instanceof Error) {
+        logDebug('[DirectFileWriter]', `Error type: ${error.constructor.name}`);
+        logDebug('[DirectFileWriter]', `Error name: ${error.name}`);
+        logDebug('[DirectFileWriter]', `Error message: ${error.message}`);
+        logDebug('[DirectFileWriter]', `Error stack: ${error.stack}`);
       }
-      
+
+      // File System Access API 특정 오류 분석
+      if (error instanceof Error && error.name === 'AbortError') {
+        logWarn('[DirectFileWriter]', '🔍 User cancelled the file save dialog');
+      } else if (error instanceof Error && error.name === 'SecurityError') {
+        logError(
+          '[DirectFileWriter]',
+          '🔍 File System Access API blocked due to security restrictions'
+        );
+      } else if (error instanceof Error && error.name === 'NotAllowedError') {
+        logError(
+          '[DirectFileWriter]',
+          '🔍 File System Access API permission denied'
+        );
+      } else if (error instanceof Error && error.name === 'TypeError') {
+        logError(
+          '[DirectFileWriter]',
+          '🔍 File System Access API not available or incorrect usage'
+        );
+      }
+
       throw error;
     }
   }
@@ -344,15 +869,19 @@ export class DirectFileWriter {
       .then(async () => {
         try {
           await this.processChunkInternal(packet);
-        } catch (error: any) {
+        } catch (error: unknown) {
           logError('[DirectFileWriter]', 'Write queue error:', error);
-          this.onErrorCallback?.(`Write failed: ${error.message}`);
+          if (error instanceof Error) {
+            this.onErrorCallback?.(`Write failed: ${error.message}`);
+          } else {
+            this.onErrorCallback?.('Write failed: Unknown error');
+          }
           throw error; // 에러 전파하여 체인 중단
         }
       })
-      .catch(err => {
+      .catch(() => {
         // 이미 처리된 에러는 무시하되, 체인은 유지
-        console.warn('[DirectFileWriter] Recovering from write error');
+        logWarn('[DirectFileWriter]', 'Recovering from write error');
       });
 
     // 호출자는 큐의 완료를 기다림
@@ -383,7 +912,7 @@ export class DirectFileWriter {
 
     // 🚀 [FIX] ZIP 모드(isSizeEstimated)일 경우 Overflow 체크 완화
     const totalReceived = this.totalBytesWritten + this.pendingBytesInBuffer;
-    
+
     // Manifest가 있고, 크기 추정 모드(ZIP 등)가 아닐 때만 엄격하게 체크
     const isSizeStrict = this.manifest && !this.manifest.isSizeEstimated;
 
@@ -402,8 +931,34 @@ export class DirectFileWriter {
       return;
     }
 
-    if (!this.writer || !this.reorderingBuffer) {
-      logError('[DirectFileWriter]', 'No writer available');
+    // Writer 체크 (모드별로 다른 writer 사용)
+    const hasWriter =
+      this.writerMode === 'opfs-fallback'
+        ? !!this.opfsWriter
+        : this.writerMode === 'blob-fallback'
+          ? true // Blob 모드는 메모리에만 적재
+          : !!this.writer;
+
+    if (!hasWriter || !this.reorderingBuffer) {
+      logError(
+        '[DirectFileWriter]',
+        `No writer available (mode: ${this.writerMode}, writer: ${!!this.writer}, opfsWriter: ${!!this.opfsWriter}, reorderingBuffer: ${!!this.reorderingBuffer})`
+      );
+
+      // 디버깅을 위한 상세 정보
+      if (!this.reorderingBuffer) {
+        logError(
+          '[DirectFileWriter]',
+          'ReorderingBuffer is null - initialization may have failed'
+        );
+      }
+      if (!hasWriter) {
+        logError(
+          '[DirectFileWriter]',
+          `Writer is null for mode ${this.writerMode} - initialization may have failed`
+        );
+      }
+
       return;
     }
 
@@ -445,8 +1000,20 @@ export class DirectFileWriter {
       offset += chunk.byteLength;
     }
 
-    // 2. 디스크 쓰기
-    if (this.writerMode === 'file-system-access') {
+    // 2. 모드별 쓰기 처리
+    if (this.writerMode === 'blob-fallback') {
+      // Blob 모드: 메모리에 계속 적재 (finalize에서 한 번에 다운로드)
+      this.blobChunks.push(mergedBuffer);
+    } else if (this.writerMode === 'opfs-fallback') {
+      // OPFS 모드: 디스크에 직접 쓰기
+      if (this.opfsWriter) {
+        await this.opfsWriter.write({
+          type: 'write',
+          position: this.totalBytesWritten,
+          data: mergedBuffer,
+        });
+      }
+    } else if (this.writerMode === 'file-system-access') {
       const fsWriter = this.writer as FileSystemWritableFileStream;
       await fsWriter.write({
         type: 'write',
@@ -499,14 +1066,15 @@ export class DirectFileWriter {
   /**
    * 전송 완료
    * 🚀 [개선] ReorderingBuffer 정리 및 파일 크기 Truncate
+   * 🚀 [Blob 모드] 메모리에 모인 데이터를 Blob으로 다운로드
    */
   private async finalize(): Promise<void> {
-    console.log(
-      '[DirectFileWriter] 🏁 finalize() called, isFinalized:',
-      this.isFinalized
+    logInfo(
+      '[DirectFileWriter]',
+      `🏁 finalize() called, isFinalized: ${this.isFinalized}`
     );
     if (this.isFinalized) {
-      console.log('[DirectFileWriter] ⚠️ Already finalized, skipping');
+      logInfo('[DirectFileWriter]', '⚠️ Already finalized, skipping');
       return;
     }
     this.isFinalized = true;
@@ -527,14 +1095,94 @@ export class DirectFileWriter {
       this.reorderingBuffer = null;
     }
 
-    if (this.writer) {
+    // 🚀 [Blob 모드] 메모리에 모인 데이터를 Blob으로 다운로드
+    if (this.writerMode === 'blob-fallback') {
+      try {
+        logInfo(
+          '[DirectFileWriter]',
+          `Creating Blob from ${this.blobChunks.length} chunks...`
+        );
+
+        const blob = new Blob(this.blobChunks as BlobPart[], {
+          type: 'application/octet-stream',
+        });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.manifest.downloadFileName || 'download';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+
+        // 정리
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 100);
+
+        this.blobChunks = []; // 메모리 해제
+        logInfo(
+          '[DirectFileWriter]',
+          `✅ Blob download triggered: ${this.totalBytesWritten} bytes`
+        );
+      } catch (error: unknown) {
+        logError('[DirectFileWriter]', 'Blob download failed:', error);
+        throw error;
+      }
+    }
+    // 🚀 [OPFS 모드] OPFS에 저장된 파일을 사용자가 다운로드할 수 있도록 안내
+    else if (this.writerMode === 'opfs-fallback') {
+      try {
+        if (this.opfsWriter) {
+          await this.opfsWriter.close();
+          this.opfsWriter = null;
+        }
+
+        logInfo(
+          '[DirectFileWriter]',
+          `✅ File saved to OPFS: ${this.totalBytesWritten} bytes`
+        );
+        logInfo(
+          '[DirectFileWriter]',
+          '⬇️ Transfer complete! Triggering automatic download...'
+        );
+
+        // OPFS에서 파일 읽어서 다운로드 트리거
+        if (this.opfsFileHandle) {
+          const file = await this.opfsFileHandle.getFile();
+          const url = URL.createObjectURL(file);
+
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = this.manifest.downloadFileName || 'download';
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+
+          // 정리
+          setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }, 100);
+
+          logInfo(
+            '[DirectFileWriter]',
+            '✅ OPFS download triggered successfully'
+          );
+        }
+      } catch (error: unknown) {
+        logError('[DirectFileWriter]', 'OPFS download failed:', error);
+        throw error;
+      }
+    } else if (this.writer) {
       try {
         if (this.writerMode === 'file-system-access') {
           const fsWriter = this.writer as FileSystemWritableFileStream;
           // 🚨 [핵심 수정] 파일 크기 Truncate
           // ZIP 사이즈 불일치 문제 해결을 위한 Truncate
-          // @ts-ignore - locked 속성 체크
-          if (!fsWriter.locked) {
+          // locked 속성 체크
+          if (!(fsWriter as unknown as { locked: boolean }).locked) {
             await fsWriter.truncate(this.totalBytesWritten);
             await fsWriter.close();
           }
@@ -542,11 +1190,18 @@ export class DirectFileWriter {
           const streamWriter = this.writer as WritableStreamDefaultWriter;
           await streamWriter.close();
         }
-        logInfo('[DirectFileWriter]', `✅ File saved (${this.writerMode}): ${this.totalBytesWritten} bytes`);
-      } catch (e: any) {
+        logInfo(
+          '[DirectFileWriter]',
+          `✅ File saved (${this.writerMode}): ${this.totalBytesWritten} bytes`
+        );
+      } catch (error: unknown) {
         // 이미 닫힌 스트림 에러는 무시
-        if (!e.message?.includes('close') && !e.message?.includes('closed')) {
-          logError('[DirectFileWriter]', 'Error closing file:', e);
+        if (
+          error instanceof Error &&
+          !error.message?.includes('close') &&
+          !error.message?.includes('closed')
+        ) {
+          logError('[DirectFileWriter]', 'Error closing file:', error);
         }
       }
     }
@@ -558,7 +1213,14 @@ export class DirectFileWriter {
   /**
    * 콜백 등록
    */
-  public onProgress(callback: (data: any) => void): void {
+  public onProgress(
+    callback: (data: {
+      progress: number;
+      speed: number;
+      bytesTransferred: number;
+      totalBytes: number;
+    }) => void
+  ): void {
     this.onProgressCallback = callback;
   }
 
@@ -602,10 +1264,13 @@ export class DirectFileWriter {
   /**
    * 정리
    * 🚀 [개선] ReorderingBuffer 정리 추가
+   * 🚀 [Blob 모드] 메모리 해제
+   * 🚀 [OPFS 모드] OPFS 파일 정리
    */
   public async cleanup(): Promise<void> {
     this.isFinalized = true;
     this.writeBuffer = []; // 메모리 해제
+    this.blobChunks = []; // Blob 청크 메모리 해제
     this.isPaused = false;
 
     // 버퍼 정리
@@ -614,10 +1279,32 @@ export class DirectFileWriter {
       this.reorderingBuffer = null;
     }
 
+    // OPFS Writer 정리
+    if (this.opfsWriter) {
+      try {
+        await this.opfsWriter.abort();
+      } catch {
+        // Ignore
+      }
+      this.opfsWriter = null;
+    }
+
+    // OPFS 파일 삭제 (선택적)
+    if (this.opfsFileHandle && this.writerMode === 'opfs-fallback') {
+      try {
+        const opfsRoot = await navigator.storage.getDirectory();
+        await opfsRoot.removeEntry(this.opfsFileHandle.name);
+        logInfo('[DirectFileWriter]', 'OPFS temporary file cleaned up');
+      } catch {
+        // Ignore - 파일이 이미 삭제되었거나 접근 불가
+      }
+      this.opfsFileHandle = null;
+    }
+
     if (this.writer) {
       try {
         await this.writer.abort();
-      } catch (e) {
+      } catch {
         // Ignore
       }
     }

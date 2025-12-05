@@ -79,12 +79,12 @@ class ReceiverService {
   public setSessionKey(sessionKey: Uint8Array, randomPrefix: Uint8Array): void {
     this.sessionKey = sessionKey;
     this.randomPrefix = randomPrefix;
-    
+
     // Writer에도 키 전달
     if (this.writer?.setEncryptionKey) {
       this.writer.setEncryptionKey(sessionKey, randomPrefix);
     }
-    
+
     logInfo('[Receiver]', '🔐 Session key set');
   }
 

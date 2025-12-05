@@ -463,11 +463,13 @@ const ReceiverView: React.FC = () => {
   }, [manifest]);
 
   // Progress Calculation
-  const safeProgress = isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
+  const safeProgress =
+    isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
   const strokeDashoffset = 283 - (283 * safeProgress) / 100; // 2 * PI * 45 ≈ 283
 
   // Common Styles
-  const glassPanelClass = "bg-black/40 p-3 backdrop-blur-2xl border border-white/10 rounded-[2rem] shadow-2xl w-full max-w-md mx-4 overflow-hidden relative";
+  const glassPanelClass =
+    'bg-black/40 p-3 backdrop-blur-2xl border border-white/10 rounded-[2rem] shadow-2xl w-full max-w-md mx-4 overflow-hidden relative';
 
   return (
     <div className="flex flex-col items-center justify-center w-full h-full px-4 md:px-0 z-10 relative">
@@ -485,11 +487,11 @@ const ReceiverView: React.FC = () => {
               <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-6 bg-gradient-to-br from-cyan-500/20 to-purple-500/20 rounded-3xl flex items-center justify-center border border-white/10 shadow-[0_0_30px_rgba(168,85,247,0.2)]">
                 <Scan className="w-8 h-8 md:w-10 md:h-10 text-white drop-shadow-lg" />
               </div>
-              
+
               <h2 className="text-2xl md:text-3xl font-bold mb-6 brand-font tracking-widest text-white">
                 ENTER <span className="text-cyan-400">WARP KEY</span>
               </h2>
-              
+
               <div className="relative group mb-6">
                 <input
                   value={roomId || ''}
@@ -525,10 +527,17 @@ const ReceiverView: React.FC = () => {
             <div className="relative w-32 h-32 mx-auto mb-8">
               <div className="absolute inset-0 border-4 border-t-cyan-500 border-r-transparent border-b-purple-500 border-l-transparent rounded-full animate-spin" />
               <div className="absolute inset-4 border-4 border-t-transparent border-r-white/30 border-b-transparent border-l-white/30 rounded-full animate-spin-reverse" />
-              <Radio className="absolute inset-0 m-auto text-cyan-400 animate-pulse" size={32} />
+              <Radio
+                className="absolute inset-0 m-auto text-cyan-400 animate-pulse"
+                size={32}
+              />
             </div>
-            <h3 className="text-2xl font-bold mb-2 tracking-widest">SEARCHING FREQUENCY...</h3>
-            <p className="text-cyan-400/60 font-mono">Waiting for sender signal</p>
+            <h3 className="text-2xl font-bold mb-2 tracking-widest">
+              SEARCHING FREQUENCY...
+            </h3>
+            <p className="text-cyan-400/60 font-mono">
+              Waiting for sender signal
+            </p>
           </motion.div>
         )}
 
@@ -545,31 +554,47 @@ const ReceiverView: React.FC = () => {
               <div className="w-20 h-20 mx-auto mb-6 bg-cyan-500/10 rounded-full flex items-center justify-center border border-cyan-500/20">
                 <Archive className="w-10 h-10 text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
               </div>
-              
+
               <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 tracking-wider brand-font">
                 INCOMING TRANSMISSION
               </h2>
-              
+
               {/* File Info Box */}
               <div className="bg-gray-800/50 p-6 rounded-2xl mb-8 border border-gray-700/50 text-left">
                 <div className="flex items-start gap-4 mb-4">
                   <div className="bg-gray-700/50 p-3 rounded-lg">
-                    {manifest?.isFolder ? <Folder className="text-yellow-400" size={24}/> : <FileIcon className="text-blue-400" size={24}/>}
+                    {manifest?.isFolder ? (
+                      <Folder className="text-yellow-400" size={24} />
+                    ) : (
+                      <FileIcon className="text-blue-400" size={24} />
+                    )}
                   </div>
                   <div className="min-w-0">
-                    <p className="font-bold text-lg text-white truncate break-all">{manifest?.rootName}</p>
-                    <p className="text-sm text-gray-400">{manifest?.isFolder ? 'Folder Archive' : 'Single File'}</p>
+                    <p className="font-bold text-lg text-white truncate break-all">
+                      {manifest?.rootName}
+                    </p>
+                    <p className="text-sm text-gray-400">
+                      {manifest?.isFolder ? 'Folder Archive' : 'Single File'}
+                    </p>
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-4 border-t border-gray-700 pt-4">
                   <div>
-                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Total Size</p>
-                    <p className="font-mono text-cyan-300 font-bold">{formatBytes(manifest?.totalSize || 0)}</p>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                      Total Size
+                    </p>
+                    <p className="font-mono text-cyan-300 font-bold">
+                      {formatBytes(manifest?.totalSize || 0)}
+                    </p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">File Count</p>
-                    <p className="font-mono text-white font-bold">{manifest?.totalFiles}</p>
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                      File Count
+                    </p>
+                    <p className="font-mono text-white font-bold">
+                      {manifest?.totalFiles}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -585,89 +610,98 @@ const ReceiverView: React.FC = () => {
                 onClick={startDirectDownload}
                 className="w-full bg-white text-black py-4 rounded-xl font-bold tracking-widest hover:bg-cyan-300 transition-all flex items-center justify-center gap-3 shadow-[0_0_20px_rgba(255,255,255,0.2)] group"
               >
-                <Download size={20} className="group-hover:scale-110 transition-transform"/>
+                <Download
+                  size={20}
+                  className="group-hover:scale-110 transition-transform"
+                />
                 MATERIALIZE
               </button>
             </div>
           </motion.div>
         )}
 
-      {/* 4. RECEIVING (REVERSE WARP VISIBLE) */}
-      {status === 'RECEIVING' && (
-        <div className="text-center w-full max-w-2xl relative">
-          {/* 중앙 HUD 스타일 프로그레스 */}
-          <div className="relative w-64 h-64 mx-auto mb-8">
-            {/* 배경 링 */}
-            <svg
-              className="w-full h-full rotate-[-90deg]"
-              viewBox="0 0 100 100"
-            >
-              <circle
-                cx="50"
-                cy="50"
-                r="45"
-                fill="none"
-                stroke="rgba(255,255,255,0.1)"
-                strokeWidth="2"
-              />
-              {/* 진행 링 */}
-              <circle
-                cx="50"
-                cy="50"
-                r="45"
-                fill="none"
-                stroke="url(#gradient)"
-                strokeWidth="4"
-                strokeDasharray="283"
-                strokeDashoffset={
-                  isNaN(strokeDashoffset) ? 283 : strokeDashoffset
-                }
-                className="transition-all duration-300 ease-out drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]"
-              />
-              <defs>
-                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#22d3ee" />
-                  <stop offset="100%" stopColor="#a855f7" />
-                </linearGradient>
-              </defs>
-            </svg>
-            {/* 중앙 정보 */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-5xl font-black font-rajdhani text-white drop-shadow-lg">
-                {Math.round(safeProgress)}
-                <span className="text-2xl text-cyan-400">%</span>
-              </span>
-              <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">
-                INCOMING STREAM
-              </span>
+        {/* 4. RECEIVING (REVERSE WARP VISIBLE) */}
+        {status === 'RECEIVING' && (
+          <div className="text-center w-full max-w-2xl relative">
+            {/* 중앙 HUD 스타일 프로그레스 */}
+            <div className="relative w-64 h-64 mx-auto mb-8">
+              {/* 배경 링 */}
+              <svg
+                className="w-full h-full rotate-[-90deg]"
+                viewBox="0 0 100 100"
+              >
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="45"
+                  fill="none"
+                  stroke="rgba(255,255,255,0.1)"
+                  strokeWidth="2"
+                />
+                {/* 진행 링 */}
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="45"
+                  fill="none"
+                  stroke="url(#gradient)"
+                  strokeWidth="4"
+                  strokeDasharray="283"
+                  strokeDashoffset={
+                    isNaN(strokeDashoffset) ? 283 : strokeDashoffset
+                  }
+                  className="transition-all duration-300 ease-out drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]"
+                />
+                <defs>
+                  <linearGradient
+                    id="gradient"
+                    x1="0%"
+                    y1="0%"
+                    x2="100%"
+                    y2="0%"
+                  >
+                    <stop offset="0%" stopColor="#22d3ee" />
+                    <stop offset="100%" stopColor="#a855f7" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              {/* 중앙 정보 */}
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-5xl font-black font-rajdhani text-white drop-shadow-lg">
+                  {Math.round(safeProgress)}
+                  <span className="text-2xl text-cyan-400">%</span>
+                </span>
+                <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">
+                  INCOMING STREAM
+                </span>
+              </div>
             </div>
-          </div>
 
-          {/* 하단 정보 패널 (투명) */}
-          <div className="grid grid-cols-2 gap-4 bg-black/20 backdrop-blur-md rounded-2xl p-6 border border-white/5">
-            <div className="text-left">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-                Download Speed
-              </p>
-              <p className="font-mono text-xl text-cyan-400 font-bold">
-                {formatBytes(progressData.speed)}/s
-              </p>
+            {/* 하단 정보 패널 (투명) */}
+            <div className="grid grid-cols-2 gap-4 bg-black/20 backdrop-blur-md rounded-2xl p-6 border border-white/5">
+              <div className="text-left">
+                <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                  Download Speed
+                </p>
+                <p className="font-mono text-xl text-cyan-400 font-bold">
+                  {formatBytes(progressData.speed)}/s
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                  Data Received
+                </p>
+                <p className="font-mono text-xl text-white">
+                  {formatBytes(progressData.bytesTransferred)}
+                </p>
+              </div>
             </div>
-            <div className="text-right">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
-                Data Received
-              </p>
-              <p className="font-mono text-xl text-white">
-                {formatBytes(progressData.bytesTransferred)}
-              </p>
-            </div>
-          </div>
 
-          <p className="mt-8 text-cyan-500/50 text-sm animate-pulse tracking-[0.2em] font-mono">
-            &lt;&lt;&lt; RECEIVING MATTER STREAM &lt;&lt;&lt;
-          </p>
-        </div>
-      )}
+            <p className="mt-8 text-cyan-500/50 text-sm animate-pulse tracking-[0.2em] font-mono">
+              &lt;&lt;&lt; RECEIVING MATTER STREAM &lt;&lt;&lt;
+            </p>
+          </div>
+        )}
 
         {/* --- STATE: DONE --- */}
         {status === 'DONE' && (
@@ -675,7 +709,7 @@ const ReceiverView: React.FC = () => {
             key="done"
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className={glassPanelClass + " border-green-500/30"}
+            className={glassPanelClass + ' border-green-500/30'}
           >
             <div className="text-center relative z-10">
               <div className="relative w-24 h-24 mx-auto mb-6 bg-green-500/10 rounded-full flex items-center justify-center border border-green-500/20">
@@ -684,7 +718,9 @@ const ReceiverView: React.FC = () => {
               <h2 className="text-3xl font-bold text-white mb-2 tracking-wider brand-font">
                 MATERIALIZED
               </h2>
-              <p className="text-gray-400 mb-8">File reconstruction complete.</p>
+              <p className="text-gray-400 mb-8">
+                File reconstruction complete.
+              </p>
               {actualSize > 0 && (
                 <p className="text-gray-500 text-sm mb-6 font-mono">
                   {(actualSize / (1024 * 1024)).toFixed(2)} MB transferred
@@ -706,7 +742,7 @@ const ReceiverView: React.FC = () => {
             key="error"
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className={glassPanelClass + " border-red-500/30"}
+            className={glassPanelClass + ' border-red-500/30'}
           >
             <div className="text-center relative z-10">
               <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]" />

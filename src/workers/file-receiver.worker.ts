@@ -8,10 +8,7 @@ declare const self: DedicatedWorkerGlobalScope;
 // - Direct download to main thread (no OPFS)
 // ============================================================================
 
-import init, {
-  PacketDecoder,
-  CryptoSession,
-} from 'pons-core-wasm';
+import init, { PacketDecoder, CryptoSession } from 'pons-core-wasm';
 
 const HEADER_SIZE = 22;
 const ENCRYPTED_HEADER_SIZE = 38;
@@ -89,15 +86,24 @@ class ReceiverWorker {
   /**
    * 🔐 복호화 키 설정
    */
-  private setEncryptionKey(payload: { sessionKey: Uint8Array; randomPrefix: Uint8Array }) {
+  private setEncryptionKey(payload: {
+    sessionKey: Uint8Array;
+    randomPrefix: Uint8Array;
+  }) {
     try {
       if (!wasmReady) {
         console.error('[Receiver Worker] WASM not ready for decryption');
-        self.postMessage({ type: 'encryption-error', payload: 'WASM not initialized' });
+        self.postMessage({
+          type: 'encryption-error',
+          payload: 'WASM not initialized',
+        });
         return;
       }
 
-      cryptoSession = new CryptoSession(payload.sessionKey, payload.randomPrefix);
+      cryptoSession = new CryptoSession(
+        payload.sessionKey,
+        payload.randomPrefix
+      );
       decryptionEnabled = true;
       console.log('[Receiver Worker] 🔐 E2E decryption enabled');
       self.postMessage({ type: 'encryption-ready' });
@@ -119,15 +125,24 @@ class ReceiverWorker {
     this.lastSpeedCalcBytes = 0;
 
     console.log('[Receiver Worker] Ready for', manifest.totalFiles, 'files');
-    console.log('[Receiver Worker] WASM:', wasmReady, ', Decryption:', decryptionEnabled);
-    console.log('[Receiver Worker] Total size:', (manifest.totalSize / (1024 * 1024)).toFixed(2), 'MB');
+    console.log(
+      '[Receiver Worker] WASM:',
+      wasmReady,
+      ', Decryption:',
+      decryptionEnabled
+    );
+    console.log(
+      '[Receiver Worker] Total size:',
+      (manifest.totalSize / (1024 * 1024)).toFixed(2),
+      'MB'
+    );
 
     self.postMessage({ type: 'storage-ready' });
   }
 
   private processChunk(packet: ArrayBuffer) {
     const packetArray = new Uint8Array(packet);
-    
+
     // 암호화된 패킷인지 확인 (version byte = 0x02)
     const isEncrypted = packetArray[0] === 0x02;
 
@@ -159,18 +174,17 @@ class ReceiverWorker {
     try {
       // WASM으로 복호화
       const decryptedData = cryptoSession.decrypt_chunk(packetArray);
-      
+
       this.totalBytesReceived += decryptedData.length;
       this.chunksProcessed++;
 
       // 복호화된 데이터를 메인 스레드로 전달
       // 새 패킷 형식으로 재구성 (비암호화 형식)
       const outputPacket = this.createOutputPacket(decryptedData);
-      
-      self.postMessage(
-        { type: 'write-chunk', payload: outputPacket },
-        [outputPacket]
-      );
+
+      self.postMessage({ type: 'write-chunk', payload: outputPacket }, [
+        outputPacket,
+      ]);
 
       this.reportProgress();
     } catch (e: any) {
@@ -206,7 +220,7 @@ class ReceiverWorker {
     }
 
     const dataPart = packetArray.subarray(HEADER_SIZE, HEADER_SIZE + size);
-    
+
     // 무결성 검증
     if (wasmReady) {
       const isValid = PacketDecoder.verify(packetArray);
@@ -233,10 +247,7 @@ class ReceiverWorker {
     this.totalBytesReceived += size;
     this.chunksProcessed++;
 
-    self.postMessage(
-      { type: 'write-chunk', payload: packet },
-      [packet]
-    );
+    self.postMessage({ type: 'write-chunk', payload: packet }, [packet]);
 
     this.reportProgress();
   }
@@ -262,9 +273,10 @@ class ReceiverWorker {
   private reportProgress() {
     const now = Date.now();
     if (now - this.lastReportTime > PROGRESS_REPORT_INTERVAL) {
-      const progress = this.totalSize > 0
-        ? Math.min(100, (this.totalBytesReceived / this.totalSize) * 100)
-        : 0;
+      const progress =
+        this.totalSize > 0
+          ? Math.min(100, (this.totalBytesReceived / this.totalSize) * 100)
+          : 0;
 
       const timeDelta = now - this.lastSpeedCalcTime;
       const bytesDelta = this.totalBytesReceived - this.lastSpeedCalcBytes;
@@ -276,7 +288,9 @@ class ReceiverWorker {
         if (this.speedSamples.length > SPEED_SAMPLE_SIZE) {
           this.speedSamples.shift();
         }
-        speed = this.speedSamples.reduce((a, b) => a + b, 0) / this.speedSamples.length;
+        speed =
+          this.speedSamples.reduce((a, b) => a + b, 0) /
+          this.speedSamples.length;
       }
 
       this.lastSpeedCalcTime = now;
@@ -298,7 +312,11 @@ class ReceiverWorker {
   }
 
   private finalize() {
-    console.log('[Receiver Worker] Transfer complete. Total:', this.totalBytesReceived, 'bytes');
+    console.log(
+      '[Receiver Worker] Transfer complete. Total:',
+      this.totalBytesReceived,
+      'bytes'
+    );
 
     self.postMessage({
       type: 'complete',
@@ -313,9 +331,11 @@ class ReceiverWorker {
 }
 
 // 🚀 Worker 시작
-initWasm().then(() => {
-  new ReceiverWorker();
-}).catch(() => {
-  console.warn('[Receiver Worker] WASM failed, using fallback');
-  new ReceiverWorker();
-});
+initWasm()
+  .then(() => {
+    new ReceiverWorker();
+  })
+  .catch(() => {
+    console.warn('[Receiver Worker] WASM failed, using fallback');
+    new ReceiverWorker();
+  });

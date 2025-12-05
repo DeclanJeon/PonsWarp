@@ -1,6 +1,6 @@
 /**
  * E2E 암호화 서비스
- * 
+ *
  * ECDH 키 교환 + HKDF 키 유도를 통한 세션 키 생성
  * Web Crypto API 기반 구현
  */
@@ -11,7 +11,11 @@ export interface KeyPair {
 }
 
 export interface CryptoHandshakeMessage {
-  type: 'CRYPTO_INIT' | 'CRYPTO_PUBLIC_KEY' | 'CRYPTO_KEY_CONFIRM' | 'CRYPTO_READY';
+  type:
+    | 'CRYPTO_INIT'
+    | 'CRYPTO_PUBLIC_KEY'
+    | 'CRYPTO_KEY_CONFIRM'
+    | 'CRYPTO_READY';
   version?: number;
   algorithms?: string[];
   publicKey?: string;
@@ -35,11 +39,11 @@ export class CryptoService {
    * @returns Base64 인코딩된 공개키
    */
   async generateKeyPair(): Promise<string> {
-    this.keyPair = await crypto.subtle.generateKey(
+    this.keyPair = (await crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
       true,
       ['deriveBits']
-    ) as CryptoKeyPair;
+    )) as CryptoKeyPair;
 
     const publicKeyRaw = await crypto.subtle.exportKey(
       'raw',
@@ -202,7 +206,7 @@ export class CryptoService {
    */
   async createPublicKeyMessage(): Promise<CryptoHandshakeMessage> {
     const publicKey = await this.generateKeyPair();
-    
+
     const message: CryptoHandshakeMessage = {
       type: 'CRYPTO_PUBLIC_KEY',
       publicKey,
@@ -257,12 +261,12 @@ export class CryptoService {
     this.keyPair = null;
     this.peerPublicKey = null;
     this.salt = null;
-    
+
     if (this.sessionKey) {
       this.sessionKey.fill(0);
       this.sessionKey = null;
     }
-    
+
     console.log('[CryptoService] Cleaned up');
   }
 

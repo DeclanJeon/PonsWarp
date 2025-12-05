@@ -68,7 +68,6 @@ const App: React.FC = () => {
         - 데스크탑: p-8, 레이아웃 중앙 정렬
       */}
       <div className="relative w-screen h-screen overflow-hidden text-white bg-transparent font-rajdhani select-none">
-        
         {/* 1. 배경 계층 (3D Space) */}
         <SpaceField />
 
@@ -102,7 +101,7 @@ const App: React.FC = () => {
           </div>
           {/* Security Badge (Visual Assurance) */}
           <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-400 font-mono">
-            <ShieldCheck size={14} className="text-green-400"/>
+            <ShieldCheck size={14} className="text-green-400" />
             <span>End-to-End Encrypted</span>
           </div>
         </header>
@@ -110,7 +109,6 @@ const App: React.FC = () => {
         {/* 4. Main Content Area */}
         <main className="relative z-10 w-full h-full flex flex-col items-center justify-center p-4">
           <AnimatePresence mode="wait">
-            
             {/* --- INTRO SCREEN --- */}
             {mode === AppMode.INTRO && (
               <motion.div
@@ -128,11 +126,15 @@ const App: React.FC = () => {
                     </span>
                   </div>
                   <h2 className="text-4xl md:text-7xl font-black brand-font tracking-tighter drop-shadow-[0_0_40px_rgba(6,182,212,0.4)] leading-tight">
-                    HYPER-SPEED<br />
-                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500 animate-gradient-x">ZERO LIMITS.</span>
+                    HYPER-SPEED
+                    <br />
+                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500 animate-gradient-x">
+                      ZERO LIMITS.
+                    </span>
                   </h2>
                   <p className="text-gray-400 text-sm md:text-xl max-w-2xl mx-auto leading-relaxed px-6">
-                    Unlimited file transfer directly via your browser.<br className="hidden md:block" />
+                    Unlimited file transfer directly via your browser.
+                    <br className="hidden md:block" />
                     No servers. No size caps. Just pure speed.
                   </p>
                 </div>
@@ -165,7 +167,7 @@ const App: React.FC = () => {
                   className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-cyan-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
                 >
                   <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-                  
+
                   {/* 아이콘 크기 축소 */}
                   <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
                     <div className="absolute inset-0 bg-cyan-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
@@ -173,12 +175,14 @@ const App: React.FC = () => {
                       <Send className="w-8 h-8 md:w-10 md:h-10 text-white" />
                     </div>
                   </div>
-                  
+
                   <div className="relative z-10 text-center space-y-1">
                     <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-cyan-400 transition-colors">
                       SEND
                     </h3>
-                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">Create Gate</p>
+                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
+                      Create Gate
+                    </p>
                   </div>
                 </MagneticButton>
 
@@ -188,19 +192,21 @@ const App: React.FC = () => {
                   className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-purple-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
                 >
                   <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-                  
+
                   <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
                     <div className="absolute inset-0 bg-purple-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
                     <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-purple-400 flex items-center justify-center relative z-10 shadow-lg">
                       <Download className="w-8 h-8 md:w-10 md:h-10 text-white" />
                     </div>
                   </div>
-                  
+
                   <div className="relative z-10 text-center space-y-1">
                     <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-purple-400 transition-colors">
                       RECEIVE
                     </h3>
-                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">Join Gate</p>
+                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
+                      Join Gate
+                    </p>
                   </div>
                 </MagneticButton>
               </motion.div>
@@ -216,13 +222,13 @@ const App: React.FC = () => {
                 className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
               >
                 <SenderView />
-                
+
                 {status === 'TRANSFERRING' && (
                   <div className="mt-8 w-full max-w-xl px-4">
                     <TransferProgressBar />
                   </div>
                 )}
-                
+
                 <button
                   onClick={() => setMode(AppMode.SELECTION)}
                   className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
@@ -241,7 +247,7 @@ const App: React.FC = () => {
                 className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
               >
                 <ReceiverView />
-                
+
                 <button
                   onClick={() => {
                     setMode(AppMode.SELECTION);

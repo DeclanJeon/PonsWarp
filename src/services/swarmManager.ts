@@ -221,21 +221,24 @@ export class SwarmManager {
     // 🚀 [중요] 상태 정리
     this.pausedPeers.delete(peerId);
     this.transferQueue = this.transferQueue.filter(id => id !== peerId);
-    
+
     // 전송 중이던 피어가 나가면 즉시 제거하여 다른 피어가 기다리지 않게 함
     if (this.currentTransferPeers.has(peerId)) {
-        this.currentTransferPeers.delete(peerId);
-        logWarn('[SwarmManager]', `Active peer ${peerId} dropped. Removed from transfer set.`);
-        
-        // 만약 이 피어가 나가서 남은 피어가 없다면 완료 처리 시도
-        if (this.isTransferring && this.currentTransferPeers.size === 0) {
-             this.checkTransferComplete();
-        } else if (this.isTransferring) {
-            // 다른 피어가 있다면 Flow Control 재평가 (나간 피어가 PAUSE 상태였을 수 있음)
-            if (this.canRequestMoreChunks()) {
-                this.requestMoreChunks();
-            }
+      this.currentTransferPeers.delete(peerId);
+      logWarn(
+        '[SwarmManager]',
+        `Active peer ${peerId} dropped. Removed from transfer set.`
+      );
+
+      // 만약 이 피어가 나가서 남은 피어가 없다면 완료 처리 시도
+      if (this.isTransferring && this.currentTransferPeers.size === 0) {
+        this.checkTransferComplete();
+      } else if (this.isTransferring) {
+        // 다른 피어가 있다면 Flow Control 재평가 (나간 피어가 PAUSE 상태였을 수 있음)
+        if (this.canRequestMoreChunks()) {
+          this.requestMoreChunks();
         }
+      }
     }
 
     logInfo('[SwarmManager]', `Peer removed: ${peerId} (reason: ${reason})`);
@@ -1212,9 +1215,13 @@ export class SwarmManager {
             files.length,
             'files'
           );
-          
+
           // 🔐 암호화 키 설정 (활성화된 경우)
-          if (this.isEncryptionEnabled() && this.sessionKey && this.randomPrefix) {
+          if (
+            this.isEncryptionEnabled() &&
+            this.sessionKey &&
+            this.randomPrefix
+          ) {
             console.log('[SwarmManager] 🔐 Setting encryption key on worker');
             this.worker!.postMessage({
               type: 'set-encryption-key',
@@ -1224,17 +1231,17 @@ export class SwarmManager {
               },
             });
           }
-          
+
           this.worker!.postMessage({
             type: 'init',
             payload: { files, manifest },
           });
           break;
-        
+
         case 'encryption-ready':
           console.log('[SwarmManager] 🔐 Worker encryption ready');
           break;
-        
+
         case 'encryption-error':
           console.error('[SwarmManager] 🔐 Worker encryption error:', payload);
           this.emit('encryption-error', payload);

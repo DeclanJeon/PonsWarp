@@ -61,26 +61,30 @@ export class ReorderingBuffer {
       // 🚀 [개선] 버퍼 오버플로우 시 오래된 청크부터 정리
       if (this.currentBufferSize + chunkLen > this.MAX_BUFFER_SIZE) {
         // 가장 오래된 청크들부터 정리하여 공간 확보
-        const sortedEntries = Array.from(this.buffer.entries())
-          .sort((a, b) => a[1].timestamp - b[1].timestamp);
-        
+        const sortedEntries = Array.from(this.buffer.entries()).sort(
+          (a, b) => a[1].timestamp - b[1].timestamp
+        );
+
         let freedSpace = 0;
         const toDelete: number[] = [];
-        
+
         for (const [offset, chunk] of sortedEntries) {
           toDelete.push(offset);
           freedSpace += chunk.data.byteLength;
-          if (this.currentBufferSize + chunkLen - freedSpace <= this.MAX_BUFFER_SIZE * 0.8) {
+          if (
+            this.currentBufferSize + chunkLen - freedSpace <=
+            this.MAX_BUFFER_SIZE * 0.8
+          ) {
             break; // 80% 수준까지 정리
           }
         }
-        
+
         toDelete.forEach(offset => {
           const chunk = this.buffer.get(offset)!;
           this.currentBufferSize -= chunk.data.byteLength;
           this.buffer.delete(offset);
         });
-        
+
         logWarn(
           '[Reorder]',
           `🗑️ Buffer overflow: cleaned ${toDelete.length} oldest chunks (${formatBytes(freedSpace)}) to make space`
@@ -131,7 +135,7 @@ export class ReorderingBuffer {
       if (now - chunk.timestamp > this.CHUNK_TTL) {
         staleCount++;
         staleOffsets.push(offset);
-        
+
         // 🚀 [개선] 메모리 보호를 위해 오래된 청크는 정리
         this.currentBufferSize -= chunk.data.byteLength;
         this.buffer.delete(offset);
@@ -164,7 +168,7 @@ export class ReorderingBuffer {
   public getNextExpectedOffset(): number {
     return this.nextExpectedOffset;
   }
-  
+
   /**
    * 버퍼에 남은 청크 수 조회
    */

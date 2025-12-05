@@ -9,10 +9,7 @@ declare const self: DedicatedWorkerGlobalScope;
 // - Features: Zero-copy streaming, Aggregation, Backpressure
 // ============================================================================
 
-import init, {
-  PacketEncoder,
-  CryptoSession,
-} from 'pons-core-wasm';
+import init, { PacketEncoder, CryptoSession } from 'pons-core-wasm';
 
 const CHUNK_SIZE_MIN = 16 * 1024;
 const CHUNK_SIZE_MAX = 64 * 1024;
@@ -65,7 +62,8 @@ class DoubleBuffer {
 
   takeFromActive(count: number): ArrayBuffer[] {
     const chunks: ArrayBuffer[] = [];
-    const activeChunks = this.activeBuffer === 'A' ? this.bufferA : this.bufferB;
+    const activeChunks =
+      this.activeBuffer === 'A' ? this.bufferA : this.bufferB;
 
     for (let i = 0; i < count && activeChunks.length > 0; i++) {
       const chunk = activeChunks.shift()!;
@@ -184,11 +182,17 @@ self.onmessage = (e: MessageEvent) => {
 /**
  * 🔐 암호화 키 설정
  */
-function setEncryptionKey(payload: { sessionKey: Uint8Array; randomPrefix: Uint8Array }) {
+function setEncryptionKey(payload: {
+  sessionKey: Uint8Array;
+  randomPrefix: Uint8Array;
+}) {
   try {
     if (!wasmReady) {
       console.error('[Sender Worker] WASM not ready for encryption');
-      self.postMessage({ type: 'encryption-error', payload: 'WASM not initialized' });
+      self.postMessage({
+        type: 'encryption-error',
+        payload: 'WASM not initialized',
+      });
       return;
     }
 
@@ -204,16 +208,21 @@ function setEncryptionKey(payload: { sessionKey: Uint8Array; randomPrefix: Uint8
 
 function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
   if (config.chunkSize !== undefined) {
-    adaptiveConfig.chunkSize = Math.max(CHUNK_SIZE_MIN, Math.min(CHUNK_SIZE_MAX, config.chunkSize));
+    adaptiveConfig.chunkSize = Math.max(
+      CHUNK_SIZE_MIN,
+      Math.min(CHUNK_SIZE_MAX, config.chunkSize)
+    );
   }
   if (config.prefetchBatch !== undefined) {
-    adaptiveConfig.prefetchBatch = Math.max(4, Math.min(32, config.prefetchBatch));
+    adaptiveConfig.prefetchBatch = Math.max(
+      4,
+      Math.min(32, config.prefetchBatch)
+    );
   }
   if (config.enableAdaptive !== undefined) {
     adaptiveConfig.enableAdaptive = config.enableAdaptive;
   }
 }
-
 
 async function initWorker(payload: { files: File[]; manifest: any }) {
   resetWorker();
@@ -221,7 +230,7 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   if (!wasmReady) {
     await initWasm();
   }
-  
+
   if (packetEncoder) {
     packetEncoder.reset();
   }
@@ -238,7 +247,15 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   zipBuffer = null;
 
   const fileCount = state.files.length;
-  console.log('[Sender Worker] Initializing for', fileCount, 'files (WASM:', wasmReady, ', Encrypted:', encryptionEnabled, ')');
+  console.log(
+    '[Sender Worker] Initializing for',
+    fileCount,
+    'files (WASM:',
+    wasmReady,
+    ', Encrypted:',
+    encryptionEnabled,
+    ')'
+  );
 
   if (fileCount === 1) {
     state.mode = 'single';
@@ -320,7 +337,9 @@ async function initZipStream() {
           while (true) {
             if (currentZipQueueSize > ZIP_QUEUE_HIGH_WATER_MARK) {
               isZipPaused = true;
-              await new Promise<void>(resolve => { resolveZipResume = resolve; });
+              await new Promise<void>(resolve => {
+                resolveZipResume = resolve;
+              });
               isZipPaused = false;
             }
 
@@ -358,10 +377,18 @@ async function initZipStream() {
         consumeAndCheckResume(zipDataQueue.shift()!);
         return;
       }
-      if (zipFinalized) { controller.close(); return; }
-      if (hasError) { controller.error(new Error('ZIP failed')); return; }
+      if (zipFinalized) {
+        controller.close();
+        return;
+      }
+      if (hasError) {
+        controller.error(new Error('ZIP failed'));
+        return;
+      }
 
-      await new Promise<void>(resolve => { resolveDataAvailable = resolve; });
+      await new Promise<void>(resolve => {
+        resolveDataAvailable = resolve;
+      });
 
       if (zipDataQueue.length > 0) consumeAndCheckResume(zipDataQueue.shift()!);
       else if (zipFinalized) controller.close();
@@ -373,7 +400,12 @@ async function initZipStream() {
   processFilesAsync();
 
   const waitStart = Date.now();
-  while (zipDataQueue.length === 0 && !zipFinalized && !hasError && Date.now() - waitStart < 2000) {
+  while (
+    zipDataQueue.length === 0 &&
+    !zipFinalized &&
+    !hasError &&
+    Date.now() - waitStart < 2000
+  ) {
     await new Promise(resolve => setTimeout(resolve, 1));
   }
 }
@@ -384,7 +416,9 @@ function resetWorker() {
   state.zipReader = null;
 
   if (singleFileReader) {
-    try { singleFileReader.cancel(); } catch {}
+    try {
+      singleFileReader.cancel();
+    } catch {}
     singleFileReader = null;
   }
   singleFileBuffer = null;
@@ -400,7 +434,7 @@ function resetWorker() {
 
   doubleBuffer.clear();
   zipBuffer = null;
-  
+
   packetEncoder?.reset();
   cryptoSession?.reset();
 }
@@ -418,8 +452,14 @@ function triggerPrefetch() {
 }
 
 async function prefetchBatch(): Promise<void> {
-  const batchSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.prefetchBatch : PREFETCH_BATCH;
-  for (let i = 0; i < batchSize && isTransferActive && !state.isCompleted; i++) {
+  const batchSize = adaptiveConfig.enableAdaptive
+    ? adaptiveConfig.prefetchBatch
+    : PREFETCH_BATCH;
+  for (
+    let i = 0;
+    i < batchSize && isTransferActive && !state.isCompleted;
+    i++
+  ) {
     if (!doubleBuffer.canPrefetch()) break;
     const chunk = await createNextChunk();
     if (chunk) doubleBuffer.addToInactive(chunk);
@@ -434,7 +474,6 @@ async function createNextChunk(): Promise<ArrayBuffer | null> {
 let singleFileReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 let singleFileBuffer: Uint8Array | null = null;
 
-
 async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   if (state.files.length === 0) return null;
   const file = state.files[0];
@@ -445,18 +484,25 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
 
   if (state.currentFileOffset >= file.size) {
     state.isCompleted = true;
-    try { await singleFileReader?.cancel(); } catch {}
+    try {
+      await singleFileReader?.cancel();
+    } catch {}
     singleFileReader = null;
     return null;
   }
 
-  const currentChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
+  const currentChunkSize = adaptiveConfig.enableAdaptive
+    ? adaptiveConfig.chunkSize
+    : CHUNK_SIZE_MAX;
 
   try {
     while (true) {
       const bufferSize = singleFileBuffer?.length ?? 0;
 
-      if (bufferSize >= currentChunkSize || state.currentFileOffset + bufferSize >= file.size) {
+      if (
+        bufferSize >= currentChunkSize ||
+        state.currentFileOffset + bufferSize >= file.size
+      ) {
         const dataToSend = singleFileBuffer!.slice(0, currentChunkSize);
         const remaining = singleFileBuffer!.slice(currentChunkSize);
         singleFileBuffer = remaining.length > 0 ? remaining : null;
@@ -485,7 +531,9 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
       }
 
       if (singleFileBuffer) {
-        const newBuffer = new Uint8Array(singleFileBuffer.length + value.length);
+        const newBuffer = new Uint8Array(
+          singleFileBuffer.length + value.length
+        );
         newBuffer.set(singleFileBuffer);
         newBuffer.set(value, singleFileBuffer.length);
         singleFileBuffer = newBuffer;
@@ -495,7 +543,9 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
     }
   } catch (e) {
     console.error('[Sender Worker] Single chunk error:', e);
-    try { await singleFileReader?.cancel(); } catch {}
+    try {
+      await singleFileReader?.cancel();
+    } catch {}
     singleFileReader = null;
     singleFileBuffer = null;
     return null;
@@ -510,7 +560,9 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
     return null;
   }
 
-  const targetChunkSize = adaptiveConfig.enableAdaptive ? adaptiveConfig.chunkSize : CHUNK_SIZE_MAX;
+  const targetChunkSize = adaptiveConfig.enableAdaptive
+    ? adaptiveConfig.chunkSize
+    : CHUNK_SIZE_MAX;
 
   if (zipBuffer && zipBuffer.length >= targetChunkSize) {
     const chunkData = zipBuffer.slice(0, targetChunkSize);
@@ -564,9 +616,10 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
 function createPacket(data: Uint8Array): ArrayBuffer {
   // Single File 모드 크기 제한 체크
   if (state.mode === 'single' && state.manifest) {
-    const totalBytesSent = encryptionEnabled && cryptoSession
-      ? cryptoSession.total_bytes_encrypted
-      : (packetEncoder?.total_bytes_sent ?? 0n);
+    const totalBytesSent =
+      encryptionEnabled && cryptoSession
+        ? cryptoSession.total_bytes_encrypted
+        : (packetEncoder?.total_bytes_sent ?? 0n);
     if (totalBytesSent >= BigInt(state.manifest.totalSize)) {
       return new ArrayBuffer(0);
     }
@@ -621,7 +674,7 @@ let fallbackTotalBytes = 0;
 function createPacketFallback(data: Uint8Array): ArrayBuffer {
   const dataSize = data.length;
   const checksum = calculateCRC32Fallback(data);
-  
+
   const packet = new ArrayBuffer(22 + dataSize);
   const view = new DataView(packet);
   const arr = new Uint8Array(packet);
@@ -632,11 +685,10 @@ function createPacketFallback(data: Uint8Array): ArrayBuffer {
   view.setUint32(14, dataSize, true);
   view.setUint32(18, checksum, true);
   arr.set(data, 22);
-  
+
   fallbackTotalBytes += dataSize;
   return packet;
 }
-
 
 function processBatch(requestedCount: number) {
   if (!state.isInitialized) return;
@@ -645,10 +697,13 @@ function processBatch(requestedCount: number) {
   if (doubleBuffer.getActiveSize() === 0) doubleBuffer.swap();
 
   const chunks = doubleBuffer.takeFromActive(requestedCount);
-  
-  const totalBytesSent = encryptionEnabled && cryptoSession
-    ? Number(cryptoSession.total_bytes_encrypted)
-    : (wasmReady && packetEncoder ? Number(packetEncoder.total_bytes_sent) : fallbackTotalBytes);
+
+  const totalBytesSent =
+    encryptionEnabled && cryptoSession
+      ? Number(cryptoSession.total_bytes_encrypted)
+      : wasmReady && packetEncoder
+        ? Number(packetEncoder.total_bytes_sent)
+        : fallbackTotalBytes;
 
   const elapsed = (Date.now() - state.startTime) / 1000;
   const speed = elapsed > 0 ? totalBytesSent / elapsed : 0;
@@ -656,28 +711,37 @@ function processBatch(requestedCount: number) {
 
   let progress = 0;
   if (state.mode === 'zip') {
-    progress = totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
+    progress =
+      totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
   } else {
-    progress = totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
+    progress =
+      totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
   }
 
   if (chunks.length > 0) {
-    self.postMessage({
-      type: 'chunk-batch',
-      payload: {
-        chunks,
-        progressData: {
-          bytesTransferred: totalBytesSent,
-          totalBytes: totalSize,
-          speed,
-          progress,
-          encrypted: encryptionEnabled,
+    self.postMessage(
+      {
+        type: 'chunk-batch',
+        payload: {
+          chunks,
+          progressData: {
+            bytesTransferred: totalBytesSent,
+            totalBytes: totalSize,
+            speed,
+            progress,
+            encrypted: encryptionEnabled,
+          },
         },
       },
-    }, chunks);
+      chunks
+    );
   }
 
-  if (state.isCompleted && doubleBuffer.isEmpty() && (!zipBuffer || zipBuffer.length === 0)) {
+  if (
+    state.isCompleted &&
+    doubleBuffer.isEmpty() &&
+    (!zipBuffer || zipBuffer.length === 0)
+  ) {
     self.postMessage({ type: 'complete' });
     return;
   }
@@ -700,42 +764,58 @@ async function createAndSendImmediate(count: number) {
   }
 
   if (chunks.length > 0) {
-    const totalBytesSent = encryptionEnabled && cryptoSession
-      ? Number(cryptoSession.total_bytes_encrypted)
-      : (wasmReady && packetEncoder ? Number(packetEncoder.total_bytes_sent) : fallbackTotalBytes);
+    const totalBytesSent =
+      encryptionEnabled && cryptoSession
+        ? Number(cryptoSession.total_bytes_encrypted)
+        : wasmReady && packetEncoder
+          ? Number(packetEncoder.total_bytes_sent)
+          : fallbackTotalBytes;
     const totalSize = state.manifest?.totalSize || 0;
-    
+
     let progress = 0;
     if (state.mode === 'zip') {
-      progress = totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
+      progress =
+        totalSize > 0
+          ? Math.min(100, (zipSourceBytesRead / totalSize) * 100)
+          : 0;
     } else {
-      progress = totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
+      progress =
+        totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
     }
 
-    self.postMessage({
-      type: 'chunk-batch',
-      payload: {
-        chunks,
-        progressData: {
-          bytesTransferred: totalBytesSent,
-          totalBytes: totalSize,
-          speed: 0,
-          progress,
-          encrypted: encryptionEnabled,
+    self.postMessage(
+      {
+        type: 'chunk-batch',
+        payload: {
+          chunks,
+          progressData: {
+            bytesTransferred: totalBytesSent,
+            totalBytes: totalSize,
+            speed: 0,
+            progress,
+            encrypted: encryptionEnabled,
+          },
         },
       },
-    }, chunks);
+      chunks
+    );
   }
 
-  if (state.isCompleted && doubleBuffer.isEmpty() && (!zipBuffer || zipBuffer.length === 0)) {
+  if (
+    state.isCompleted &&
+    doubleBuffer.isEmpty() &&
+    (!zipBuffer || zipBuffer.length === 0)
+  ) {
     self.postMessage({ type: 'complete' });
   }
 }
 
 // 🚀 Worker 시작
-initWasm().then(() => {
-  self.postMessage({ type: 'ready' });
-}).catch(() => {
-  console.warn('[Sender Worker] WASM failed, using fallback');
-  self.postMessage({ type: 'ready' });
-});
+initWasm()
+  .then(() => {
+    self.postMessage({ type: 'ready' });
+  })
+  .catch(() => {
+    console.warn('[Sender Worker] WASM failed, using fallback');
+    self.postMessage({ type: 'ready' });
+  });

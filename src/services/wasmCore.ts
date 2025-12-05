@@ -1,7 +1,7 @@
 /**
  * WASM Core Module Wrapper
  * Rust로 작성된 핵심 연산 모듈을 로드하고 관리합니다.
- * 
+ *
  * 포함 기능:
  * - CRC32 체크섬 계산
  * - 패킷 인코딩/디코딩
@@ -108,7 +108,9 @@ export function headerToObject(header: PacketHeader): PacketHeaderData {
 /**
  * EncryptedPacketHeader를 plain object로 변환
  */
-export function encryptedHeaderToObject(header: EncryptedPacketHeader): EncryptedPacketHeaderData {
+export function encryptedHeaderToObject(
+  header: EncryptedPacketHeader
+): EncryptedPacketHeaderData {
   return {
     version: header.version,
     flags: header.flags,
