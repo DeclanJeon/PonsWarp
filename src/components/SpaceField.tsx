@@ -1,4 +1,4 @@
-import { useRef, useMemo, useState, useEffect } from 'react';
+import { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
@@ -6,7 +6,7 @@ import { useTransferStore } from '../store/transferStore';
 import { AppMode } from '../types/types';
 
 // 설정 상수
-const STAR_COUNT = 2000;
+const STAR_COUNT = 800;
 const STAR_SIZE = 0.05;
 const Z_BOUND = 40;
 const WARP_SPEED = 2.5;
@@ -15,8 +15,8 @@ const ACCELERATION = 0.02;
 const STRETCH_FACTOR = 15;
 
 // 🚀 [최적화] 성능 모드 설정
-const FPS_LIMIT_HIGH = 1 / 60; // 60 FPS (평소)
-const FPS_LIMIT_LOW = 1 / 20; // 20 FPS (전송 중 - CPU 절약)
+const FPS_LIMIT_HIGH = 1 / 30; // 60 FPS (평소)
+const FPS_LIMIT_LOW = 1 / 15; // 20 FPS (전송 중 - CPU 절약)
 
 /**
  * 🌟 WarpStars: InstancedMesh를 사용한 고성능 워프 효과
@@ -160,7 +160,13 @@ const WarpStars = () => {
       frustumCulled={false}
     >
       <sphereGeometry args={[STAR_SIZE, 8, 8]} />
-      <meshBasicMaterial color={[1.5, 2, 3]} toneMapped={false} />
+      {/* depthWrite와 depthTest를 false로 설정 */}
+      <meshBasicMaterial
+        color={[1.5, 2, 3]}
+        toneMapped={false}
+        depthWrite={false}
+        depthTest={false}
+      />
     </instancedMesh>
   );
 };

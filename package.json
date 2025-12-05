@@ -11,17 +11,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts,.tsx --fix",
-    "type-check": "tsc --noEmit",
-    "prepare": "husky install",
-    "commit": "git-cz",
-    "release": "semantic-release",
-    "version:bump": "node scripts/version-bump.cjs",
-    "version:bump:major": "node scripts/version-bump.cjs --type major",
-    "version:bump:minor": "node scripts/version-bump.cjs --type minor",
-    "version:bump:patch": "node scripts/version-bump.cjs --type patch",
-    "release:notes": "node scripts/generate-release-notes.cjs",
-    "release:create": "npm run version:bump && npm run release:notes",
-    "release:dry-run": "node scripts/version-bump.cjs --dry-run"
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -45,14 +35,8 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
-    "@commitlint/cli": "^18.4.3",
-    "@commitlint/config-conventional": "^18.4.3",
     "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
     "@esbuild-plugins/node-modules-polyfill": "^0.2.2",
-    "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/git": "^10.0.1",
-    "@semantic-release/github": "^9.2.6",
-    "@semantic-release/npm": "^11.0.2",
     "@types/events": "^3.0.3",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
@@ -63,38 +47,18 @@
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/coverage-v8": "^4.0.14",
     "autoprefixer": "^10.4.22",
-    "commitizen": "^4.3.0",
-    "conventional-changelog-conventionalcommits": "^7.0.2",
-    "cz-conventional-changelog": "^3.3.0",
     "eslint": "^8.55.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.0.1",
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "fast-check": "^4.3.0",
-    "husky": "^8.0.3",
     "jsdom": "^27.2.0",
-    "lint-staged": "^15.2.0",
     "postcss": "^8.5.6",
     "prettier": "^3.1.1",
-    "semantic-release": "^22.0.12",
     "tailwindcss": "^4.1.17",
     "typescript": "~5.9.3",
     "vite": "^7.2.4",
     "vitest": "^4.0.14"
-  },
-  "config": {
-    "commitizen": {
-      "path": "./node_modules/cz-conventional-changelog"
-    }
-  },
-  "lint-staged": {
-    "*.{ts,tsx}": [
-      "eslint --fix --max-warnings=-1",
-      "prettier --write"
-    ],
-    "*.{json,md}": [
-      "prettier --write"
-    ]
   }
 }
