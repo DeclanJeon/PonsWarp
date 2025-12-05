@@ -2,14 +2,14 @@
 declare const self: DedicatedWorkerGlobalScope;
 
 // ============================================================================
-// 🚀 Sender Worker V3 (WASM Core + E2E Encryption)
+// 🚀 Sender Worker V4 (WASM Core + E2E Encryption + ZIP64)
 // - CRC32 & Packet Encoding: Rust/WASM (pons-core-wasm)
 // - E2E Encryption: AES-256-GCM (pons-core-wasm)
-// - ZIP: fflate (streaming)
+// - ZIP64: Rust/WASM (pons-core-wasm) - 4GB+ 파일 지원
 // - Features: Zero-copy streaming, Aggregation, Backpressure
 // ============================================================================
 
-import init, { PacketEncoder, CryptoSession } from 'pons-core-wasm';
+import init, { PacketEncoder, CryptoSession, Zip64Stream } from 'pons-core-wasm';
 
 const CHUNK_SIZE_MIN = 16 * 1024;
 const CHUNK_SIZE_MAX = 64 * 1024;
@@ -135,6 +135,9 @@ let prefetchPromise: Promise<void> | null = null;
 let isZipPaused = false;
 let resolveZipResume: (() => void) | null = null;
 let currentZipQueueSize = 0;
+
+// 🦀 WASM ZIP64 Stream
+let zip64Stream: Zip64Stream | null = null;
 
 // 🦀 WASM PacketEncoder
 let packetEncoder: PacketEncoder | null = null;
@@ -283,7 +286,8 @@ async function initZipStream() {
   isZipPaused = false;
   resolveZipResume = null;
 
-  const { Zip } = await import('fflate');
+  // 🦀 WASM ZIP64 스트림 초기화 (4GB+ 파일 지원)
+  zip64Stream = new Zip64Stream(6); // 압축 레벨 6
 
   const zipDataQueue: Uint8Array[] = [];
   let resolveDataAvailable: (() => void) | null = null;
@@ -301,22 +305,6 @@ async function initZipStream() {
     }
   };
 
-  const zip = new Zip((err, data, final) => {
-    if (err) {
-      console.error('[Sender Worker] ZIP error:', err);
-      hasError = true;
-      resolveDataAvailable?.();
-      resolveDataAvailable = null;
-      return;
-    }
-    if (data && data.length > 0) pushToQueue(data);
-    if (final) {
-      zipFinalized = true;
-      resolveDataAvailable?.();
-      resolveDataAvailable = null;
-    }
-  });
-
   const processFilesAsync = async () => {
     try {
       for (let i = 0; i < state.files.length; i++) {
@@ -328,13 +316,14 @@ async function initZipStream() {
           filePath = state.manifest.files[i].path;
         }
 
-        const { ZipDeflate } = await import('fflate');
-        const fileStream = new ZipDeflate(filePath, { level: 6 });
-        zip.add(fileStream);
+        // 🦀 파일 시작 (Local File Header 생성)
+        const header = zip64Stream!.begin_file(filePath, BigInt(file.size));
+        pushToQueue(header);
 
         const reader = file.stream().getReader();
         try {
           while (true) {
+            // 백프레셔 체크
             if (currentZipQueueSize > ZIP_QUEUE_HIGH_WATER_MARK) {
               isZipPaused = true;
               await new Promise<void>(resolve => {
@@ -344,21 +333,40 @@ async function initZipStream() {
             }
 
             const { done, value } = await reader.read();
-            if (done) {
-              fileStream.push(new Uint8Array(0), true);
-              break;
-            }
+            if (done) break;
+
             zipSourceBytesRead += value.length;
-            fileStream.push(value);
+
+            // 🦀 WASM DEFLATE 압축
+            const compressed = zip64Stream!.compress_chunk(value);
+            if (compressed.length > 0) {
+              pushToQueue(compressed);
+            }
           }
         } finally {
           reader.releaseLock();
         }
+
+        // 🦀 파일 종료 (Data Descriptor 생성)
+        const descriptor = zip64Stream!.end_file();
+        if (descriptor.length > 0) {
+          pushToQueue(descriptor);
+        }
       }
-      if (isTransferActive) zip.end();
+
+      // 🦀 ZIP 아카이브 종료 (Central Directory + EOCD64)
+      if (isTransferActive && zip64Stream) {
+        const footer = zip64Stream.finalize();
+        pushToQueue(footer);
+        zipFinalized = true;
+        resolveDataAvailable?.();
+        resolveDataAvailable = null;
+      }
     } catch (e) {
-      console.error('[Sender Worker] Fatal ZIP error:', e);
+      console.error('[Sender Worker] Fatal ZIP64 error:', e);
       hasError = true;
+      resolveDataAvailable?.();
+      resolveDataAvailable = null;
     }
   };
 
@@ -382,7 +390,7 @@ async function initZipStream() {
         return;
       }
       if (hasError) {
-        controller.error(new Error('ZIP failed'));
+        controller.error(new Error('ZIP64 failed'));
         return;
       }
 
@@ -392,7 +400,7 @@ async function initZipStream() {
 
       if (zipDataQueue.length > 0) consumeAndCheckResume(zipDataQueue.shift()!);
       else if (zipFinalized) controller.close();
-      else if (hasError) controller.error(new Error('ZIP failed'));
+      else if (hasError) controller.error(new Error('ZIP64 failed'));
     },
   });
 
@@ -437,6 +445,8 @@ function resetWorker() {
 
   packetEncoder?.reset();
   cryptoSession?.reset();
+  zip64Stream?.reset();
+  zip64Stream = null;
 }
 
 function triggerPrefetch() {

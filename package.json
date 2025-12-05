@@ -1,7 +1,7 @@
 {
   "name": "ponswarp",
   "private": true,
-  "version": "0.7.0-beta.1",
+  "version": "0.7.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,7 +23,7 @@
     "framer-motion": "^12.23.24",
     "idb-keyval": "^6.2.2",
     "lucide-react": "^0.555.0",
-    "pons-core-wasm": "^0.2.2",
+    "pons-core-wasm": "^0.2.5",
     "process": "^0.11.10",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
