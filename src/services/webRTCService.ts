@@ -47,6 +47,9 @@ class ReceiverService {
     { urls: 'stun:stun.l.google.com:19302' },
   ];
 
+  // 🚨 [추가] TURN 설정 로딩 상태를 추적하기 위한 Promise
+  private turnConfigPromise: Promise<void> | null = null;
+
   // 🔐 [E2E Encryption]
   private cryptoService: CryptoService | null = null;
   private encryptionEnabled: boolean = false;
@@ -123,14 +126,14 @@ class ReceiverService {
       await signalingService.connect();
       await signalingService.joinRoom(roomId);
 
-      // 2. TURN 설정 (비동기 Fetch, 실패해도 진행)
-      this.fetchTurnConfig(roomId).catch(err =>
-        logWarn(
-          '[Receiver]',
-          'TURN config fetch failed, using default STUN',
-          err
-        )
-      );
+      // 2. TURN 설정 요청 (Promise 저장)
+      // 🚨 [수정] 요청을 시작하고 Promise를 멤버 변수에 저장합니다.
+      this.turnConfigPromise = this.fetchTurnConfig(roomId);
+
+      // 3. UI 상태 변경 전에 TURN 설정이 오거나, 최대 2초 기다림 (지연 최소화)
+      // 이렇게 하면 Offer가 오기 전에 최대한 TURN 정보를 확보하려고 시도합니다.
+      const timeoutPromise = new Promise<void>(resolve => setTimeout(resolve, 2000));
+      await Promise.race([this.turnConfigPromise, timeoutPromise]);
 
       this.emit('status', 'CONNECTING');
     } catch (error: any) {
@@ -262,12 +265,22 @@ class ReceiverService {
 
     logInfo('[Receiver]', `Received offer from ${d.from}`);
 
+    // 🚨 [추가] TURN 설정이 아직 로딩 중이라면 확실하게 기다립니다.
+    if (this.turnConfigPromise) {
+      console.log('[Receiver] Waiting for TURN config before accepting offer...');
+      try {
+        await this.turnConfigPromise;
+      } catch (e) {
+        console.warn('[Receiver] TURN config failed, proceeding with default STUN');
+      }
+    }
+
     // 기존 Peer가 있다면 정리 (재연결 시나리오)
     if (this.peer) {
       this.peer.destroy();
     }
 
-    // SinglePeerConnection 생성 (Receiver는 initiator: false)
+    // SinglePeerConnection 생성 (이제 this.iceServers에는 443 TURN 정보가 들어있음)
     const config: PeerConfig = { iceServers: this.iceServers };
     this.peer = new SinglePeerConnection(d.from, false, config);
 
