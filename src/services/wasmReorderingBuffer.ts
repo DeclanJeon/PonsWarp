@@ -1,13 +1,4 @@
-/**
- * WASM 기반 Reordering Buffer Wrapper
- *
- * Rust/WASM으로 구현된 고성능 재정렬 버퍼.
- * GC 오버헤드 없이 Arena 기반 메모리 관리로 고속 처리.
- *
- * WASM 로드 실패 시 자동으로 TypeScript fallback 사용.
- */
-
-import init, { WasmReorderingBuffer as WasmBuffer } from 'pons-core-wasm';
+import initPonsCore, { WasmReorderingBuffer as WasmBuffer, init } from 'pons-core-wasm';
 import { ReorderingBuffer } from './reorderingBuffer';
 import { logDebug, logWarn, logError } from '../utils/logger';
 
@@ -35,7 +26,7 @@ export class WasmReorderingBuffer {
     }
 
     try {
-      await init();
+      await initPonsCore();
       this.wasmBuffer = new WasmBuffer(BigInt(startOffset));
       this.useWasm = true;
       this.initialized = true;
@@ -73,7 +64,7 @@ export class WasmReorderingBuffer {
 
         if (result) {
           // Uint8Array를 ArrayBuffer로 변환
-          return [result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength)];
+          return [result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength) as ArrayBuffer];
         }
         return [];
       } catch (e) {
