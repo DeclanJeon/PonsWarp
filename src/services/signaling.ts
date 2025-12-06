@@ -288,11 +288,18 @@ class SignalingService {
 
       console.log('[Signaling] 🔄 Requesting TURN config for room:', roomId);
 
+      // 타임아웃 설정 (3초) - 네트워크가 느릴 경우를 대비
+      const timeout = setTimeout(() => {
+        reject(new Error('TURN config request timed out'));
+      }, 3000);
+
       // Socket.IO 이벤트로 TURN 설정 요청
       this.socket.emit(
         'request-turn-config',
         { roomId },
         (response: TurnConfigResponse) => {
+          clearTimeout(timeout); // 응답 오면 타임아웃 해제
+          
           if (response.success && response.data) {
             console.log('[Signaling] ✅ TURN config received:', {
               roomId,
