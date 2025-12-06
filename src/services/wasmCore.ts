@@ -22,6 +22,7 @@ import init, {
   create_key_confirmation,
   verify_key_confirmation,
   is_encrypted_packet,
+  WasmReorderingBuffer,
 } from 'pons-core-wasm';
 
 let wasmInitialized = false;
@@ -71,6 +72,8 @@ export {
   create_key_confirmation,
   verify_key_confirmation,
   is_encrypted_packet,
+  // Reordering Buffer
+  WasmReorderingBuffer,
 };
 
 // Type definitions for better TypeScript support
