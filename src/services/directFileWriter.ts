@@ -23,7 +23,7 @@
  */
 
 import streamSaver from 'streamsaver';
-import { ReorderingBuffer } from './reorderingBuffer';
+import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
 
@@ -80,8 +80,8 @@ export class DirectFileWriter {
   private opfsFileHandle: FileSystemFileHandle | null = null;
   private opfsWriter: FileSystemWritableFileStream | null = null;
 
-  // 🚀 [추가] 재정렬 버퍼 (StreamSaver 모드용)
-  private reorderingBuffer: ReorderingBuffer | null = null;
+  // 🚀 [추가] 재정렬 버퍼 (WASM 기반 고성능 버퍼)
+  private reorderingBuffer: WasmReorderingBuffer | null = null;
 
   // 🚀 [추가] 쓰기 작업을 순차적으로 처리하기 위한 Promise 체인
   private writeQueue: Promise<void> = Promise.resolve();
@@ -608,8 +608,9 @@ export class DirectFileWriter {
       this.writer = fileStream.getWriter();
       this.writerMode = 'streamsaver';
 
-      // 순차 데이터 보장
-      this.reorderingBuffer = new ReorderingBuffer(0);
+      // 순차 데이터 보장 (WASM 기반 고성능 버퍼)
+      this.reorderingBuffer = new WasmReorderingBuffer();
+      await this.reorderingBuffer.initialize(0);
       logInfo('[DirectFileWriter]', `✅ StreamSaver ready: ${fileName}`);
 
       // Writer 상태 확인
@@ -663,8 +664,9 @@ export class DirectFileWriter {
     this.writerMode = 'blob-fallback';
     this.blobChunks = [];
 
-    // Blob 모드에서도 순차 데이터 보장
-    this.reorderingBuffer = new ReorderingBuffer(0);
+    // Blob 모드에서도 순차 데이터 보장 (WASM 기반 고성능 버퍼)
+    this.reorderingBuffer = new WasmReorderingBuffer();
+    await this.reorderingBuffer.initialize(0);
 
     // 파일명 저장 (finalize에서 사용)
     this.manifest.downloadFileName = fileName;
@@ -758,8 +760,9 @@ export class DirectFileWriter {
 
       this.writerMode = 'opfs-fallback';
 
-      // 순차 데이터 보장
-      this.reorderingBuffer = new ReorderingBuffer(0);
+      // 순차 데이터 보장 (WASM 기반 고성능 버퍼)
+      this.reorderingBuffer = new WasmReorderingBuffer();
+      await this.reorderingBuffer.initialize(0);
 
       // 파일명 저장 (finalize에서 사용)
       this.manifest.downloadFileName = fileName;
@@ -816,8 +819,9 @@ export class DirectFileWriter {
       this.writer = await handle.createWritable();
       this.writerMode = 'file-system-access';
 
-      // 순차 데이터 보장 (Batch Merge를 위해 필수)
-      this.reorderingBuffer = new ReorderingBuffer(0);
+      // 순차 데이터 보장 (WASM 기반 고성능 버퍼)
+      this.reorderingBuffer = new WasmReorderingBuffer();
+      await this.reorderingBuffer.initialize(0);
       logInfo('[DirectFileWriter]', `✅ File System Access ready: ${fileName}`);
 
       // Writer 상태 확인
