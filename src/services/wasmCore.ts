@@ -23,6 +23,8 @@ import init, {
   verify_key_confirmation,
   is_encrypted_packet,
   WasmReorderingBuffer,
+  ZeroCopyPacketPool,
+  ZeroCopyBatchPool,
 } from 'pons-core-wasm';
 
 let wasmInitialized = false;
@@ -74,6 +76,9 @@ export {
   is_encrypted_packet,
   // Reordering Buffer
   WasmReorderingBuffer,
+  // Zero-Copy Packet Pool
+  ZeroCopyPacketPool,
+  ZeroCopyBatchPool,
 };
 
 // Type definitions for better TypeScript support

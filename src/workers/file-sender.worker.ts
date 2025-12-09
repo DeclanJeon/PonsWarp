@@ -2,14 +2,20 @@
 declare const self: DedicatedWorkerGlobalScope;
 
 // ============================================================================
-// 🚀 Sender Worker V4 (WASM Core + E2E Encryption + ZIP64)
+// 🚀 Sender Worker V5 (Zero-Copy Packet Pool + E2E Encryption + ZIP64)
+// - Zero-Copy: WASM 메모리 직접 접근으로 GC 오버헤드 최소화
 // - CRC32 & Packet Encoding: Rust/WASM (pons-core-wasm)
 // - E2E Encryption: AES-256-GCM (pons-core-wasm)
 // - ZIP64: Rust/WASM (pons-core-wasm) - 4GB+ 파일 지원
 // - Features: Zero-copy streaming, Aggregation, Backpressure
 // ============================================================================
 
-import init, { PacketEncoder, CryptoSession, Zip64Stream } from 'pons-core-wasm';
+import init, { 
+  PacketEncoder, 
+  CryptoSession, 
+  Zip64Stream,
+  ZeroCopyPacketPool 
+} from 'pons-core-wasm';
 
 const CHUNK_SIZE_MIN = 16 * 1024;
 const CHUNK_SIZE_MAX = 64 * 1024;
@@ -139,9 +145,14 @@ let currentZipQueueSize = 0;
 // 🦀 WASM ZIP64 Stream
 let zip64Stream: Zip64Stream | null = null;
 
-// 🦀 WASM PacketEncoder
+// 🦀 WASM PacketEncoder (레거시 fallback)
 let packetEncoder: PacketEncoder | null = null;
 let wasmReady = false;
+
+// 🚀 Zero-Copy Packet Pool
+let zeroCopyPool: ZeroCopyPacketPool | null = null;
+let wasmMemory: WebAssembly.Memory | null = null;
+let zeroCopyEnabled = false;
 
 // 🔐 E2E Encryption
 let cryptoSession: CryptoSession | null = null;
@@ -150,13 +161,24 @@ let encryptionEnabled = false;
 // WASM 초기화
 async function initWasm() {
   try {
-    await init();
+    const wasmInstance = await init();
+    
+    // Zero-Copy Pool 초기화 (64 슬롯)
+    zeroCopyPool = new ZeroCopyPacketPool();
+    
+    // WASM 메모리 참조 획득
+    wasmMemory = wasmInstance.memory;
+    zeroCopyEnabled = true;
+    
+    // 레거시 PacketEncoder도 초기화 (fallback용)
     packetEncoder = new PacketEncoder();
     wasmReady = true;
-    console.log('[Sender Worker] WASM initialized');
+    
+    console.log('[Sender Worker] WASM initialized with Zero-Copy Pool');
   } catch (e) {
     console.error('[Sender Worker] WASM init failed:', e);
     wasmReady = false;
+    zeroCopyEnabled = false;
   }
 }
 
@@ -446,6 +468,7 @@ function resetWorker() {
 
   packetEncoder?.reset();
   cryptoSession?.reset();
+  zeroCopyPool?.reset();
   zip64Stream?.reset();
   zip64Stream = null;
 }
@@ -622,24 +645,72 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
 }
 
 /**
- * 🦀 WASM 기반 패킷 생성 (암호화 지원)
+ * 🚀 Zero-Copy 패킷 생성
+ * WASM 메모리에 직접 쓰기하여 GC 오버헤드 최소화
  */
-function createPacket(data: Uint8Array): ArrayBuffer {
-  // Single File 모드 크기 제한 체크
-  if (state.mode === 'single' && state.manifest) {
-    const totalBytesSent =
-      encryptionEnabled && cryptoSession
-        ? cryptoSession.total_bytes_encrypted
-        : (packetEncoder?.total_bytes_sent ?? 0n);
-    if (totalBytesSent >= BigInt(state.manifest.totalSize)) {
-      return new ArrayBuffer(0);
-    }
-    const remaining = BigInt(state.manifest.totalSize) - totalBytesSent;
-    if (BigInt(data.length) > remaining) {
-      data = data.subarray(0, Number(remaining));
-    }
+function createPacketZeroCopy(data: Uint8Array): ArrayBuffer {
+  if (!zeroCopyPool || !wasmMemory) {
+    return createPacketLegacy(data);
   }
 
+  // 슬롯 획득: [slot_id, data_ptr, max_size]
+  const slotInfo = zeroCopyPool.acquire_slot();
+  if (slotInfo[0] < 0) {
+    // 풀 가득 참 - 레거시 방식으로 fallback
+    console.warn('[Sender Worker] Zero-Copy pool exhausted, using legacy');
+    return createPacketLegacy(data);
+  }
+
+  const slotId = slotInfo[0];
+  const dataPtr = slotInfo[1];
+  const maxSize = slotInfo[2];
+
+  // 데이터 크기 검증
+  if (data.length > maxSize) {
+    zeroCopyPool.release_slot(slotId);
+    console.warn('[Sender Worker] Data too large for slot, using legacy');
+    return createPacketLegacy(data);
+  }
+
+  // 🚀 Zero-Copy: WASM 메모리에 직접 쓰기
+  const wasmBuffer = new Uint8Array(wasmMemory.buffer, dataPtr, data.length);
+  wasmBuffer.set(data);
+
+  // 암호화 모드
+  let packetLen: number;
+  if (encryptionEnabled && cryptoSession) {
+    packetLen = zeroCopyPool.commit_encrypted_slot(slotId, data.length, cryptoSession);
+  } else {
+    packetLen = zeroCopyPool.commit_slot(slotId, data.length);
+  }
+
+  if (packetLen === 0) {
+    zeroCopyPool.release_slot(slotId);
+    return createPacketLegacy(data);
+  }
+
+  // 패킷 뷰 획득: [ptr, len]
+  const view = zeroCopyPool.get_packet_view(slotId);
+  const packetPtr = view[0];
+  const packetLength = view[1];
+
+  // 🚀 Zero-Copy 전송: WASM 메모리에서 직접 ArrayBuffer 생성
+  // WebRTC는 ArrayBuffer를 전송 후 detach하므로 복사 필요
+  const packet = new ArrayBuffer(packetLength);
+  const packetView = new Uint8Array(packet);
+  const sourceView = new Uint8Array(wasmMemory.buffer, packetPtr, packetLength);
+  packetView.set(sourceView);
+
+  // 슬롯 반환 (재사용 가능)
+  zeroCopyPool.release_slot(slotId);
+
+  return packet;
+}
+
+/**
+ * 🦀 레거시 WASM 기반 패킷 생성 (암호화 지원)
+ */
+function createPacketLegacy(data: Uint8Array): ArrayBuffer {
   // 🔐 암호화 모드
   if (encryptionEnabled && cryptoSession) {
     const packet = cryptoSession.encrypt_chunk(data);
@@ -658,6 +729,47 @@ function createPacket(data: Uint8Array): ArrayBuffer {
 
   // Fallback: TypeScript 구현
   return createPacketFallback(data);
+}
+
+/**
+ * 🦀 WASM 기반 패킷 생성 (암호화 지원)
+ */
+function createPacket(data: Uint8Array): ArrayBuffer {
+  // Single File 모드 크기 제한 체크
+  if (state.mode === 'single' && state.manifest) {
+    const totalBytesSent = getTotalBytesSent();
+    if (totalBytesSent >= BigInt(state.manifest.totalSize)) {
+      return new ArrayBuffer(0);
+    }
+    const remaining = BigInt(state.manifest.totalSize) - totalBytesSent;
+    if (BigInt(data.length) > remaining) {
+      data = data.subarray(0, Number(remaining));
+    }
+  }
+
+  // 🚀 Zero-Copy 모드 우선 사용
+  if (zeroCopyEnabled && zeroCopyPool && wasmMemory) {
+    return createPacketZeroCopy(data);
+  }
+
+  // 레거시 모드
+  return createPacketLegacy(data);
+}
+
+/**
+ * 전송된 총 바이트 수 조회
+ */
+function getTotalBytesSent(): bigint {
+  if (encryptionEnabled && cryptoSession) {
+    return cryptoSession.total_bytes_encrypted;
+  }
+  if (zeroCopyEnabled && zeroCopyPool) {
+    return BigInt(zeroCopyPool.total_bytes);
+  }
+  if (wasmReady && packetEncoder) {
+    return packetEncoder.total_bytes_sent;
+  }
+  return BigInt(fallbackTotalBytes);
 }
 
 // Fallback CRC32
@@ -709,12 +821,7 @@ function processBatch(requestedCount: number) {
 
   const chunks = doubleBuffer.takeFromActive(requestedCount);
 
-  const totalBytesSent =
-    encryptionEnabled && cryptoSession
-      ? Number(cryptoSession.total_bytes_encrypted)
-      : wasmReady && packetEncoder
-        ? Number(packetEncoder.total_bytes_sent)
-        : fallbackTotalBytes;
+  const totalBytesSent = Number(getTotalBytesSent());
 
   const elapsed = (Date.now() - state.startTime) / 1000;
   const speed = elapsed > 0 ? totalBytesSent / elapsed : 0;
@@ -775,12 +882,7 @@ async function createAndSendImmediate(count: number) {
   }
 
   if (chunks.length > 0) {
-    const totalBytesSent =
-      encryptionEnabled && cryptoSession
-        ? Number(cryptoSession.total_bytes_encrypted)
-        : wasmReady && packetEncoder
-          ? Number(packetEncoder.total_bytes_sent)
-          : fallbackTotalBytes;
+    const totalBytesSent = Number(getTotalBytesSent());
     const totalSize = state.manifest?.totalSize || 0;
 
     let progress = 0;

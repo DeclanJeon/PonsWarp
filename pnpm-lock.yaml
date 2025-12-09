@@ -36,8 +36,8 @@ importers:
         specifier: ^0.555.0
         version: 0.555.0(react@19.2.0)
       pons-core-wasm:
-        specifier: 0.4.1
-        version: 0.4.1
+        specifier: ^0.4.2
+        version: 0.4.2
       process:
         specifier: ^0.11.10
         version: 0.11.10
@@ -2061,8 +2061,8 @@ packages:
     resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
     engines: {node: '>=12'}
 
-  pons-core-wasm@0.4.1:
-    resolution: {integrity: sha512-femHtVbKABODaNwaZxeYhgUh+/y9rdK5bytRxQdteRrqxOiiVLtC/+J28ymV02NMgq7crtHeLXvK4pM9Fkd91w==}
+  pons-core-wasm@0.4.2:
+    resolution: {integrity: sha512-Z8PYjGa6Ji7imHrqbF2qxLeDjINfev8OwbiCq4HMeNOmDCnFNsCxr1wTyk5lplfMEZJQahs/BI6AUyiCrKWLFA==}
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -4752,7 +4752,7 @@ snapshots:
 
   picomatch@4.0.3: {}
 
-  pons-core-wasm@0.4.1: {}
+  pons-core-wasm@0.4.2: {}
 
   possible-typed-array-names@1.1.0: {}
 
