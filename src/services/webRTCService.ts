@@ -9,7 +9,11 @@ console.log(
   '[webRTCService] ✅ [DEBUG] - Architecture unified with SwarmManager'
 );
 
-import { signalingService, TurnConfigResponse } from './signaling';
+import { TurnConfigResponse } from './signaling';
+import { getSignalingService } from './signaling-factory';
+
+// 팩토리를 통해 시그널링 서비스 가져오기
+const signalingService = getSignalingService();
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
 import { CryptoService } from './cryptoService';
@@ -56,6 +60,11 @@ class ReceiverService {
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
 
+  // Bound Handlers
+  private handleRoomFull = () => {
+    this.emit('room-full', 'Room is currently occupied. Please wait.');
+  };
+
   constructor() {
     this.setupSignalingHandlers();
   }
@@ -99,12 +108,16 @@ class ReceiverService {
   }
 
   private setupSignalingHandlers() {
-    signalingService.on('offer', this.handleOffer.bind(this));
-    signalingService.on('ice-candidate', this.handleIceCandidate.bind(this));
-    signalingService.on('room-full', () => {
-      this.emit('room-full', 'Room is currently occupied. Please wait.');
-    });
+    signalingService.on('offer', this.handleOffer);
+    signalingService.on('ice-candidate', this.handleIceCandidate);
+    signalingService.on('room-full', this.handleRoomFull);
     // Receiver는 'answer'를 받을 일이 없음 (Answerer 역할이므로)
+  }
+
+  private removeSignalingHandlers() {
+    signalingService.off('offer', this.handleOffer);
+    signalingService.off('ice-candidate', this.handleIceCandidate);
+    signalingService.off('room-full', this.handleRoomFull);
   }
 
   // ======================= PUBLIC API =======================
@@ -117,27 +130,31 @@ class ReceiverService {
 
     console.log('[Receiver] Initializing connection for room:', roomId);
 
-    // 기존 연결 정리
-    this.cleanup();
+    // 기존 연결 정리 (Adapter의 연결은 끊지 않고 피어 상태만 정리)
+    this.resetState();
     this.roomId = roomId;
 
     try {
-      // 1. 시그널링 연결
+      // 1. 시그널링 연결 (이미 연결되어 있다면 즉시 resolve됨)
       await signalingService.connect();
+
+      // 2. 방 입장
       await signalingService.joinRoom(roomId);
 
-      // 2. TURN 설정 요청 (Promise 저장)
-      // 🚨 [수정] 요청을 시작하고 Promise를 멤버 변수에 저장합니다.
-      this.turnConfigPromise = this.fetchTurnConfig(roomId);
+      // 3. TURN 설정 요청
+      // Rust 서버의 경우 WebSocket으로 요청하므로 응답을 기다립니다.
+      // 실패하더라도(타임아웃) P2P 연결 시도를 막지 않도록 catch 처리
+      this.turnConfigPromise = this.fetchTurnConfig(roomId).catch(e => {
+        console.warn(
+          '[Receiver] TURN config fetch failed (using default STUN):',
+          e
+        );
+      });
 
-      // 3. UI 상태 변경 전에 TURN 설정이 오거나, 최대 2초 기다림 (지연 최소화)
-      // 이렇게 하면 Offer가 오기 전에 최대한 TURN 정보를 확보하려고 시도합니다.
-      const timeoutPromise = new Promise<void>(resolve => setTimeout(resolve, 2000));
-      await Promise.race([this.turnConfigPromise, timeoutPromise]);
-
+      // UI 상태 변경
       this.emit('status', 'CONNECTING');
     } catch (error: any) {
-      logError('[Receiver]', 'Initialization failed:', error);
+      logError('[Receiver] Initialization failed:', error);
       this.emit('error', error.message || 'Initialization failed');
     }
   }
@@ -215,7 +232,13 @@ class ReceiverService {
   }
 
   public cleanup() {
-    logInfo('[Receiver]', 'Cleaning up resources...');
+    logInfo('[Receiver]', 'Cleaning up resources (Full)...');
+    this.resetState();
+    this.removeSignalingHandlers();
+  }
+
+  private resetState() {
+    logInfo('[Receiver]', 'Resetting state...');
     this.roomId = null;
     this.connectedPeerId = null;
 
@@ -238,9 +261,10 @@ class ReceiverService {
 
   private async fetchTurnConfig(roomId: string) {
     try {
-      const response: TurnConfigResponse =
-        await signalingService.requestTurnConfig(roomId);
-      if (response.success && response.data) {
+      const response = (await signalingService.requestTurnConfig(
+        roomId
+      )) as TurnConfigResponse;
+      if (response?.success && response?.data) {
         this.iceServers = response.data.iceServers;
       }
     } catch (error) {
@@ -252,6 +276,16 @@ class ReceiverService {
    * Sender로부터 Offer 수신 시 처리
    */
   private handleOffer = async (d: any) => {
+    // 🔍 [DEBUG] SDP 매핑 확인
+    console.log('[Receiver] 🚨 [DEBUG] Offer data received:', {
+      from: d.from,
+      hasOffer: !!d.offer,
+      hasSdp: !!d.sdp,
+      offerType: typeof d.offer,
+      sdpType: typeof d.sdp,
+      fullData: d,
+    });
+
     // 이미 연결된 Sender가 있다면 다른 요청 무시 (1:1 연결 유지)
     if (this.connectedPeerId && d.from !== this.connectedPeerId) {
       logWarn('[Receiver]', `Ignoring offer from unknown peer: ${d.from}`);
@@ -267,11 +301,15 @@ class ReceiverService {
 
     // 🚨 [추가] TURN 설정이 아직 로딩 중이라면 확실하게 기다립니다.
     if (this.turnConfigPromise) {
-      console.log('[Receiver] Waiting for TURN config before accepting offer...');
+      console.log(
+        '[Receiver] Waiting for TURN config before accepting offer...'
+      );
       try {
         await this.turnConfigPromise;
       } catch (e) {
-        console.warn('[Receiver] TURN config failed, proceeding with default STUN');
+        console.warn(
+          '[Receiver] TURN config failed, proceeding with default STUN'
+        );
       }
     }
 

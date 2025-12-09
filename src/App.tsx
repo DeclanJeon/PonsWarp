@@ -11,7 +11,7 @@ import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
 import { AppMode } from './types/types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { signalingService } from './services/signaling';
+import { signalingFactory } from './services/signaling-factory';
 import { MagneticButton } from './components/ui/MagneticButton';
 import { TransferProgressBar } from './components/ui/TransferProgressBar';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -51,7 +51,15 @@ const App: React.FC = () => {
   useEffect(() => {
     const initSignaling = async () => {
       try {
-        await signalingService.connect();
+        console.log(
+          '[App] Connecting to signaling server:',
+          signalingFactory.getServerUrl()
+        );
+        await signalingFactory.connect();
+        console.log(
+          '[App] Signaling connected, using Rust:',
+          signalingFactory.isUsingRust()
+        );
       } catch (error: any) {
         toast.error('Failed to connect to signaling server');
         console.error('[App] Signaling connection failed:', error);

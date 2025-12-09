@@ -1,6 +1,9 @@
 import { io, Socket } from 'socket.io-client';
 import { SIGNALING_SERVER_URL } from '../utils/constants';
 
+// SIGNALING_SERVER_URL이 undefined일 경우 기본값 사용
+const SERVER_URL = SIGNALING_SERVER_URL || 'http://localhost:5501';
+
 type SignalHandler = (data: any) => void;
 
 // TURN 설정 관련 타입 정의
@@ -59,14 +62,11 @@ class SignalingService {
     }
 
     this.isConnecting = true;
-    console.log(
-      '[Signaling] 🔌 Initiating connection to:',
-      SIGNALING_SERVER_URL
-    );
+    console.log('[Signaling] 🔌 Initiating connection to:', SERVER_URL);
 
     this.connectionPromise = new Promise((resolve, reject) => {
       // 🚨 [수정] 옵션 최적화: 불필요한 재연결 시도를 줄이고 타임아웃 설정
-      this.socket = io(SIGNALING_SERVER_URL, {
+      this.socket = io(SERVER_URL, {
         transports: ['websocket'], // polling 제외 (속도 향상)
         reconnectionAttempts: 3,
         timeout: 5000,
@@ -299,7 +299,7 @@ class SignalingService {
         { roomId },
         (response: TurnConfigResponse) => {
           clearTimeout(timeout); // 응답 오면 타임아웃 해제
-          
+
           if (response.success && response.data) {
             console.log('[Signaling] ✅ TURN config received:', {
               roomId,
@@ -474,7 +474,7 @@ class SignalingService {
       );
 
       const response = await fetch(
-        `${SIGNALING_SERVER_URL}/api/turn-config?roomId=${encodeURIComponent(roomId)}`,
+        `${SERVER_URL}/api/turn-config?roomId=${encodeURIComponent(roomId)}`,
         {
           method: 'GET',
           headers: {
@@ -523,7 +523,7 @@ class SignalingService {
         roomId
       );
 
-      const response = await fetch(`${SIGNALING_SERVER_URL}/api/turn-refresh`, {
+      const response = await fetch(`${SERVER_URL}/api/turn-refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
