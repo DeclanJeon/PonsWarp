@@ -15,7 +15,10 @@ import {
   PeerConfig,
   PeerState,
 } from './singlePeerConnection';
-import { signalingService } from './signaling';
+import { getSignalingService } from './signaling-factory';
+
+// 팩토리를 통해 시그널링 서비스 가져오기
+const signalingService = getSignalingService();
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
 import { logInfo, logError, logDebug, logWarn } from '../utils/logger';
@@ -119,7 +122,18 @@ export class SwarmManager {
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
 
+  // Bound Handlers to allow removal
+  private boundHandlePeerJoined = this.handlePeerJoined.bind(this);
+  private boundHandleOffer = this.handleOffer.bind(this);
+  private boundHandleAnswer = this.handleAnswer.bind(this);
+  private boundHandleIceCandidate = this.handleIceCandidate.bind(this);
+  private boundHandleUserLeft = this.handleUserLeft.bind(this);
+  private boundHandleRoomFull = () => {
+    this.emit('room-full', 'Room is at maximum capacity');
+  };
+
   constructor() {
+    console.log('[SwarmManager] 🆕 Initializing new instance');
     this.setupSignalingHandlers();
   }
 
@@ -156,14 +170,21 @@ export class SwarmManager {
   }
 
   private setupSignalingHandlers(): void {
-    signalingService.on('peer-joined', this.handlePeerJoined.bind(this));
-    signalingService.on('offer', this.handleOffer.bind(this));
-    signalingService.on('answer', this.handleAnswer.bind(this));
-    signalingService.on('ice-candidate', this.handleIceCandidate.bind(this));
-    signalingService.on('user-left', this.handleUserLeft.bind(this));
-    signalingService.on('room-full', () => {
-      this.emit('room-full', 'Room is at maximum capacity');
-    });
+    signalingService.on('peer-joined', this.boundHandlePeerJoined);
+    signalingService.on('offer', this.boundHandleOffer);
+    signalingService.on('answer', this.boundHandleAnswer);
+    signalingService.on('ice-candidate', this.boundHandleIceCandidate);
+    signalingService.on('user-left', this.boundHandleUserLeft);
+    signalingService.on('room-full', this.boundHandleRoomFull);
+  }
+
+  private removeSignalingHandlers(): void {
+    signalingService.off('peer-joined', this.boundHandlePeerJoined);
+    signalingService.off('offer', this.boundHandleOffer);
+    signalingService.off('answer', this.boundHandleAnswer);
+    signalingService.off('ice-candidate', this.boundHandleIceCandidate);
+    signalingService.off('user-left', this.boundHandleUserLeft);
+    signalingService.off('room-full', this.boundHandleRoomFull);
   }
 
   // ======================= 피어 관리 =======================
@@ -340,14 +361,22 @@ export class SwarmManager {
   // ======================= 시그널링 =======================
 
   private handlePeerJoined(data: any): void {
+    console.log('[SwarmManager] 👤 handlePeerJoined called with:', data);
+
     // roomId가 설정되지 않았으면 무시 (아직 초기화되지 않음)
-    if (!this.roomId) return;
+    if (!this.roomId) {
+      console.warn('[SwarmManager] ⚠️ handlePeerJoined ignored: No roomId set');
+      return;
+    }
 
     const peerId = data?.socketId || data?.from;
     if (!peerId) return;
 
     // 자기 자신은 무시
-    if (peerId === signalingService.getSocketId()) return;
+    if (peerId === signalingService.getSocketId()) {
+      console.log('[SwarmManager] ℹ️ handlePeerJoined ignored: Self connection');
+      return;
+    }
 
     logInfo('[SwarmManager]', `Peer joined room: ${peerId}`);
 
@@ -1179,7 +1208,7 @@ export class SwarmManager {
     roomId: string
   ): Promise<void> {
     logInfo('[SwarmManager]', 'Initializing sender...');
-    this.cleanup();
+    this.resetState();
 
     this.roomId = roomId;
     this.pendingManifest = manifest;
@@ -1547,8 +1576,10 @@ export class SwarmManager {
 
   private async fetchTurnConfig(roomId: string): Promise<void> {
     try {
-      const response = await signalingService.requestTurnConfig(roomId);
-      if (response.success && response.data) {
+      const response = (await signalingService.requestTurnConfig(
+        roomId
+      )) as any;
+      if (response?.success && response?.data) {
         this.iceServers = response.data.iceServers;
       }
     } catch (error) {
@@ -1596,14 +1627,23 @@ export class SwarmManager {
   }
 
   /**
-   * 리소스 정리
+   * 리소스 정리 (컴포넌트 언마운트 시 호출)
    */
   public cleanup(): void {
-    logInfo('[SwarmManager]', 'Cleaning up...');
+    logInfo('[SwarmManager]', 'Cleaning up (Full)...');
+    this.resetState();
+    this.removeSignalingHandlers();
+  }
+
+  /**
+   * 상태 초기화 (재사용 시 호출)
+   */
+  private resetState(): void {
+    logInfo('[SwarmManager]', 'Resetting state...');
 
     this.isTransferring = false;
     this.isProcessingBatch = false;
-    this.roomId = null; // roomId 초기화로 이벤트 처리 중단
+    this.roomId = null;
 
     // Keep-alive 정리
     this.stopKeepAlive();

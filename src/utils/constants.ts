@@ -1,5 +1,12 @@
 export const APP_NAME = 'PonsWarp';
-export const SIGNALING_SERVER_URL = process.env.SIGNALING_SERVER_URL;
+export const SIGNALING_SERVER_URL =
+  import.meta.env.VITE_SIGNALING_SERVER_URL || 'http://localhost:5501';
+
+// Rust 시그널링 서버 설정
+export const USE_RUST_SIGNALING =
+  import.meta.env.VITE_USE_RUST_SIGNALING === 'true';
+export const RUST_SIGNALING_URL =
+  import.meta.env.VITE_RUST_SIGNALING_URL || 'ws://localhost:5502/ws';
 
 // 🚀 청크 사이징 (128KB 브라우저 제한)
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
