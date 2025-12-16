@@ -169,7 +169,8 @@ export class DirectFileWriter {
   }
 
   /**
-   * 🚀 [핵심 변경] 저장 전략 선택 및 초기화 (Firefox: FSA 우선, 기타: StreamSaver 우선)
+   * 🚀 [수정됨] 저장 전략: Native FSA 우선 (모든 브라우저) -> StreamSaver/OPFS 폴백
+   * Chrome에서의 실패 원인인 "StreamSaver 대기 중 제스처 만료"를 방지합니다.
    */
   private async initStrategy(
     fileName: string,
@@ -177,390 +178,75 @@ export class DirectFileWriter {
   ): Promise<void> {
     logInfo(
       '[DirectFileWriter]',
-      `🔍 Starting initialization for file: ${fileName}, size: ${fileSize} bytes`
+      `🔍 Starting initialization for: ${fileName}`
     );
 
-    // Firefox 감지
-    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
-    logDebug('[DirectFileWriter]', `Browser detected - Firefox: ${isFirefox}`);
-
-    // @ts-expect-error - showSaveFilePicker may not be available in all browsers
+    // FSA 지원 여부 확인
+    // @ts-expect-error
     const hasFileSystemAccess = !!window.showSaveFilePicker;
-    logDebug(
-      '[DirectFileWriter]',
-      `File System Access API available: ${hasFileSystemAccess}`
-    );
 
-    // 🚀 [Firefox 최적화] Firefox는 Service Worker 없는 방법 우선
-    // StreamSaver는 Service Worker + iframe을 사용하여 Firefox의 Enhanced Tracking Protection에 차단됨
-    if (isFirefox) {
-      logInfo(
-        '[DirectFileWriter]',
-        '🦊 Firefox detected - avoiding StreamSaver (Service Worker blocked by Enhanced Tracking Protection)'
-      );
-
-      // 1. File System Access API 우선 시도 (Firefox)
-      if (hasFileSystemAccess) {
-        try {
-          await this.initFileSystemAccess(fileName);
-          logInfo(
-            '[DirectFileWriter]',
-            '✅ File System Access API initialization successful'
-          );
-          return;
-        } catch (fsaError: unknown) {
-          // FSA 실패 원인 분석 로그
-          if (fsaError instanceof Error && fsaError.name === 'AbortError') {
-            logWarn(
-              '[DirectFileWriter]',
-              '⚠️ User cancelled the file save dialog - trying automatic fallback methods'
-            );
-            // 사용자 취소 시에도 자동 폴백 시도 (Blob/OPFS)
-          } else if (
-            fsaError instanceof Error &&
-            fsaError.name === 'SecurityError'
-          ) {
-            logWarn(
-              '[DirectFileWriter]',
-              '⚠️ File System Access API blocked due to security restrictions'
-            );
-          } else {
-            logWarn(
-              '[DirectFileWriter]',
-              '⚠️ File System Access API failed due to unknown reasons'
-            );
-          }
-
-          logWarn(
-            '[DirectFileWriter]',
-            'File System Access API failed, attempting automatic fallback...',
-            fsaError
-          );
-          if (fsaError instanceof Error) {
-            logDebug(
-              '[DirectFileWriter]',
-              `FSA error details: ${fsaError.message}`
-            );
-          }
-        }
-      } else {
-        logWarn(
-          '[DirectFileWriter]',
-          '⚠️ File System Access API not available in this Firefox version'
-        );
-      }
-
-      // 2. Blob 다운로드 폴백 시도 (Firefox - 500MB 이하만)
-      const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
-      if (isSmallFile) {
-        try {
-          logInfo(
-            '[DirectFileWriter]',
-            'Attempting Blob-based download as fallback...'
-          );
-          await this.initBlobFallback(fileName);
-          logInfo(
-            '[DirectFileWriter]',
-            '✅ Blob fallback initialization successful'
-          );
-          return;
-        } catch (blobError: unknown) {
-          logWarn(
-            '[DirectFileWriter]',
-            'Blob fallback failed, trying OPFS...',
-            blobError
-          );
-        }
-      } else {
-        logInfo(
-          '[DirectFileWriter]',
-          `File too large (${formatBytes(fileSize)}) for Blob fallback, trying OPFS...`
-        );
-      }
-
-      // 3. OPFS 폴백 시도 (Firefox - 대용량 파일, 단 Storage Quota 제한 있음)
-      try {
-        logInfo(
-          '[DirectFileWriter]',
-          'Attempting OPFS (Origin Private File System) as fallback...'
-        );
-        await this.initOPFSFallback(fileName);
-        logInfo(
-          '[DirectFileWriter]',
-          '✅ OPFS fallback initialization successful'
-        );
-        logInfo(
-          '[DirectFileWriter]',
-          '📦 File will be temporarily saved to browser storage, then automatically downloaded when transfer completes.'
-        );
-        return;
-      } catch (opfsError: unknown) {
-        logWarn(
-          '[DirectFileWriter]',
-          'OPFS fallback failed (likely quota exceeded), trying StreamSaver as last resort...',
-          opfsError
-        );
-
-        // Storage Quota 초과 시 사용자에게 명확한 안내
-        if (
-          opfsError instanceof Error &&
-          opfsError.message &&
-          opfsError.message.includes('quota')
-        ) {
-          logError(
-            '[DirectFileWriter]',
-            '❌ Browser storage quota exceeded. For large files (10GB+), please use Chrome/Edge or try File System Access API.'
-          );
-        }
-      }
-
-      // 4. StreamSaver 최후 시도 (Firefox - 거의 항상 차단됨)
-      try {
-        logWarn(
-          '[DirectFileWriter]',
-          '⚠️ Attempting StreamSaver as last resort (likely to be blocked by Firefox)...'
-        );
-        await this.initStreamSaver(fileName, fileSize);
-        logInfo(
-          '[DirectFileWriter]',
-          '✅ StreamSaver initialization successful (unexpected!)'
-        );
-        return;
-      } catch (ssError: unknown) {
-        logError('[DirectFileWriter]', 'All download methods failed:', ssError);
-
-        // Firefox 사용자에게 명확한 안내
-        const errorMsg =
-          'Firefox에서 파일 다운로드에 실패했습니다.\n\n' +
-          '해결 방법:\n' +
-          '1. 파일 저장 위치 선택 다이얼로그가 나타나면 승인해주세요 (File System Access API)\n' +
-          '2. 또는 Chrome/Edge 브라우저를 사용해주세요\n' +
-          '3. Firefox Enhanced Tracking Protection이 StreamSaver를 차단하고 있습니다';
-
-        throw new Error(errorMsg);
-      }
-    }
-
-    // 🚀 [기타 브라우저] StreamSaver 우선 시도
-    try {
-      logInfo('[DirectFileWriter]', 'Attempting StreamSaver initialization...');
-
-      // StreamSaver 지원 여부 확인 (Service Worker 등)
-      logDebug(
-        '[DirectFileWriter]',
-        `StreamSaver supported: ${streamSaver.supported}`
-      );
-      logDebug(
-        '[DirectFileWriter]',
-        `Service Worker registered: ${!!navigator.serviceWorker}`
-      );
-      logDebug('[DirectFileWriter]', `User agent: ${navigator.userAgent}`);
-      logDebug(
-        '[DirectFileWriter]',
-        `HTTPS context: ${location.protocol === 'https:'}`
-      );
-      logDebug('[DirectFileWriter]', `MITM URL: ${streamSaver.mitm}`);
-
-      // 🚀 [진단] Service Worker 상태 상세 확인
-      if (navigator.serviceWorker) {
-        try {
-          const registration = await navigator.serviceWorker.ready;
-          logDebug(
-            '[DirectFileWriter]',
-            `Service Worker active: ${!!registration.active}`
-          );
-          logDebug(
-            '[DirectFileWriter]',
-            `Service Worker scope: ${registration.scope}`
-          );
-        } catch (swError: unknown) {
-          logError(
-            '[DirectFileWriter]',
-            'Service Worker registration check failed:',
-            swError
-          );
-        }
-      }
-
-      // 🚀 [진단] MITM 파일 접근 가능성 확인
-      try {
-        const mitmResponse = await fetch(streamSaver.mitm, { method: 'HEAD' });
-        logDebug(
-          '[DirectFileWriter]',
-          `MITM file accessible: ${mitmResponse.ok}`
-        );
-        logDebug('[DirectFileWriter]', `MITM status: ${mitmResponse.status}`);
-      } catch (mitmError: unknown) {
-        logError('[DirectFileWriter]', 'MITM file check failed:', mitmError);
-      }
-
-      // StreamSaver가 실패할 수 있는 다양한 원인 확인
-      if (!streamSaver.supported) {
-        throw new Error(
-          'StreamSaver not supported in this browser environment'
-        );
-      }
-
-      // Service Worker 등록 확인
-      if (!navigator.serviceWorker) {
-        throw new Error(
-          'Service Worker not available - required for StreamSaver'
-        );
-      }
-
-      // HTTPS 확인
-      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
-        throw new Error(
-          'StreamSaver requires HTTPS context (except localhost)'
-        );
-      }
-
-      await this.initStreamSaver(fileName, fileSize);
-      logInfo('[DirectFileWriter]', '✅ StreamSaver initialization successful');
-      return; // 성공 시 리턴
-    } catch (ssError: unknown) {
-      logWarn(
-        '[DirectFileWriter]',
-        'StreamSaver failed, attempting fallback to File System Access API...',
-        ssError
-      );
-      if (ssError instanceof Error) {
-        logDebug(
-          '[DirectFileWriter]',
-          `StreamSaver error details: ${ssError.message}`
-        );
-        logDebug(
-          '[DirectFileWriter]',
-          `StreamSaver error stack: ${ssError.stack}`
-        );
-      }
-
-      // StreamSaver 실패 원인 분석 로그
-      if (
-        ssError instanceof Error &&
-        ssError.message.includes('Service Worker')
-      ) {
-        logWarn(
-          '[DirectFileWriter]',
-          '⚠️ StreamSaver failed due to Service Worker issues'
-        );
-      } else if (
-        ssError instanceof Error &&
-        ssError.message.includes('HTTPS')
-      ) {
-        logWarn(
-          '[DirectFileWriter]',
-          '⚠️ StreamSaver failed due to security context issues'
-        );
-      } else if (
-        ssError instanceof Error &&
-        ssError.message.includes('not supported')
-      ) {
-        logWarn(
-          '[DirectFileWriter]',
-          '⚠️ StreamSaver failed due to browser compatibility'
-        );
-      } else {
-        logWarn(
-          '[DirectFileWriter]',
-          '⚠️ StreamSaver failed due to unknown reasons'
-        );
-      }
-    }
-
-    // File System Access API (FSA) 폴백 시도 (기타 브라우저)
+    // 1. File System Access API (Native) 최우선 시도
+    // Chrome, Edge, Opera, Desktop Brave 등 최신 브라우저에서 가장 안정적
     if (hasFileSystemAccess) {
       try {
+        logInfo(
+          '[DirectFileWriter]',
+          'Attempting File System Access API (Native)...'
+        );
         await this.initFileSystemAccess(fileName);
         logInfo(
           '[DirectFileWriter]',
           '✅ File System Access API initialization successful'
         );
-        return; // 성공 시 리턴
-      } catch (fsaError: unknown) {
-        logWarn(
-          '[DirectFileWriter]',
-          'File System Access API failed:',
-          fsaError
-        );
-        if (fsaError instanceof Error) {
-          logDebug(
-            '[DirectFileWriter]',
-            `FSA error details: ${fsaError.message}`
-          );
+        return;
+      } catch (fsaError: any) {
+        // 사용자가 취소한 경우, 다른 방법으로 넘어가면 안 됨 (사용자 의도 무시)
+        if (fsaError.name === 'AbortError') {
+          logWarn('[DirectFileWriter]', 'User cancelled file picker.');
+          throw fsaError;
         }
-
-        // FSA 실패 원인 분석 로그
-        if (fsaError instanceof Error && fsaError.name === 'AbortError') {
-          logWarn(
-            '[DirectFileWriter]',
-            '⚠️ User cancelled the file save dialog'
-          );
-          throw fsaError; // 사용자 취소는 재시도하지 않음
-        } else if (
-          fsaError instanceof Error &&
-          fsaError.name === 'SecurityError'
-        ) {
-          logWarn(
-            '[DirectFileWriter]',
-            '⚠️ File System Access API blocked due to security restrictions'
-          );
-        } else {
-          logWarn(
-            '[DirectFileWriter]',
-            '⚠️ File System Access API failed due to unknown reasons'
-          );
-        }
+        // 보안 오류나 기타 오류인 경우에만 폴백 시도
+        logWarn('[DirectFileWriter]', 'FSA failed, falling back...', fsaError);
       }
     }
 
-    // 🚀 [최후 폴백] Blob 또는 OPFS 다운로드 시도 (모든 브라우저)
-    const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
+    // 2. Blob Fallback (작은 파일용, 500MB 미만)
+    // 메모리 안정성이 확보된 작은 파일은 가장 호환성 좋은 Blob 방식 사용
+    const isSmallFile = fileSize < 500 * 1024 * 1024;
     if (isSmallFile) {
       try {
         logInfo(
           '[DirectFileWriter]',
-          'Attempting Blob-based download as last resort...'
+          'Attempting Blob fallback (Small file)...'
         );
         await this.initBlobFallback(fileName);
-        logInfo(
-          '[DirectFileWriter]',
-          '✅ Blob fallback initialization successful'
-        );
         return;
-      } catch (blobError: unknown) {
-        logWarn(
-          '[DirectFileWriter]',
-          'Blob fallback failed, trying OPFS...',
-          blobError
-        );
+      } catch (e) {
+        logWarn('[DirectFileWriter]', 'Blob fallback failed', e);
       }
-    } else {
-      logInfo(
-        '[DirectFileWriter]',
-        `File too large (${formatBytes(fileSize)}) for Blob fallback, trying OPFS...`
-      );
     }
 
-    // OPFS 최후 시도 (대용량 파일)
+    // 3. StreamSaver 시도 (FSA 미지원 브라우저 또는 대용량 파일)
+    // 모바일 브라우저나 구형 브라우저용
     try {
-      logInfo('[DirectFileWriter]', 'Attempting OPFS as final fallback...');
-      await this.initOPFSFallback(fileName);
-      logInfo(
-        '[DirectFileWriter]',
-        '✅ OPFS fallback initialization successful'
-      );
-      logInfo(
-        '[DirectFileWriter]',
-        '📦 File will be temporarily saved to browser storage, then automatically downloaded when transfer completes.'
-      );
+      logInfo('[DirectFileWriter]', 'Attempting StreamSaver...');
+      await this.initStreamSaver(fileName, fileSize);
       return;
-    } catch (opfsError: unknown) {
-      logError('[DirectFileWriter]', 'OPFS fallback also failed:', opfsError);
+    } catch (ssError) {
+      logWarn('[DirectFileWriter]', 'StreamSaver failed', ssError);
+    }
+
+    // 4. OPFS Fallback (최후의 수단, 대용량 지원)
+    try {
+      logInfo('[DirectFileWriter]', 'Attempting OPFS fallback...');
+      await this.initOPFSFallback(fileName);
+      return;
+    } catch (opfsError) {
+      logError('[DirectFileWriter]', 'OPFS failed', opfsError);
     }
 
     throw new Error(
-      'No supported file saving method available (all methods failed).'
+      '모든 파일 저장 방식이 실패했습니다. (Chrome/Edge 사용 권장)'
     );
   }
 
