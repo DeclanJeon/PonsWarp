@@ -10,11 +10,11 @@ declare const self: DedicatedWorkerGlobalScope;
 // - Features: Zero-copy streaming, Aggregation, Backpressure
 // ============================================================================
 
-import init, { 
-  PacketEncoder, 
-  CryptoSession, 
+import init, {
+  PacketEncoder,
+  CryptoSession,
   Zip64Stream,
-  ZeroCopyPacketPool 
+  ZeroCopyPacketPool,
 } from 'pons-core-wasm';
 
 const CHUNK_SIZE_MIN = 16 * 1024;
@@ -162,18 +162,18 @@ let encryptionEnabled = false;
 async function initWasm() {
   try {
     const wasmInstance = await init();
-    
+
     // Zero-Copy Pool 초기화 (64 슬롯)
     zeroCopyPool = new ZeroCopyPacketPool();
-    
+
     // WASM 메모리 참조 획득
     wasmMemory = wasmInstance.memory;
     zeroCopyEnabled = true;
-    
+
     // 레거시 PacketEncoder도 초기화 (fallback용)
     packetEncoder = new PacketEncoder();
     wasmReady = true;
-    
+
     console.log('[Sender Worker] WASM initialized with Zero-Copy Pool');
   } catch (e) {
     console.error('[Sender Worker] WASM init failed:', e);
@@ -273,7 +273,7 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
 
   const fileCount = state.files.length;
   console.log(
-    '[Sender Worker] Initializing for',
+    '[Sender Worker] 🚀 [DEBUG] Initializing for',
     fileCount,
     'files (WASM:',
     wasmReady,
@@ -282,20 +282,43 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
     ')'
   );
 
+  console.log('[Sender Worker] 🚀 [DEBUG] Manifest info:', {
+    isFolder: payload.manifest?.isFolder,
+    totalFiles: payload.manifest?.totalFiles,
+    totalSize: payload.manifest?.totalSize,
+    rootName: payload.manifest?.rootName,
+    files: payload.manifest?.files?.map(f => ({
+      name: f.name,
+      path: f.path,
+      size: f.size,
+    })),
+  });
+
   if (fileCount === 1) {
     state.mode = 'single';
+    console.log('[Sender Worker] 🚀 [DEBUG] Mode set to SINGLE (1 file)');
   } else {
     state.mode = 'zip';
+    console.log('[Sender Worker] 🚀 [DEBUG] Mode set to ZIP (multiple files)');
     try {
+      console.log('[Sender Worker] 🚀 [DEBUG] Initializing ZIP stream...');
       await initZipStream();
+      console.log(
+        '[Sender Worker] ✅ [DEBUG] ZIP stream initialized successfully'
+      );
+      console.log('[Sender Worker] 🚀 [DEBUG] Prefetching initial batch...');
       await prefetchBatch();
+      console.log('[Sender Worker] ✅ [DEBUG] Initial batch prefetched');
     } catch (error: any) {
-      console.error('[Sender Worker] ZIP init failed:', error);
+      console.error('[Sender Worker] ❌ [DEBUG] ZIP init failed:', error);
       self.postMessage({ type: 'error', payload: { message: error.message } });
       return;
     }
   }
 
+  console.log(
+    '[Sender Worker] ✅ [DEBUG] Worker initialization complete, sending init-complete'
+  );
   triggerPrefetch();
   self.postMessage({ type: 'init-complete' });
 }
@@ -303,6 +326,7 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
 let zipSourceBytesRead = 0;
 
 async function initZipStream() {
+  console.log('[Sender Worker] 🚀 [DEBUG] initZipStream() called');
   zipSourceBytesRead = 0;
   currentZipQueueSize = 0;
   isZipPaused = false;
@@ -310,7 +334,9 @@ async function initZipStream() {
 
   // 🦀 WASM ZIP64 스트림 초기화 (4GB+ 파일 지원)
   // ⚡ STORE 모드 (압축 없음) - 전송 속도 최적화
+  console.log('[Sender Worker] 🚀 [DEBUG] Creating Zip64Stream...');
   zip64Stream = new Zip64Stream(0); // 0 = STORE (압축 없음)
+  console.log('[Sender Worker] ✅ [DEBUG] Zip64Stream created successfully');
 
   const zipDataQueue: Uint8Array[] = [];
   let resolveDataAvailable: (() => void) | null = null;
@@ -321,6 +347,11 @@ async function initZipStream() {
     if (data.length > 0) {
       zipDataQueue.push(data);
       currentZipQueueSize += data.length;
+      console.log('[Sender Worker] 📦 [DEBUG] Pushed to ZIP queue:', {
+        dataSize: data.length,
+        queueSize: currentZipQueueSize,
+        queueLength: zipDataQueue.length,
+      });
       if (resolveDataAvailable) {
         resolveDataAvailable();
         resolveDataAvailable = null;
@@ -329,6 +360,11 @@ async function initZipStream() {
   };
 
   const processFilesAsync = async () => {
+    console.log(
+      '[Sender Worker] 🚀 [DEBUG] Starting async file processing for',
+      state.files.length,
+      'files'
+    );
     try {
       for (let i = 0; i < state.files.length; i++) {
         if (!isTransferActive) break;
@@ -339,26 +375,50 @@ async function initZipStream() {
           filePath = state.manifest.files[i].path;
         }
 
+        console.log('[Sender Worker] 📁 [DEBUG] Processing file', i, ':', {
+          name: file.name,
+          path: filePath,
+          size: file.size,
+        });
+
         // 🦀 파일 시작 (Local File Header 생성)
+        console.log(
+          '[Sender Worker] 🚀 [DEBUG] Beginning file in ZIP stream:',
+          filePath
+        );
         const header = zip64Stream!.begin_file(filePath, BigInt(file.size));
         pushToQueue(header);
 
         const reader = file.stream().getReader();
         try {
+          let chunkCount = 0;
           while (true) {
             // 백프레셔 체크
             if (currentZipQueueSize > ZIP_QUEUE_HIGH_WATER_MARK) {
+              console.log(
+                '[Sender Worker] ⏸️ [DEBUG] ZIP queue high water mark reached, pausing...'
+              );
               isZipPaused = true;
               await new Promise<void>(resolve => {
                 resolveZipResume = resolve;
               });
               isZipPaused = false;
+              console.log('[Sender Worker] ▶️ [DEBUG] ZIP queue resumed');
             }
 
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+              console.log(
+                '[Sender Worker] ✅ [DEBUG] File read complete:',
+                filePath,
+                'chunks:',
+                chunkCount
+              );
+              break;
+            }
 
             zipSourceBytesRead += value.length;
+            chunkCount++;
 
             // 🦀 WASM 패키징 (압축 없음)
             const processed = zip64Stream!.process_chunk(value);
@@ -371,6 +431,10 @@ async function initZipStream() {
         }
 
         // 🦀 파일 종료 (Data Descriptor 생성)
+        console.log(
+          '[Sender Worker] 🚀 [DEBUG] Ending file in ZIP stream:',
+          filePath
+        );
         const descriptor = zip64Stream!.end_file();
         if (descriptor.length > 0) {
           pushToQueue(descriptor);
@@ -379,14 +443,16 @@ async function initZipStream() {
 
       // 🦀 ZIP 아카이브 종료 (Central Directory + EOCD64)
       if (isTransferActive && zip64Stream) {
+        console.log('[Sender Worker] 🚀 [DEBUG] Finalizing ZIP archive...');
         const footer = zip64Stream.finalize();
         pushToQueue(footer);
         zipFinalized = true;
+        console.log('[Sender Worker] ✅ [DEBUG] ZIP archive finalized');
         resolveDataAvailable?.();
         resolveDataAvailable = null;
       }
     } catch (e) {
-      console.error('[Sender Worker] Fatal ZIP64 error:', e);
+      console.error('[Sender Worker] ❌ [DEBUG] Fatal ZIP64 error:', e);
       hasError = true;
       resolveDataAvailable?.();
       resolveDataAvailable = null;
@@ -395,10 +461,21 @@ async function initZipStream() {
 
   state.zipStream = new ReadableStream({
     async pull(controller) {
+      console.log(
+        '[Sender Worker] 🔄 [DEBUG] ZIP stream pull called, queue size:',
+        zipDataQueue.length
+      );
+
       const consumeAndCheckResume = (chunk: Uint8Array) => {
         currentZipQueueSize -= chunk.length;
+        console.log('[Sender Worker] 📤 [DEBUG] Consuming from ZIP queue:', {
+          chunkSize: chunk.length,
+          queueSizeAfter: currentZipQueueSize,
+          isPaused: isZipPaused,
+        });
         controller.enqueue(chunk);
         if (isZipPaused && currentZipQueueSize < ZIP_QUEUE_LOW_WATER_MARK) {
+          console.log('[Sender Worker] ▶️ [DEBUG] Resuming ZIP processing');
           resolveZipResume?.();
           resolveZipResume = null;
         }
@@ -409,36 +486,62 @@ async function initZipStream() {
         return;
       }
       if (zipFinalized) {
+        console.log(
+          '[Sender Worker] ✅ [DEBUG] ZIP stream finalized, closing controller'
+        );
         controller.close();
         return;
       }
       if (hasError) {
+        console.log('[Sender Worker] ❌ [DEBUG] ZIP error, closing with error');
         controller.error(new Error('ZIP64 failed'));
         return;
       }
 
+      console.log('[Sender Worker] ⏳ [DEBUG] Waiting for ZIP data...');
       await new Promise<void>(resolve => {
         resolveDataAvailable = resolve;
       });
 
       if (zipDataQueue.length > 0) consumeAndCheckResume(zipDataQueue.shift()!);
-      else if (zipFinalized) controller.close();
-      else if (hasError) controller.error(new Error('ZIP64 failed'));
+      else if (zipFinalized) {
+        console.log(
+          '[Sender Worker] ✅ [DEBUG] ZIP finalized during wait, closing'
+        );
+        controller.close();
+      } else if (hasError) {
+        console.log(
+          '[Sender Worker] ❌ [DEBUG] ZIP error during wait, closing with error'
+        );
+        controller.error(new Error('ZIP64 failed'));
+      }
     },
   });
 
   state.zipReader = state.zipStream.getReader();
+
+  // 🚀 [핵심 수정] 파일 처리를 비동기적으로 시작하지만, 초기 데이터가 준비될 때까지 대기
+  console.log('[Sender Worker] 🚀 [DEBUG] Starting async file processing...');
   processFilesAsync();
 
+  // 🚀 [핵심 수정] 초기 데이터가 준비될 때까지 대기 (최대 5초)
   const waitStart = Date.now();
+  console.log('[Sender Worker] ⏳ [DEBUG] Waiting for initial ZIP data...');
   while (
     zipDataQueue.length === 0 &&
     !zipFinalized &&
     !hasError &&
-    Date.now() - waitStart < 2000
+    Date.now() - waitStart < 5000 // 2초에서 5초로 증가
   ) {
-    await new Promise(resolve => setTimeout(resolve, 1));
+    await new Promise(resolve => setTimeout(resolve, 10)); // 1ms에서 10ms로 증가
   }
+
+  console.log('[Sender Worker] 📊 [DEBUG] Initial wait completed:', {
+    queueSize: zipDataQueue.length,
+    finalized: zipFinalized,
+    hasError: hasError,
+    waitTime: Date.now() - waitStart,
+  });
 }
 
 function resetWorker() {
@@ -589,7 +692,12 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
 let zipBuffer: Uint8Array | null = null;
 
 async function createZipChunk(): Promise<ArrayBuffer | null> {
+  console.log('[Sender Worker] 🚀 [DEBUG] createZipChunk() called');
+
   if (!state.zipReader) {
+    console.log(
+      '[Sender Worker] ❌ [DEBUG] No ZIP reader available, marking as completed'
+    );
     state.isCompleted = true;
     return null;
   }
@@ -598,28 +706,57 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
     ? adaptiveConfig.chunkSize
     : CHUNK_SIZE_MAX;
 
+  console.log('[Sender Worker] 📊 [DEBUG] Target chunk size:', targetChunkSize);
+  console.log(
+    '[Sender Worker] 📊 [DEBUG] Current zipBuffer size:',
+    zipBuffer?.length || 0
+  );
+
   if (zipBuffer && zipBuffer.length >= targetChunkSize) {
     const chunkData = zipBuffer.slice(0, targetChunkSize);
     const remaining = zipBuffer.slice(targetChunkSize);
     zipBuffer = remaining.length > 0 ? remaining : null;
+    console.log(
+      '[Sender Worker] 📦 [DEBUG] Created chunk from existing buffer:',
+      {
+        chunkSize: chunkData.length,
+        remainingBufferSize: zipBuffer?.length || 0,
+      }
+    );
     return createPacket(chunkData);
   }
 
+  console.log('[Sender Worker] 🔄 [DEBUG] Reading from ZIP stream...');
   while (true) {
     try {
       const { done, value } = await state.zipReader.read();
 
       if (done) {
+        console.log('[Sender Worker] ✅ [DEBUG] ZIP stream reading completed');
         if (zipBuffer && zipBuffer.length > 0) {
           const chunkData = zipBuffer;
           zipBuffer = null;
+          console.log(
+            '[Sender Worker] 📦 [DEBUG] Created final chunk from remaining buffer:',
+            {
+              chunkSize: chunkData.length,
+            }
+          );
           return createPacket(chunkData);
         }
+        console.log(
+          '[Sender Worker] ✅ [DEBUG] ZIP processing completed, marking as completed'
+        );
         state.isCompleted = true;
         return null;
       }
 
       if (value && value.length > 0) {
+        console.log('[Sender Worker] 📥 [DEBUG] Read from ZIP stream:', {
+          dataSize: value.length,
+          currentBufferSize: zipBuffer?.length || 0,
+        });
+
         if (zipBuffer) {
           const newBuffer = new Uint8Array(zipBuffer.length + value.length);
           newBuffer.set(zipBuffer);
@@ -633,11 +770,18 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
           const chunkData = zipBuffer.slice(0, targetChunkSize);
           const remaining = zipBuffer.slice(targetChunkSize);
           zipBuffer = remaining.length > 0 ? remaining : null;
+          console.log(
+            '[Sender Worker] 📦 [DEBUG] Created chunk after reading:',
+            {
+              chunkSize: chunkData.length,
+              remainingBufferSize: zipBuffer?.length || 0,
+            }
+          );
           return createPacket(chunkData);
         }
       }
     } catch (e) {
-      console.error('[Sender Worker] ZIP chunk error:', e);
+      console.error('[Sender Worker] ❌ [DEBUG] ZIP chunk error:', e);
       state.isCompleted = true;
       return null;
     }
@@ -679,7 +823,11 @@ function createPacketZeroCopy(data: Uint8Array): ArrayBuffer {
   // 암호화 모드
   let packetLen: number;
   if (encryptionEnabled && cryptoSession) {
-    packetLen = zeroCopyPool.commit_encrypted_slot(slotId, data.length, cryptoSession);
+    packetLen = zeroCopyPool.commit_encrypted_slot(
+      slotId,
+      data.length,
+      cryptoSession
+    );
   } else {
     packetLen = zeroCopyPool.commit_slot(slotId, data.length);
   }

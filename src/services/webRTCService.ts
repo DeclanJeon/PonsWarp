@@ -25,7 +25,14 @@ interface IFileWriter {
   initStorage(manifest: any): Promise<void>;
   writeChunk(packet: ArrayBuffer): Promise<void>;
   cleanup(): Promise<void>;
-  onProgress(cb: (progress: number) => void): void;
+  onProgress(
+    cb: (data: {
+      progress: number;
+      speed: number;
+      bytesTransferred: number;
+      totalBytes: number;
+    }) => void
+  ): void;
   onComplete(cb: (actualSize: number) => void): void;
   onError(cb: (err: string) => void): void;
   // 🚀 [추가] 흐름 제어 인터페이스
@@ -167,17 +174,8 @@ class ReceiverService {
 
     // Writer 이벤트 연결
     this.writer.onProgress((progressData: any) => {
-      // 객체 형태면 그대로, 숫자면 변환
-      if (typeof progressData === 'object') {
-        this.emit('progress', progressData);
-      } else {
-        this.emit('progress', {
-          progress: progressData,
-          speed: 0,
-          bytesTransferred: 0,
-          totalBytes: 0,
-        });
-      }
+      // 항상 객체 형태로 통일
+      this.emit('progress', progressData);
     });
 
     this.writer.onComplete(actualSize => {

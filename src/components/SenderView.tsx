@@ -241,8 +241,54 @@ const SenderView: React.FC<SenderViewProps> = () => {
   }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('[SenderView] 🚀 [DEBUG] handleFileSelect called');
+    console.log('[SenderView] 📁 [DEBUG] Input files:', {
+      fileCount: e.target.files?.length || 0,
+      files: Array.from(e.target.files || []).map(f => ({
+        name: f.name,
+        size: f.size,
+        type: f.type,
+        webkitRelativePath: (f as any).webkitRelativePath,
+      })),
+    });
+
     if (e.target.files && e.target.files.length > 0) {
       const scannedFiles = processInputFiles(e.target.files);
+      console.log(
+        '[SenderView] 📊 [DEBUG] Scanned files:',
+        scannedFiles.map(f => ({
+          name: f.file.name,
+          path: f.path,
+          size: f.file.size,
+        }))
+      );
+      processScannedFiles(scannedFiles);
+    }
+  };
+
+  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('[SenderView] 🚀 [DEBUG] handleFolderSelect called');
+    console.log('[SenderView] 📂 [DEBUG] Folder input files:', {
+      fileCount: e.target.files?.length || 0,
+      files: Array.from(e.target.files || []).map(f => ({
+        name: f.name,
+        size: f.size,
+        type: f.type,
+        webkitRelativePath: (f as any).webkitRelativePath,
+      })),
+    });
+
+    if (e.target.files && e.target.files.length > 0) {
+      // 폴더 선택 시 webkitRelativePath를 사용하여 파일 구조 보존
+      const scannedFiles = processInputFiles(e.target.files);
+      console.log(
+        '[SenderView] 📊 [DEBUG] Scanned folder files:',
+        scannedFiles.map(f => ({
+          name: f.file.name,
+          path: f.path,
+          size: f.file.size,
+        }))
+      );
       processScannedFiles(scannedFiles);
     }
   };
@@ -262,38 +308,94 @@ const SenderView: React.FC<SenderViewProps> = () => {
   };
 
   const handleDrop = async (e: React.DragEvent) => {
+    console.log('[SenderView] 🚀 [DEBUG] handleDrop called');
     e.preventDefault();
     useTransferStore.setState({ status: 'IDLE' });
 
+    console.log('[SenderView] 📁 [DEBUG] Drop data:', {
+      hasItems: !!(e.dataTransfer.items && e.dataTransfer.items.length > 0),
+      itemCount: e.dataTransfer.items?.length || 0,
+      hasFiles: !!(e.dataTransfer.files && e.dataTransfer.files.length > 0),
+      fileCount: e.dataTransfer.files?.length || 0,
+    });
+
     // DataTransferItemList가 있으면 FileSystemEntry 스캔 사용
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      console.log('[SenderView] 🔄 [DEBUG] Using FileSystemEntry scan');
       const scannedFiles = await scanFiles(e.dataTransfer.items);
+      console.log(
+        '[SenderView] 📊 [DEBUG] Scanned files from drag:',
+        scannedFiles.map(f => ({
+          name: f.file.name,
+          path: f.path,
+          size: f.file.size,
+        }))
+      );
       processScannedFiles(scannedFiles);
     } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       // Fallback: 단순 파일 처리
+      console.log('[SenderView] 🔄 [DEBUG] Using fallback file processing');
       const scannedFiles = processInputFiles(e.dataTransfer.files);
+      console.log(
+        '[SenderView] 📊 [DEBUG] Scanned files from fallback:',
+        scannedFiles.map(f => ({
+          name: f.file.name,
+          path: f.path,
+          size: f.file.size,
+        }))
+      );
       processScannedFiles(scannedFiles);
     }
   };
 
   const processScannedFiles = async (scannedFiles: any[]) => {
-    if (scannedFiles.length === 0) return;
+    console.log(
+      '[SenderView] 🚀 [DEBUG] processScannedFiles called with',
+      scannedFiles.length,
+      'files'
+    );
+
+    if (scannedFiles.length === 0) {
+      console.log('[SenderView] ⚠️ [DEBUG] No files to process');
+      return;
+    }
+
+    console.log('[SenderView] 📁 [DEBUG] Processing files:');
+    scannedFiles.forEach((f, i) => {
+      console.log(
+        `[SenderView] 📁 [DEBUG] File ${i}: ${f.path} (${f.file.size} bytes, type: ${f.file.type})`
+      );
+    });
 
     // Manifest 생성
+    console.log('[SenderView] 🔄 [DEBUG] Creating manifest...');
     const { manifest, files } = createManifest(scannedFiles);
     setManifest(manifest);
 
-    console.log('[SenderView] 📊 [DEBUG] Manifest created:', {
+    console.log('[SenderView] 📊 [DEBUG] Manifest created and set:', {
       isFolder: manifest.isFolder,
       totalFiles: manifest.totalFiles,
       totalSize: manifest.totalSize,
       rootName: manifest.rootName,
+      isSizeEstimated: manifest.isSizeEstimated,
+      fileCount: files.length,
+      files: manifest.files?.map(f => ({
+        name: f.name,
+        path: f.path,
+        size: f.size,
+      })),
     });
 
     // 여러 파일이면 ZIP 압축 준비 중 표시
     if (files.length > 1) {
+      console.log(
+        '[SenderView] 📦 [DEBUG] Multiple files detected, setting status to PREPARING'
+      );
       setStatus('PREPARING');
     } else {
+      console.log(
+        '[SenderView] 📄 [DEBUG] Single file detected, setting status to WAITING'
+      );
       setStatus('WAITING');
     }
 
@@ -302,21 +404,36 @@ const SenderView: React.FC<SenderViewProps> = () => {
     setShareLink(`${window.location.origin}/receive/${id}`);
 
     console.log('[SenderView] 🏠 [DEBUG] Room created:', id);
+    console.log('[SenderView] 🔗 [DEBUG] Share link:', shareLink);
 
     try {
-      console.log('[SenderView] 🚀 [DEBUG] Initializing SwarmManager...');
+      console.log('[SenderView] 🚀 [DEBUG] Initializing SwarmManager with:', {
+        manifest: {
+          transferId: manifest.transferId,
+          isFolder: manifest.isFolder,
+          totalFiles: manifest.totalFiles,
+          totalSize: manifest.totalSize,
+        },
+        fileCount: files.length,
+        roomId: id,
+      });
       await swarmManagerRef.current?.initSender(manifest, files, id);
       console.log(
         '[SenderView] ✅ [DEBUG] SwarmManager initialized successfully'
       );
 
       // 초기화 완료 후 WAITING 상태로 전환
-      setStatus('WAITING');
+      if (files.length > 1) {
+        console.log(
+          '[SenderView] 🔄 [DEBUG] ZIP preparation complete, setting status to WAITING'
+        );
+        setStatus('WAITING');
+      }
     } catch (error: any) {
       console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
 
       alert(
-        `Failed to initialize transfer: ${error?.message || 'Unknown error'}\n\nPlease try again with different files.`
+        `Failed to initialize transfer: ${error?.message || 'Unknown error'}\n\nPlease check your connection and try again.`
       );
       setStatus('IDLE');
     }
@@ -365,7 +482,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 type="file"
                 className="hidden"
                 ref={folderInputRef}
-                onChange={handleFileSelect}
+                onChange={handleFolderSelect}
                 multiple
                 {...({ webkitdirectory: '' } as any)}
               />

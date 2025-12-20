@@ -1217,11 +1217,20 @@ export class SwarmManager {
     this.totalBytesSent = 0;
     this.completedPeerCount = 0;
 
-    // TURN 설정 가져오기
-    await this.fetchTurnConfig(roomId);
-
     // 시그널링 연결
     await signalingService.connect();
+
+    // TURN 설정 가져오기 (실패해도 진행)
+    try {
+      await this.fetchTurnConfig(roomId);
+    } catch (error) {
+      logWarn(
+        '[SwarmManager]',
+        'Failed to fetch TURN config, proceeding with default STUN servers:',
+        error
+      );
+    }
+
     await signalingService.joinRoom(roomId);
 
     // Worker 초기화

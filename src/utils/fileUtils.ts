@@ -5,6 +5,12 @@ import { ScannedFile } from './fileScanner';
 export const createManifest = (
   scannedFiles: ScannedFile[]
 ): { manifest: TransferManifest; files: File[] } => {
+  console.log(
+    '[fileUtils] 🚀 [DEBUG] createManifest called with',
+    scannedFiles.length,
+    'files'
+  );
+
   const fileNodes: FileNode[] = [];
   let totalSize = 0;
   const rawFiles: File[] = [];
@@ -12,6 +18,13 @@ export const createManifest = (
   scannedFiles.forEach((item, index) => {
     totalSize += item.file.size;
     rawFiles.push(item.file);
+
+    console.log('[fileUtils] 📁 [DEBUG] Processing file', index, ':', {
+      name: item.file.name,
+      path: item.path,
+      size: item.file.size,
+      type: item.file.type,
+    });
 
     fileNodes.push({
       id: index,
@@ -29,18 +42,36 @@ export const createManifest = (
 
   if (scannedFiles.length > 0) {
     const firstPath = scannedFiles[0].path;
+    console.log('[fileUtils] 🔍 [DEBUG] First path analysis:', {
+      firstPath,
+      hasSlash: firstPath.includes('/'),
+      fileCount: scannedFiles.length,
+    });
+
     if (firstPath.includes('/')) {
       // 경로에 슬래시가 있으면 폴더 구조임
       rootName = firstPath.split('/')[0];
       isFolder = true;
+      console.log(
+        '[fileUtils] 📂 [DEBUG] Detected folder structure, rootName:',
+        rootName
+      );
     } else if (scannedFiles.length > 1) {
       // 파일이 여러 개지만 최상위 경로가 없으면 'Multi-Files'
       rootName = `Files (${scannedFiles.length})`;
       isFolder = true; // ZIP으로 묶어야 함
+      console.log(
+        '[fileUtils] 📦 [DEBUG] Multiple files detected, will ZIP, rootName:',
+        rootName
+      );
     } else {
       // 단일 파일
       rootName = scannedFiles[0].file.name;
       isFolder = false;
+      console.log(
+        '[fileUtils] 📄 [DEBUG] Single file detected, rootName:',
+        rootName
+      );
     }
   }
 
@@ -55,6 +86,16 @@ export const createManifest = (
     // Receiver는 이 플래그를 보고 StreamSaver 설정을 조정할 수 있음
     isSizeEstimated: isFolder || scannedFiles.length > 1,
   };
+
+  console.log('[fileUtils] ✅ [DEBUG] Manifest created:', {
+    transferId: manifest.transferId,
+    totalSize: manifest.totalSize,
+    totalFiles: manifest.totalFiles,
+    rootName: manifest.rootName,
+    isFolder: manifest.isFolder,
+    isSizeEstimated: manifest.isSizeEstimated,
+    fileCount: manifest.files?.length,
+  });
 
   return { manifest, files: rawFiles };
 };
