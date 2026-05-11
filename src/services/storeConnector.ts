@@ -9,11 +9,7 @@
  * - 배치 상태 업데이트
  */
 
-import {
-  useTransferStore,
-  throttledUpdateProgress,
-  ProgressData,
-} from '../store/transferStore';
+import { useTransferStore, ProgressData } from '../store/transferStore';
 
 // 스로틀링 설정
 const PROGRESS_THROTTLE_MS = 33; // ~30fps

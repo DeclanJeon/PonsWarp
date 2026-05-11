@@ -1,225 +1,158 @@
-import { useRef, useMemo, useEffect } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import * as THREE from 'three';
-import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { useEffect, useRef } from 'react';
 import { useTransferStore } from '../store/transferStore';
 import { AppMode } from '../types/types';
 
-// 설정 상수
-const STAR_COUNT = 800;
-const STAR_SIZE = 0.05;
-const Z_BOUND = 40;
-const WARP_SPEED = 2.5;
-const IDLE_SPEED = 0.05;
-const ACCELERATION = 0.02;
-const STRETCH_FACTOR = 15;
+const STAR_COUNT = 520;
+const IDLE_SPEED = 0.08;
+const WARP_SPEED = 2.8;
+const ACCELERATION = 0.035;
+const MAX_DPR = 1.5;
 
-// 🚀 [최적화] 성능 모드 설정
-const FPS_LIMIT_HIGH = 1 / 30; // 60 FPS (평소)
-const FPS_LIMIT_LOW = 1 / 15; // 20 FPS (전송 중 - CPU 절약)
-
-/**
- * 🌟 WarpStars: InstancedMesh를 사용한 고성능 워프 효과
- * 🚀 [최적화] Frame Throttling 적용
- */
-const WarpStars = () => {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-
-  // 상태 구독
-  const status = useTransferStore(state => state.status);
-  const mode = useTransferStore(state => state.mode);
-
-  // 더미 Object3D (매트릭스 계산용)
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-
-  // 별들의 초기 위치 및 속도 데이터
-  const initialData = useMemo(() => {
-    const data = new Float32Array(STAR_COUNT * 4);
-    for (let i = 0; i < STAR_COUNT; i++) {
-      const i4 = i * 4;
-      // 도넛 형태로 분포 (중앙 비움)
-      const r = 2 + Math.random() * 20;
-      const theta = 2 * Math.PI * Math.random();
-      data[i4] = r * Math.cos(theta); // x
-      data[i4 + 1] = r * Math.sin(theta); // y
-      data[i4 + 2] = (Math.random() - 0.5) * Z_BOUND * 2; // z
-      data[i4 + 3] = 0.5 + Math.random() * 0.5; // random scale
-    }
-    return data;
-  }, []);
-
-  // 현재 속도 상태
-  const currentSpeed = useRef(IDLE_SPEED);
-
-  // 🚀 [최적화] 프레임 델타 누적 변수
-  const timeAccumulator = useRef(0);
-
-  useFrame((state, delta) => {
-    if (!meshRef.current) return;
-
-    // 🚀 [최적화] 상태에 따른 프레임 제한 로직
-    const isHeavyLoad =
-      status === 'TRANSFERRING' ||
-      status === 'PREPARING' ||
-      status === 'RECEIVING';
-    const frameLimit = isHeavyLoad ? FPS_LIMIT_LOW : FPS_LIMIT_HIGH;
-
-    timeAccumulator.current += delta;
-
-    // 목표 프레임 간격보다 시간이 덜 지났으면 업데이트 건너뜀 (CPU 절약)
-    if (timeAccumulator.current < frameLimit) {
-      return;
-    }
-
-    // 누적된 시간(실제 경과 시간)을 사용하여 물리 계산 (부드러운 움직임 보정)
-    const updateDelta = timeAccumulator.current;
-    timeAccumulator.current = 0; // 리셋
-
-    // 목표 속도 및 방향 결정
-    let targetSpeed = IDLE_SPEED;
-
-    if (
-      status === 'TRANSFERRING' ||
-      status === 'CONNECTING' ||
-      status === 'RECEIVING'
-    ) {
-      // Receiver: 음수 속도 (뿜어져 나옴), Sender: 양수 속도 (빨려 들어감)
-      const direction = mode === AppMode.RECEIVER ? -1 : 1;
-      targetSpeed = WARP_SPEED * direction;
-    } else if (status === 'DRAGGING_FILES') {
-      targetSpeed = 0.5;
-    }
-
-    // 속도 Lerp (updateDelta 사용)
-    const lerpFactor = ACCELERATION * (updateDelta * 60);
-    currentSpeed.current = THREE.MathUtils.lerp(
-      currentSpeed.current,
-      targetSpeed,
-      lerpFactor
-    );
-
-    // 인스턴스 업데이트
-    const speed = currentSpeed.current;
-    const absSpeed = Math.abs(speed);
-
-    // 🚀 [최적화] 매트릭스 연산 루프
-    // Heavy Load일 때는 루프를 조금 더 단순화할 수도 있지만, Frame Throttling으로 충분함
-    for (let i = 0; i < STAR_COUNT; i++) {
-      const i4 = i * 4;
-      const x = initialData[i4];
-      const y = initialData[i4 + 1];
-      let z = initialData[i4 + 2];
-      const scaleBase = initialData[i4 + 3];
-
-      // Z축 이동 (updateDelta 사용)
-      z += speed * 20 * updateDelta;
-
-      // 경계 처리
-      if (z > Z_BOUND) {
-        z -= Z_BOUND * 2;
-      } else if (z < -Z_BOUND) {
-        z += Z_BOUND * 2;
-      }
-
-      // 상태 저장 (다음 프레임을 위해)
-      initialData[i4 + 2] = z;
-
-      // 변환 적용
-      dummy.position.set(x, y, z);
-
-      // 스케일링 (Streaking Effect)
-      const zScale = 1 + absSpeed * STRETCH_FACTOR;
-      dummy.scale.set(scaleBase, scaleBase, scaleBase * zScale);
-      dummy.updateMatrix();
-      meshRef.current.setMatrixAt(i, dummy.matrix);
-
-      // 색상 페이딩
-      const dist = Math.abs(z);
-      const intensity = 1 - dist / Z_BOUND;
-      const colorIntensity = Math.max(0, intensity) * 1.5;
-
-      meshRef.current.setColorAt(
-        i,
-        new THREE.Color(
-          colorIntensity * 0.8,
-          colorIntensity * 1.0,
-          colorIntensity * 1.5
-        )
-      );
-    }
-
-    meshRef.current.instanceMatrix.needsUpdate = true;
-    if (meshRef.current.instanceColor)
-      meshRef.current.instanceColor.needsUpdate = true;
-  });
-
-  return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, undefined, STAR_COUNT]}
-      frustumCulled={false}
-    >
-      <sphereGeometry args={[STAR_SIZE, 8, 8]} />
-      {/* depthWrite와 depthTest를 false로 설정 */}
-      <meshBasicMaterial
-        color={[1.5, 2, 3]}
-        toneMapped={false}
-        depthWrite={false}
-        depthTest={false}
-      />
-    </instancedMesh>
-  );
+type Star = {
+  x: number;
+  y: number;
+  z: number;
+  size: number;
 };
 
-// 🚀 [최적화] 씬 관리자 (DPR 조절용)
-const SceneManager = () => {
-  const { gl } = useThree();
-  const status = useTransferStore(state => state.status);
+function createStar(): Star {
+  const radius = 0.08 + Math.random() * 0.92;
+  const angle = Math.random() * Math.PI * 2;
 
-  useEffect(() => {
-    const isHeavy =
-      status === 'TRANSFERRING' ||
-      status === 'RECEIVING' ||
-      status === 'PREPARING';
-    // 전송 중에는 픽셀 비율을 1로 고정하여 GPU 부하 감소
-    // 평소에는 최대 1.5배까지 (Retina 디스플레이 대응)
-    gl.setPixelRatio(isHeavy ? 1 : Math.min(window.devicePixelRatio, 1.5));
-  }, [status, gl]);
-
-  return null;
-};
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+    z: Math.random(),
+    size: 0.55 + Math.random() * 1.35,
+  };
+}
 
 export default function SpaceField() {
-  // 상태 구독 (블룸 효과 제어용)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const status = useTransferStore(state => state.status);
-  const isHeavyLoad = status === 'TRANSFERRING' || status === 'RECEIVING';
+  const mode = useTransferStore(state => state.mode);
+  const statusRef = useRef(status);
+  const modeRef = useRef(mode);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+
+    const stars = Array.from({ length: STAR_COUNT }, createStar);
+    let animationFrame = 0;
+    let width = 0;
+    let height = 0;
+    let dpr = 1;
+    let currentSpeed = IDLE_SPEED;
+    let lastTime = performance.now();
+
+    const resize = () => {
+      dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = Math.max(1, Math.floor(width * dpr));
+      canvas.height = Math.max(1, Math.floor(height * dpr));
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+
+    const draw = (now: number) => {
+      const delta = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      const activeStatus = statusRef.current;
+      const isWarping =
+        activeStatus === 'TRANSFERRING' ||
+        activeStatus === 'CONNECTING' ||
+        activeStatus === 'RECEIVING';
+      const direction = modeRef.current === AppMode.RECEIVER ? -1 : 1;
+      const targetSpeed = isWarping
+        ? WARP_SPEED * direction
+        : activeStatus === 'DRAGGING_FILES'
+          ? 0.5
+          : IDLE_SPEED;
+
+      currentSpeed += (targetSpeed - currentSpeed) * ACCELERATION * 60 * delta;
+
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, width, height);
+
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const focalLength = Math.min(width, height) * 0.62;
+      const absSpeed = Math.abs(currentSpeed);
+
+      for (const star of stars) {
+        star.z -= currentSpeed * delta * 0.12;
+        if (star.z <= 0.02) star.z += 1;
+        if (star.z > 1) star.z -= 1;
+
+        const depth = Math.max(star.z, 0.02);
+        const sx = centerX + (star.x * focalLength) / depth;
+        const sy = centerY + (star.y * focalLength) / depth;
+
+        if (sx < -80 || sx > width + 80 || sy < -80 || sy > height + 80) {
+          Object.assign(star, createStar());
+          continue;
+        }
+
+        const alpha = Math.min(1, (1 - depth) * 1.25 + 0.12);
+        const length = 1 + absSpeed * 18 * (1 - depth);
+        const dx = ((sx - centerX) / Math.max(width, 1)) * length;
+        const dy = ((sy - centerY) / Math.max(height, 1)) * length;
+
+        ctx.strokeStyle = `rgba(125, 235, 255, ${alpha})`;
+        ctx.lineWidth = star.size * (1.2 - depth);
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + dx, sy + dy);
+        ctx.stroke();
+      }
+
+      const gradient = ctx.createRadialGradient(
+        centerX,
+        centerY,
+        0,
+        centerX,
+        centerY,
+        Math.max(width, height) * 0.72
+      );
+      gradient.addColorStop(0, 'rgba(6, 182, 212, 0.08)');
+      gradient.addColorStop(0.45, 'rgba(168, 85, 247, 0.045)');
+      gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      animationFrame = requestAnimationFrame(draw);
+    };
+
+    resize();
+    window.addEventListener('resize', resize);
+    animationFrame = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
 
   return (
-    <div className="fixed inset-0 w-full h-full bg-black -z-50 pointer-events-none">
-      <Canvas
-        camera={{ position: [0, 0, 5], fov: 60, near: 0.1, far: 200 }}
-        gl={{
-          antialias: false,
-          powerPreference: 'high-performance',
-          alpha: false,
-          stencil: false,
-          depth: false, // 2D 배경 효과이므로 Depth Buffer 꺼서 성능 향상
-        }}
-      >
-        <SceneManager />
-        <color attach="background" args={['#000000']} />
-        <WarpStars />
-
-        {/* 🚀 [최적화] 무거운 전송 중에는 Bloom 효과의 강도를 낮추거나 샘플링을 줄임 */}
-        <EffectComposer enabled={!isHeavyLoad} enableNormalPass={false}>
-          <Bloom
-            luminanceThreshold={0.2}
-            mipmapBlur
-            intensity={1.2}
-            radius={0.6}
-          />
-        </EffectComposer>
-      </Canvas>
-    </div>
+    <canvas
+      ref={canvasRef}
+      className="fixed inset-0 w-full h-full bg-black -z-50 pointer-events-none"
+      aria-hidden="true"
+    />
   );
 }

@@ -4,7 +4,7 @@ export const SIGNALING_SERVER_URL =
 
 // Rust 시그널링 서버 설정
 export const USE_RUST_SIGNALING =
-  import.meta.env.VITE_USE_RUST_SIGNALING === 'true';
+  import.meta.env.VITE_USE_RUST_SIGNALING !== 'false';
 export const RUST_SIGNALING_URL =
   import.meta.env.VITE_RUST_SIGNALING_URL || 'ws://localhost:5502/ws';
 

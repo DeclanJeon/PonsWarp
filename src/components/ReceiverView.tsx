@@ -8,17 +8,13 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Scan,
   Download,
-  Loader2,
   Archive,
   AlertCircle,
   CheckCircle,
-  FileCheck,
   RefreshCw,
   Radio,
   File as FileIcon,
   Folder,
-  Wifi,
-  HardDrive,
 } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../utils/constants';
@@ -538,6 +534,32 @@ const ReceiverView: React.FC = () => {
             <p className="text-cyan-400/60 font-mono">
               Waiting for sender signal
             </p>
+          </motion.div>
+        )}
+
+        {/* --- STATE: QUEUED --- */}
+        {status === 'QUEUED' && (
+          <motion.div
+            key="queued"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.1 }}
+            className={glassPanelClass}
+          >
+            <div className="text-center relative z-10 p-6 md:p-8">
+              <div className="w-20 h-20 mx-auto mb-6 bg-cyan-500/10 rounded-full flex items-center justify-center border border-cyan-500/20">
+                <Radio className="w-10 h-10 text-cyan-400 animate-pulse" />
+              </div>
+              <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 tracking-wider brand-font">
+                QUEUED
+              </h2>
+              <p className="text-cyan-300 font-mono mb-2">
+                Position {queuePosition || '-'}
+              </p>
+              <p className="text-gray-400 text-sm">
+                {queueMessage || 'Waiting for an available sender slot'}
+              </p>
+            </div>
           </motion.div>
         )}
 

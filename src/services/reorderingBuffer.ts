@@ -10,7 +10,7 @@
  * 🚀 [최적화] TTL(Time-To-Live) 및 자동 정리 기능 추가
  */
 
-import { logDebug, logWarn, logError } from '../utils/logger';
+import { logWarn } from '../utils/logger';
 
 interface BufferedChunk {
   data: ArrayBuffer;

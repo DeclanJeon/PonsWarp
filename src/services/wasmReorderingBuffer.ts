@@ -1,4 +1,6 @@
-import initPonsCore, { WasmReorderingBuffer as WasmBuffer, init } from 'pons-core-wasm';
+import initPonsCore, {
+  WasmReorderingBuffer as WasmBuffer,
+} from 'pons-core-wasm';
 import { ReorderingBuffer } from './reorderingBuffer';
 import { logDebug, logWarn, logError } from '../utils/logger';
 
@@ -64,7 +66,12 @@ export class WasmReorderingBuffer {
 
         if (result) {
           // Uint8Array를 ArrayBuffer로 변환
-          return [result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength) as ArrayBuffer];
+          return [
+            result.buffer.slice(
+              result.byteOffset,
+              result.byteOffset + result.byteLength
+            ) as ArrayBuffer,
+          ];
         }
         return [];
       } catch (e) {

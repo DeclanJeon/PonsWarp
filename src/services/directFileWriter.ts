@@ -23,6 +23,7 @@
  */
 
 import streamSaver from 'streamsaver';
+import initPonsCore, { CryptoSession } from 'pons-core-wasm';
 import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
@@ -44,6 +45,8 @@ if (typeof window !== 'undefined') {
 // 32MB 이상 쌓이면 PAUSE 요청, 16MB 이하로 떨어지면 RESUME 요청
 const WRITE_BUFFER_HIGH_MARK = 32 * 1024 * 1024;
 const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
+const ENCRYPTED_HEADER_SIZE = 38;
+const AUTH_TAG_SIZE = 16;
 
 export class DirectFileWriter {
   private manifest: {
@@ -98,6 +101,9 @@ export class DirectFileWriter {
 
   // 🚀 버퍼 추적 및 흐름 제어 변수
   private isPaused = false;
+  private sessionKey: Uint8Array | null = null;
+  private randomPrefix: Uint8Array | null = null;
+  private cryptoSession: CryptoSession | null = null;
 
   private onProgressCallback:
     | ((data: {
@@ -166,6 +172,16 @@ export class DirectFileWriter {
       logError('[DirectFileWriter]', 'Storage initialization failed:', error);
       throw error;
     }
+  }
+
+  public setEncryptionKey(
+    sessionKey: Uint8Array,
+    randomPrefix: Uint8Array
+  ): void {
+    this.sessionKey = new Uint8Array(sessionKey);
+    this.randomPrefix = new Uint8Array(randomPrefix);
+    this.cryptoSession = null;
+    logInfo('[DirectFileWriter]', '🔐 Encryption key configured');
   }
 
   /**
@@ -341,6 +357,28 @@ export class DirectFileWriter {
       }
     }
 
+    const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
+    if (isSmallFile) {
+      try {
+        logInfo(
+          '[DirectFileWriter]',
+          'Small file detected; using Blob-based download to avoid StreamSaver startup latency...'
+        );
+        await this.initBlobFallback(fileName);
+        logInfo(
+          '[DirectFileWriter]',
+          '✅ Blob fallback initialization successful'
+        );
+        return;
+      } catch (blobError: unknown) {
+        logWarn(
+          '[DirectFileWriter]',
+          'Blob fallback failed, trying streaming strategies...',
+          blobError
+        );
+      }
+    }
+
     // 🚀 [기타 브라우저] StreamSaver 우선 시도
     try {
       logInfo('[DirectFileWriter]', 'Attempting StreamSaver initialization...');
@@ -364,15 +402,26 @@ export class DirectFileWriter {
       // 🚀 [진단] Service Worker 상태 상세 확인
       if (navigator.serviceWorker) {
         try {
-          const registration = await navigator.serviceWorker.ready;
-          logDebug(
-            '[DirectFileWriter]',
-            `Service Worker active: ${!!registration.active}`
-          );
-          logDebug(
-            '[DirectFileWriter]',
-            `Service Worker scope: ${registration.scope}`
-          );
+          const registration = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise<null>(resolve => setTimeout(() => resolve(null), 500)),
+          ]);
+
+          if (registration) {
+            logDebug(
+              '[DirectFileWriter]',
+              `Service Worker active: ${!!registration.active}`
+            );
+            logDebug(
+              '[DirectFileWriter]',
+              `Service Worker scope: ${registration.scope}`
+            );
+          } else {
+            logWarn(
+              '[DirectFileWriter]',
+              'Service Worker not ready yet; continuing with fallback strategy checks'
+            );
+          }
         } catch (swError: unknown) {
           logError(
             '[DirectFileWriter]',
@@ -515,7 +564,6 @@ export class DirectFileWriter {
     }
 
     // 🚀 [최후 폴백] Blob 또는 OPFS 다운로드 시도 (모든 브라우저)
-    const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
     if (isSmallFile) {
       try {
         logInfo(
@@ -900,7 +948,8 @@ export class DirectFileWriter {
 
     if (packet.byteLength < HEADER_SIZE) return;
 
-    const view = new DataView(packet);
+    const normalizedPacket = await this.normalizePacket(packet);
+    const view = new DataView(normalizedPacket);
     const fileId = view.getUint16(0, true);
 
     // EOS 체크
@@ -930,7 +979,7 @@ export class DirectFileWriter {
     }
 
     // 패킷 무결성 검증
-    if (packet.byteLength !== HEADER_SIZE + size) {
+    if (normalizedPacket.byteLength !== HEADER_SIZE + size) {
       logError('[DirectFileWriter]', 'Corrupt packet');
       return;
     }
@@ -966,7 +1015,7 @@ export class DirectFileWriter {
       return;
     }
 
-    const data = new Uint8Array(packet, HEADER_SIZE, size);
+    const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
 
     // 1. 순서 정렬 (Reordering) - 모든 모드에서 사용
     const chunksToWrite = this.reorderingBuffer.push(
@@ -988,6 +1037,56 @@ export class DirectFileWriter {
     if (this.currentBatchSize >= this.BATCH_THRESHOLD) {
       await this.flushBuffer();
     }
+  }
+
+  private async normalizePacket(packet: ArrayBuffer): Promise<ArrayBuffer> {
+    const bytes = new Uint8Array(packet);
+    if (bytes[0] !== 0x02) {
+      return packet;
+    }
+
+    if (packet.byteLength < ENCRYPTED_HEADER_SIZE + AUTH_TAG_SIZE) {
+      throw new Error('Encrypted packet too short');
+    }
+
+    const view = new DataView(packet);
+    const offset = view.getBigUint64(8, true);
+    const plaintextLength = view.getUint32(16, true);
+
+    if (
+      packet.byteLength !==
+      ENCRYPTED_HEADER_SIZE + plaintextLength + AUTH_TAG_SIZE
+    ) {
+      throw new Error('Corrupt encrypted packet');
+    }
+
+    const session = await this.ensureCryptoSession();
+    const decrypted = session.decrypt_chunk(bytes);
+    const normalized = new ArrayBuffer(HEADER_SIZE + decrypted.length);
+    const normalizedView = new DataView(normalized);
+    const normalizedBytes = new Uint8Array(normalized);
+
+    normalizedView.setUint16(0, 0, true);
+    normalizedView.setUint32(2, 0, true);
+    normalizedView.setBigUint64(6, offset, true);
+    normalizedView.setUint32(14, decrypted.length, true);
+    normalizedView.setUint32(18, 0, true);
+    normalizedBytes.set(decrypted, HEADER_SIZE);
+
+    return normalized;
+  }
+
+  private async ensureCryptoSession(): Promise<CryptoSession> {
+    if (this.cryptoSession) {
+      return this.cryptoSession;
+    }
+    if (!this.sessionKey || !this.randomPrefix) {
+      throw new Error('Encrypted packet received before crypto session');
+    }
+
+    await initPonsCore();
+    this.cryptoSession = new CryptoSession(this.sessionKey, this.randomPrefix);
+    return this.cryptoSession;
   }
 
   /**
@@ -1276,6 +1375,16 @@ export class DirectFileWriter {
     this.writeBuffer = []; // 메모리 해제
     this.blobChunks = []; // Blob 청크 메모리 해제
     this.isPaused = false;
+    if (this.sessionKey) {
+      this.sessionKey.fill(0);
+    }
+    if (this.randomPrefix) {
+      this.randomPrefix.fill(0);
+    }
+    this.sessionKey = null;
+    this.randomPrefix = null;
+    this.cryptoSession?.reset();
+    this.cryptoSession = null;
 
     // 버퍼 정리
     if (this.reorderingBuffer) {

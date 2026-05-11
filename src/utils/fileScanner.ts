@@ -1,5 +1,3 @@
-import { FileNode } from '../types/types';
-
 export interface ScannedFile {
   file: File;
   path: string; // 전체 상대 경로 (예: "folder/subfolder/image.png")
@@ -32,7 +30,7 @@ const scanEntry = async (
   list: ScannedFile[]
 ): Promise<void> => {
   if (entry.isFile) {
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>(resolve => {
       (entry as FileSystemFileEntry).file(
         file => {
           // 숨겨진 파일(.DS_Store 등) 제외

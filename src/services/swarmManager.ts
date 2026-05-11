@@ -27,7 +27,7 @@ import {
   HEADER_SIZE,
   BATCH_SIZE_INITIAL,
 } from '../utils/constants';
-import { CryptoService } from './cryptoService';
+import { bytesToBase64, CryptoService } from './cryptoService';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -115,12 +115,14 @@ export class SwarmManager {
   private completedPeersInSession: Set<string> = new Set(); // 현재 세션에서 완료된 피어
   private currentTransferPeers: Set<string> = new Set(); // 현재 전송 중인 피어들
   private files: File[] = []; // 전송할 파일 저장
+  private allTransfersCompleteEmitted = false;
 
   // 🔐 [E2E Encryption]
   private cryptoService: CryptoService | null = null;
   private encryptionEnabled: boolean = false;
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
+  private cryptoSessionAnnouncedPeers: Set<string> = new Set();
 
   // Bound Handlers to allow removal
   private boundHandlePeerJoined = this.handlePeerJoined.bind(this);
@@ -160,6 +162,39 @@ export class SwarmManager {
     this.sessionKey = sessionKey;
     this.randomPrefix = randomPrefix;
     logInfo('[SwarmManager]', '🔐 Session key set');
+  }
+
+  private ensureTransferEncryption(): void {
+    if (this.sessionKey && this.randomPrefix) {
+      this.encryptionEnabled = true;
+      return;
+    }
+
+    this.sessionKey = crypto.getRandomValues(new Uint8Array(32));
+    this.randomPrefix = crypto.getRandomValues(new Uint8Array(8));
+    this.encryptionEnabled = true;
+    logInfo('[SwarmManager]', '🔐 Transfer encryption session generated');
+  }
+
+  private sendCryptoSessionToPeer(peer: SinglePeerConnection): void {
+    if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
+      return;
+    }
+
+    if (this.cryptoSessionAnnouncedPeers.has(peer.id)) {
+      return;
+    }
+
+    peer.send(
+      JSON.stringify({
+        type: 'CRYPTO_SESSION',
+        version: 1,
+        algorithm: 'AES-256-GCM',
+        key: bytesToBase64(this.sessionKey),
+        randomPrefix: bytesToBase64(this.randomPrefix),
+      })
+    );
+    this.cryptoSessionAnnouncedPeers.add(peer.id);
   }
 
   /**
@@ -312,6 +347,7 @@ export class SwarmManager {
 
       // Sender인 경우 Manifest 전송
       if (this.pendingManifest) {
+        this.sendCryptoSessionToPeer(peer);
         this.sendManifestToPeer(peer);
       }
 
@@ -374,7 +410,9 @@ export class SwarmManager {
 
     // 자기 자신은 무시
     if (peerId === signalingService.getSocketId()) {
-      console.log('[SwarmManager] ℹ️ handlePeerJoined ignored: Self connection');
+      console.log(
+        '[SwarmManager] ℹ️ handlePeerJoined ignored: Self connection'
+      );
       return;
     }
 
@@ -555,7 +593,7 @@ export class SwarmManager {
     return bufferOkay && receiversReady;
   }
 
-  private handleDrain(peerId: string): void {
+  private handleDrain(_peerId: string): void {
     // 글로벌 backpressure 재평가
     if (this.isTransferring && this.canRequestMoreChunks()) {
       this.requestMoreChunks();
@@ -621,8 +659,6 @@ export class SwarmManager {
 
       case 'TRANSFER_READY':
         if (peer) {
-          peer.ready = true;
-
           // 이미 완료된 피어인지 확인
           if (this.completedPeersInSession.has(peerId)) {
             logInfo(
@@ -631,6 +667,16 @@ export class SwarmManager {
             );
             return;
           }
+
+          if (peer.ready) {
+            logInfo(
+              '[SwarmManager]',
+              `Peer ${peerId} is already ready, ignoring duplicate TRANSFER_READY`
+            );
+            return;
+          }
+
+          peer.ready = true;
 
           // 🚀 [대기열] 이미 전송 중이면 대기열에 추가
           if (this.isTransferring) {
@@ -773,6 +819,10 @@ export class SwarmManager {
         });
 
         this.emit('peer-complete', peerId);
+        if (this.canCompleteCurrentSession()) {
+          this.emitAllTransfersComplete();
+          return;
+        }
         console.log('[SwarmManager] 🔄 Calling checkTransferComplete...');
         this.checkTransferComplete();
         break;
@@ -1096,23 +1146,7 @@ export class SwarmManager {
       allConnectedCompleted ||
       (connectedPeers.length === 0 && this.completedPeersInSession.size > 0)
     ) {
-      console.log('[SwarmManager] 🎉 Emitting all-transfers-complete!');
-      logInfo(
-        '[SwarmManager]',
-        `🎉 All transfers complete! ${this.completedPeersInSession.size} receivers finished.`
-      );
-
-      // 🚀 [핵심 수정] 완료 후 추가 메시지 처리 방지
-      this.isTransferring = false;
-
-      this.emit('all-transfers-complete');
-
-      // 🚀 [추가] 완료 이벤트 발생 후 약간의 딜레이를 두고 cleanup 준비
-      setTimeout(() => {
-        console.log(
-          '[SwarmManager] ✅ Transfer session completed, ready for cleanup'
-        );
-      }, 1000);
+      this.emitAllTransfersComplete();
     } else {
       console.log('[SwarmManager] 📦 Emitting batch-complete');
       logInfo(
@@ -1123,6 +1157,42 @@ export class SwarmManager {
         completedCount: this.completedPeersInSession.size,
       });
     }
+  }
+
+  private canCompleteCurrentSession(): boolean {
+    if (this.completedPeersInSession.size === 0) return false;
+    if (this.currentTransferPeers.size > 0) return false;
+    if (this.transferQueue.length > 0) return false;
+
+    return this.getConnectedPeers().every(peer =>
+      this.completedPeersInSession.has(peer.id)
+    );
+  }
+
+  public isSessionComplete(): boolean {
+    return this.allTransfersCompleteEmitted || this.canCompleteCurrentSession();
+  }
+
+  private emitAllTransfersComplete(): void {
+    if (this.allTransfersCompleteEmitted) return;
+
+    this.allTransfersCompleteEmitted = true;
+    this.isTransferring = false;
+
+    console.log('[SwarmManager] 🎉 Emitting all-transfers-complete!');
+    logInfo(
+      '[SwarmManager]',
+      `🎉 All transfers complete! ${this.completedPeersInSession.size} receivers finished.`
+    );
+
+    this.emit('all-transfers-complete');
+    this.emit('complete');
+
+    setTimeout(() => {
+      console.log(
+        '[SwarmManager] ✅ Transfer session completed, ready for cleanup'
+      );
+    }, 1000);
   }
 
   /**
@@ -1216,6 +1286,8 @@ export class SwarmManager {
     this.totalBytes = manifest.totalSize;
     this.totalBytesSent = 0;
     this.completedPeerCount = 0;
+    this.allTransfersCompleteEmitted = false;
+    this.ensureTransferEncryption();
 
     // TURN 설정 가져오기
     await this.fetchTurnConfig(roomId);
@@ -1224,15 +1296,34 @@ export class SwarmManager {
     await signalingService.connect();
     await signalingService.joinRoom(roomId);
 
-    // Worker 초기화
-    this.worker = getSenderWorkerV1();
-    this.setupWorkerHandlers(files, manifest);
-
     this.emit('status', 'WAITING_FOR_PEER');
   }
 
   private setupWorkerHandlers(files: File[], manifest: TransferManifest): void {
     if (!this.worker) return;
+
+    let workerStarted = false;
+    const startWorkerInitialization = () => {
+      if (!this.worker || workerStarted) return;
+      workerStarted = true;
+
+      // 🔐 암호화 키 설정 (활성화된 경우)
+      if (this.isEncryptionEnabled() && this.sessionKey && this.randomPrefix) {
+        console.log('[SwarmManager] 🔐 Setting encryption key on worker');
+        this.worker.postMessage({
+          type: 'set-encryption-key',
+          payload: {
+            sessionKey: this.sessionKey,
+            randomPrefix: this.randomPrefix,
+          },
+        });
+      }
+
+      this.worker.postMessage({
+        type: 'init',
+        payload: { files, manifest },
+      });
+    };
 
     this.worker.onmessage = e => {
       const { type, payload } = e.data;
@@ -1245,26 +1336,7 @@ export class SwarmManager {
             'files'
           );
 
-          // 🔐 암호화 키 설정 (활성화된 경우)
-          if (
-            this.isEncryptionEnabled() &&
-            this.sessionKey &&
-            this.randomPrefix
-          ) {
-            console.log('[SwarmManager] 🔐 Setting encryption key on worker');
-            this.worker!.postMessage({
-              type: 'set-encryption-key',
-              payload: {
-                sessionKey: this.sessionKey,
-                randomPrefix: this.randomPrefix,
-              },
-            });
-          }
-
-          this.worker!.postMessage({
-            type: 'init',
-            payload: { files, manifest },
-          });
+          startWorkerInitialization();
           break;
 
         case 'encryption-ready':
@@ -1338,6 +1410,10 @@ export class SwarmManager {
       );
       this.cleanup();
     };
+
+    // Worker가 캐시/WASM 초기화 타이밍 때문에 ready 이벤트를 놓쳐도 init은
+    // worker 내부에서 WASM 준비를 기다릴 수 있으므로 직접 시작한다.
+    setTimeout(startWorkerInitialization, 0);
   }
 
   private handleBatchFromWorker(payload: any): void {
@@ -1458,6 +1534,7 @@ export class SwarmManager {
       const peer = this.peers.get(peerId);
       if (peer && peer.connected) {
         try {
+          this.sendCryptoSessionToPeer(peer);
           // 대기열에서 온 피어에게는 Manifest도 다시 전송 (이미 받았을 수 있지만 확실히)
           if (this.pendingManifest) {
             peer.send(
@@ -1678,6 +1755,16 @@ export class SwarmManager {
     this.completedPeersInSession.clear();
     this.currentTransferPeers.clear();
     this.pausedPeers.clear();
+    this.cryptoSessionAnnouncedPeers.clear();
+    if (this.sessionKey) {
+      this.sessionKey.fill(0);
+    }
+    if (this.randomPrefix) {
+      this.randomPrefix.fill(0);
+    }
+    this.sessionKey = null;
+    this.randomPrefix = null;
+    this.encryptionEnabled = false;
     this.files = [];
   }
 

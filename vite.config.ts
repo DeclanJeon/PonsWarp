@@ -7,6 +7,10 @@ import { NodeModulesPolyfillPlugin } from '@esbuild-plugins/node-modules-polyfil
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const isProduction = mode === 'production';
+  const crossOriginIsolationHeaders = {
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Embedder-Policy': 'require-corp',
+  };
 
   return {
     root: path.resolve(__dirname, '.'),
@@ -22,10 +26,10 @@ export default defineConfig(({ mode }) => {
       fs: {
         allow: ['..'],
       },
-      headers: {
-        'Cross-Origin-Opener-Policy': 'same-origin',
-        'Cross-Origin-Embedder-Policy': 'require-corp',
-      },
+      headers: crossOriginIsolationHeaders,
+    },
+    preview: {
+      headers: crossOriginIsolationHeaders,
     },
     assetsInclude: ['**/*.wasm'],
     plugins: [

@@ -4,9 +4,8 @@ console.log('[App.tsx] 🪲 [DEBUG] - Applying responsive grid layout');
 console.log('[App.tsx] 🪲 [DEBUG] - Implementing fluid typography');
 console.log('[App.tsx] 🪲 [DEBUG] - Adding visual hierarchy improvements');
 
-import React, { useEffect } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 import { Send, Download, ArrowRight, ShieldCheck, Zap } from 'lucide-react';
-import SpaceField from './components/SpaceField';
 import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
 import { AppMode } from './types/types';
@@ -19,6 +18,8 @@ import { ToastContainer } from './components/ui/ToastContainer';
 import { StatusOverlay } from './components/ui/StatusOverlay';
 import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
+
+const SpaceField = lazy(() => import('./components/SpaceField'));
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
@@ -77,7 +78,13 @@ const App: React.FC = () => {
       */}
       <div className="relative w-screen h-screen overflow-hidden text-white bg-transparent font-rajdhani select-none">
         {/* 1. 배경 계층 (3D Space) */}
-        <SpaceField />
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 w-full h-full bg-black -z-50 pointer-events-none" />
+          }
+        >
+          <SpaceField />
+        </Suspense>
 
         {/* 2. 오버레이 계층 (Toast, Status, Flash) */}
         <StatusOverlay />

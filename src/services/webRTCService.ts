@@ -16,7 +16,7 @@ import { getSignalingService } from './signaling-factory';
 const signalingService = getSignalingService();
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
-import { CryptoService } from './cryptoService';
+import { base64ToBytes, CryptoService } from './cryptoService';
 
 type EventHandler = (data: any) => void;
 
@@ -25,7 +25,14 @@ interface IFileWriter {
   initStorage(manifest: any): Promise<void>;
   writeChunk(packet: ArrayBuffer): Promise<void>;
   cleanup(): Promise<void>;
-  onProgress(cb: (progress: number) => void): void;
+  onProgress(
+    cb: (progress: {
+      progress: number;
+      speed: number;
+      bytesTransferred: number;
+      totalBytes: number;
+    }) => void
+  ): void;
   onComplete(cb: (actualSize: number) => void): void;
   onError(cb: (err: string) => void): void;
   // 🚀 [추가] 흐름 제어 인터페이스
@@ -165,6 +172,10 @@ class ReceiverService {
     }
     this.writer = writerInstance;
 
+    if (this.sessionKey && this.randomPrefix && this.writer.setEncryptionKey) {
+      this.writer.setEncryptionKey(this.sessionKey, this.randomPrefix);
+    }
+
     // Writer 이벤트 연결
     this.writer.onProgress((progressData: any) => {
       // 객체 형태면 그대로, 숫자면 변환
@@ -219,9 +230,15 @@ class ReceiverService {
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
 
-      // Sender에게 준비 완료 신호 전송
+      // Sender에게 준비 완료 신호 전송. 일부 브라우저는 data channel open 직후
+      // 첫 control frame을 조용히 누락시키는 경우가 있어 짧게 재전송한다.
       if (this.peer && this.peer.connected) {
-        this.peer.send(JSON.stringify({ type: 'TRANSFER_READY' }));
+        const readyMessage = JSON.stringify({ type: 'TRANSFER_READY' });
+        [0, 100, 300, 1000].forEach(delay => {
+          setTimeout(() => {
+            this.peer?.send(readyMessage);
+          }, delay);
+        });
       } else {
         throw new Error('Peer disconnected during storage init');
       }
@@ -251,6 +268,18 @@ class ReceiverService {
       this.writer.cleanup();
       // writer는 null로 만들지 않음 (재사용 가능성 고려)
     }
+
+    if (this.sessionKey) {
+      this.sessionKey.fill(0);
+    }
+    if (this.randomPrefix) {
+      this.randomPrefix.fill(0);
+    }
+    this.sessionKey = null;
+    this.randomPrefix = null;
+    this.encryptionEnabled = false;
+    this.cryptoService?.cleanup();
+    this.cryptoService = null;
   }
 
   // ======================= INTERNAL LOGIC =======================
@@ -396,6 +425,14 @@ class ReceiverService {
       const msg = JSON.parse(str);
 
       switch (msg.type) {
+        case 'CRYPTO_SESSION': {
+          const sessionKey = base64ToBytes(msg.key);
+          const randomPrefix = base64ToBytes(msg.randomPrefix);
+          this.setSessionKey(sessionKey, randomPrefix);
+          this.encryptionEnabled = true;
+          logInfo('[Receiver]', '🔐 Crypto session received');
+          break;
+        }
         case 'MANIFEST':
           logInfo('[Receiver]', 'Manifest received');
           this.emit('metadata', msg.manifest);

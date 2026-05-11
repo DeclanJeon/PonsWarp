@@ -129,7 +129,7 @@ const initialState = {
 };
 
 export const useTransferStore = create<TransferState>()(
-  subscribeWithSelector((set, get) => ({
+  subscribeWithSelector(set => ({
     ...initialState,
 
     // 기본 setter

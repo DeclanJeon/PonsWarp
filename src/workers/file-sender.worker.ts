@@ -10,11 +10,11 @@ declare const self: DedicatedWorkerGlobalScope;
 // - Features: Zero-copy streaming, Aggregation, Backpressure
 // ============================================================================
 
-import init, { 
-  PacketEncoder, 
-  CryptoSession, 
+import init, {
+  PacketEncoder,
+  CryptoSession,
   Zip64Stream,
-  ZeroCopyPacketPool 
+  ZeroCopyPacketPool,
 } from 'pons-core-wasm';
 
 const CHUNK_SIZE_MIN = 16 * 1024;
@@ -157,23 +157,27 @@ let zeroCopyEnabled = false;
 // 🔐 E2E Encryption
 let cryptoSession: CryptoSession | null = null;
 let encryptionEnabled = false;
+let pendingEncryptionKey: {
+  sessionKey: Uint8Array;
+  randomPrefix: Uint8Array;
+} | null = null;
 
 // WASM 초기화
 async function initWasm() {
   try {
     const wasmInstance = await init();
-    
+
     // Zero-Copy Pool 초기화 (64 슬롯)
     zeroCopyPool = new ZeroCopyPacketPool();
-    
+
     // WASM 메모리 참조 획득
     wasmMemory = wasmInstance.memory;
     zeroCopyEnabled = true;
-    
+
     // 레거시 PacketEncoder도 초기화 (fallback용)
     packetEncoder = new PacketEncoder();
     wasmReady = true;
-    
+
     console.log('[Sender Worker] WASM initialized with Zero-Copy Pool');
   } catch (e) {
     console.error('[Sender Worker] WASM init failed:', e);
@@ -213,16 +217,16 @@ function setEncryptionKey(payload: {
 }) {
   try {
     if (!wasmReady) {
-      console.error('[Sender Worker] WASM not ready for encryption');
-      self.postMessage({
-        type: 'encryption-error',
-        payload: 'WASM not initialized',
-      });
+      pendingEncryptionKey = {
+        sessionKey: payload.sessionKey,
+        randomPrefix: payload.randomPrefix,
+      };
       return;
     }
 
     cryptoSession = new CryptoSession(payload.sessionKey, payload.randomPrefix);
     encryptionEnabled = true;
+    pendingEncryptionKey = null;
     console.log('[Sender Worker] 🔐 E2E encryption enabled');
     self.postMessage({ type: 'encryption-ready' });
   } catch (e: any) {
@@ -254,6 +258,10 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
 
   if (!wasmReady) {
     await initWasm();
+  }
+
+  if (pendingEncryptionKey) {
+    setEncryptionKey(pendingEncryptionKey);
   }
 
   if (packetEncoder) {
@@ -345,7 +353,7 @@ async function initZipStream() {
 
         const reader = file.stream().getReader();
         try {
-          while (true) {
+          for (;;) {
             // 백프레셔 체크
             if (currentZipQueueSize > ZIP_QUEUE_HIGH_WATER_MARK) {
               isZipPaused = true;
@@ -449,7 +457,9 @@ function resetWorker() {
   if (singleFileReader) {
     try {
       singleFileReader.cancel();
-    } catch {}
+    } catch {
+      // Ignore reader cancellation during reset.
+    }
     singleFileReader = null;
   }
   singleFileBuffer = null;
@@ -520,7 +530,9 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
     state.isCompleted = true;
     try {
       await singleFileReader?.cancel();
-    } catch {}
+    } catch {
+      // Ignore reader cancellation after completion.
+    }
     singleFileReader = null;
     return null;
   }
@@ -530,7 +542,7 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
     : CHUNK_SIZE_MAX;
 
   try {
-    while (true) {
+    for (;;) {
       const bufferSize = singleFileBuffer?.length ?? 0;
 
       if (
@@ -579,7 +591,9 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
     console.error('[Sender Worker] Single chunk error:', e);
     try {
       await singleFileReader?.cancel();
-    } catch {}
+    } catch {
+      // Ignore reader cancellation after a read error.
+    }
     singleFileReader = null;
     singleFileBuffer = null;
     return null;
@@ -605,7 +619,7 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
     return createPacket(chunkData);
   }
 
-  while (true) {
+  for (;;) {
     try {
       const { done, value } = await state.zipReader.read();
 
@@ -679,7 +693,11 @@ function createPacketZeroCopy(data: Uint8Array): ArrayBuffer {
   // 암호화 모드
   let packetLen: number;
   if (encryptionEnabled && cryptoSession) {
-    packetLen = zeroCopyPool.commit_encrypted_slot(slotId, data.length, cryptoSession);
+    packetLen = zeroCopyPool.commit_encrypted_slot(
+      slotId,
+      data.length,
+      cryptoSession
+    );
   } else {
     packetLen = zeroCopyPool.commit_slot(slotId, data.length);
   }
@@ -813,10 +831,15 @@ function createPacketFallback(data: Uint8Array): ArrayBuffer {
   return packet;
 }
 
-function processBatch(requestedCount: number) {
+async function processBatch(requestedCount: number) {
   if (!state.isInitialized) return;
 
   if (state.startTime === 0) state.startTime = Date.now();
+
+  if (doubleBuffer.getActiveSize() === 0 && prefetchPromise) {
+    await prefetchPromise;
+  }
+
   if (doubleBuffer.getActiveSize() === 0) doubleBuffer.swap();
 
   const chunks = doubleBuffer.takeFromActive(requestedCount);

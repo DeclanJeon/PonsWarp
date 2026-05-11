@@ -18,21 +18,21 @@ Most web-based file transfer tools have a fatal flaw: **They crash your browser 
 
 We bypass the browser's memory limits entirely by leveraging **StreamSaver.js** and **Rust (WASM)**. Data flows like water through a pipe—from the sender's disk, encrypted in transit, directly to the receiver's disk.
 
-| Feature | 🌌 PonsWarp | ☁️ Traditional Cloud (WeTransfer/Google Drive) | 🕸️ Standard P2P Tools |
-| :--- | :--- | :--- | :--- |
-| **File Size Limit** | **Unlimited** (1TB+ Tested) | 2GB - 15GB Caps | Browser Crash ~2GB |
-| **Storage** | **Direct Disk-to-Disk** | Stored on Server | RAM / Blob Storage |
-| **Privacy** | **E2E Encrypted (WASM)** | Accessible by Provider | Varies |
-| **Speed** | **Local Network / P2P Speed** | Upload + Download Time | P2P Speed |
+| Feature             | 🌌 PonsWarp                   | ☁️ Traditional Cloud (WeTransfer/Google Drive) | 🕸️ Standard P2P Tools |
+| :------------------ | :---------------------------- | :--------------------------------------------- | :-------------------- |
+| **File Size Limit** | **Unlimited** (1TB+ Tested)   | 2GB - 15GB Caps                                | Browser Crash ~2GB    |
+| **Storage**         | **Direct Disk-to-Disk**       | Stored on Server                               | RAM / Blob Storage    |
+| **Privacy**         | **E2E Encrypted (WASM)**      | Accessible by Provider                         | Varies                |
+| **Speed**           | **Local Network / P2P Speed** | Upload + Download Time                         | P2P Speed             |
 
 ## 🚀 Key Features
 
-* **⚡ Hyper-Fast P2P Transfer:** Direct connection via WebRTC (UDP/SCTP). If you are on the same network (LAN), it transfers at gigabit speeds.
-* **💾 Unlimited File Size:** Streams data directly to the file system. Transfer a 100GB 4K video file without spiking your RAM.
-* **🔐 End-to-End Encryption:** Powered by **Rust (WebAssembly)**. AES-256-GCM encryption ensures your data is unreadable to anyone else—even us.
-* **📂 Drag & Drop Folders:** Send entire directory structures. Files are streamed and preserved perfectly.
-* **🧠 Smart Congestion Control:** Custom backpressure algorithm with RTT-based AIMD congestion control preventing packet loss on unstable networks.
-* **🎨 Sci-Fi UI:** An immersive, hardware-accelerated 3D space environment.
+- **⚡ Hyper-Fast P2P Transfer:** Direct connection via WebRTC (UDP/SCTP). If you are on the same network (LAN), it transfers at gigabit speeds.
+- **💾 Unlimited File Size:** Streams data directly to the file system. Transfer a 100GB 4K video file without spiking your RAM.
+- **🔐 End-to-End Encryption:** Powered by **Rust (WebAssembly)**. AES-256-GCM encryption ensures your data is unreadable to anyone else—even us.
+- **📂 Drag & Drop Folders:** Send entire directory structures. Files are streamed and preserved perfectly.
+- **🧠 Smart Congestion Control:** Custom backpressure algorithm with RTT-based AIMD congestion control preventing packet loss on unstable networks.
+- **🎨 Sci-Fi UI:** An immersive, hardware-accelerated 3D space environment.
 
 ## 🏗️ Architecture
 
@@ -45,12 +45,12 @@ graph LR
     C -->|P2P Transfer| D{Receiver Browser}
     D -->|Decrypt (WASM)| E(StreamSaver / FSA)
     E -->|Write Stream| F[Receiver Disk]
-    
+
     style A fill:#f9f,stroke:#333,stroke-width:2px
     style F fill:#f9f,stroke:#333,stroke-width:2px
     style B fill:#bbf,stroke:#333
     style E fill:#bbf,stroke:#333
-````
+```
 
 ### Core Components
 
@@ -60,20 +60,20 @@ graph LR
 
 ## 🛠️ Tech Stack
 
-  * **Frontend:** React 19, TypeScript 5.9, Vite 7
-  * **Core Logic:** **Rust (WebAssembly)**
-  * **P2P Networking:** WebRTC (simple-peer), Socket.io (Signaling)
-  * **Storage:** StreamSaver.js, File System Access API
-  * **Compression:** fflate (Streaming ZIP generation)
-  * **Visuals:** Three.js, React Three Fiber, Tailwind CSS 4
+- **Frontend:** React 19, TypeScript 5.9, Vite 7
+- **Core Logic:** **Rust (WebAssembly)**
+- **P2P Networking:** WebRTC (simple-peer), Socket.io (Signaling)
+- **Storage:** StreamSaver.js, File System Access API
+- **Compression:** fflate (Streaming ZIP generation)
+- **Visuals:** Three.js, React Three Fiber, Tailwind CSS 4
 
 ## 📦 Installation & Development
 
 ### Prerequisites
 
-  * Node.js v20+
-  * pnpm v8+
-  * Rust (for building WASM core, optional if using pre-built binaries)
+- Node.js v20+
+- pnpm v8+
+- Rust (for building WASM core, optional if using pre-built binaries)
 
 ### Quick Start
 
@@ -89,27 +89,28 @@ pnpm install
 pnpm dev
 ```
 
-Create a `.env` file in the root directory:
+Create a `.env` file in `PonsWarp/` if you need to override the local defaults:
 
 ```env
-SIGNALING_SERVER_URL=ws://localhost:5501
+VITE_USE_RUST_SIGNALING=true
+VITE_RUST_SIGNALING_URL=ws://localhost:5502/ws
 ```
 
 ## 🌐 Browser Compatibility
 
-| Browser | Status | Notes |
-| :--- | :---: | :--- |
+| Browser           |   Status    | Notes                                                  |
+| :---------------- | :---------: | :----------------------------------------------------- |
 | **Chrome / Edge** | ✅ **Best** | Full support for File System Access API & StreamSaver. |
-| **Firefox** | ⚠️ Good | Uses StreamSaver fallback. Large file support is good. |
-| **Safari** | ⚠️ Limited | Basic P2P works, but file system APIs are restrictive. |
+| **Firefox**       |   ⚠️ Good   | Uses StreamSaver fallback. Large file support is good. |
+| **Safari**        | ⚠️ Limited  | Basic P2P works, but file system APIs are restrictive. |
 
 ## 🤝 Contributing
 
 We love open source\! We are looking for beta testers and contributors to help with:
 
-  * Improving NAT traversal (TURN server configurations).
-  * Mobile UI responsiveness optimizations.
-  * Testing on various network conditions.
+- Improving NAT traversal (TURN server configurations).
+- Mobile UI responsiveness optimizations.
+- Testing on various network conditions.
 
 <!-- end list -->
 
@@ -125,11 +126,11 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ## 🙏 Acknowledgments
 
-  * [WebRTC](https://webrtc.org/) - The backbone of P2P.
-  * [StreamSaver.js](https://www.google.com/search?q=https://github.com/jimmywarting/StreamSaver.js) - The magic behind saving large files.
-  * [Rust & wasm-bindgen](https://rustwasm.github.io/) - For blazing fast crypto.
+- [WebRTC](https://webrtc.org/) - The backbone of P2P.
+- [StreamSaver.js](https://www.google.com/search?q=https://github.com/jimmywarting/StreamSaver.js) - The magic behind saving large files.
+- [Rust & wasm-bindgen](https://rustwasm.github.io/) - For blazing fast crypto.
 
------
+---
 
 \<div align="center"\>
 \<p\>Made with ❤️ by the PonsWarp Team\</p\>

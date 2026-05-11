@@ -9,6 +9,9 @@ import { LOW_WATER_MARK } from '../utils/constants';
 import { logInfo, logError } from '../utils/logger';
 
 type EventHandler = (data: any) => void;
+type SimplePeerWithChannel = SimplePeer.Instance & {
+  _channel?: RTCDataChannel;
+};
 
 export interface PeerConfig {
   iceServers: RTCIceServer[];
@@ -27,7 +30,6 @@ export class SinglePeerConnection {
   public connected: boolean = false;
   public ready: boolean = false;
 
-  // @ts-ignore
   public pc: SimplePeer.Instance | null = null;
   private destroyed: boolean = false;
   private drainEmitted: boolean = false;
@@ -84,10 +86,9 @@ export class SinglePeerConnection {
 
     // binaryType 강제 설정
     const forceArrayBuffer = () => {
-      // @ts-ignore
-      if (this.pc?._channel && this.pc._channel.binaryType !== 'arraybuffer') {
-        // @ts-ignore
-        this.pc._channel.binaryType = 'arraybuffer';
+      const channel = (this.pc as SimplePeerWithChannel | null)?._channel;
+      if (channel && channel.binaryType !== 'arraybuffer') {
+        channel.binaryType = 'arraybuffer';
       }
     };
 
@@ -105,15 +106,24 @@ export class SinglePeerConnection {
     });
 
     this.pc.on('data', (data: any) => {
-      // Uint8Array -> ArrayBuffer 변환
-      const buffer =
-        data instanceof Uint8Array
-          ? data.buffer.slice(
-              data.byteOffset,
-              data.byteOffset + data.byteLength
-            )
-          : data;
-      this.emit('data', buffer);
+      if (data instanceof Blob) {
+        data
+          .arrayBuffer()
+          .then(buffer => this.emit('data', buffer))
+          .catch(error => this.emit('error', error));
+        return;
+      }
+
+      if (ArrayBuffer.isView(data)) {
+        const buffer = data.buffer.slice(
+          data.byteOffset,
+          data.byteOffset + data.byteLength
+        );
+        this.emit('data', buffer);
+        return;
+      }
+
+      this.emit('data', data);
     });
 
     this.pc.on('error', (error: Error) => {
@@ -129,8 +139,7 @@ export class SinglePeerConnection {
   }
 
   private setupChannelEvents(): void {
-    // @ts-ignore
-    const channel = this.pc?._channel as RTCDataChannel;
+    const channel = (this.pc as SimplePeerWithChannel | null)?._channel;
     if (!channel) return;
 
     channel.onbufferedamountlow = () => {
@@ -165,8 +174,7 @@ export class SinglePeerConnection {
       return;
     }
 
-    // @ts-ignore
-    const channel = this.pc._channel as RTCDataChannel;
+    const channel = (this.pc as SimplePeerWithChannel)._channel;
     if (!channel || channel.readyState !== 'open') {
       return;
     }
@@ -179,8 +187,7 @@ export class SinglePeerConnection {
    */
   public getBufferedAmount(): number {
     if (!this.pc || this.destroyed) return 0;
-    // @ts-ignore
-    const channel = this.pc._channel as RTCDataChannel;
+    const channel = (this.pc as SimplePeerWithChannel)._channel;
     return channel?.bufferedAmount ?? 0;
   }
 

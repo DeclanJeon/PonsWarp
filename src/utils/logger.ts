@@ -3,9 +3,7 @@
  */
 
 // 환경 변수 확인 (Vite는 import.meta.env를 사용)
-// @ts-ignore - Vite 환경 변수는 빌드 타임에 정의됨
 const isDevelopment = import.meta.env.DEV;
-// @ts-ignore - Vite 환경 변수는 빌드 타임에 정의됨
 const isProduction = import.meta.env.PROD;
 
 export enum LogLevel {

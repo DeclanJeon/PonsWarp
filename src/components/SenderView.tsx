@@ -6,14 +6,13 @@ console.log(
 );
 console.log('[SenderView] 🪲 [DEBUG] - Adding responsive layout improvements');
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Upload,
   Folder,
   File as FileIcon,
   CheckCircle,
-  Copy,
   Check,
   Loader2,
   FilePlus,
@@ -24,7 +23,6 @@ import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { scanFiles, processInputFiles } from '../utils/fileScanner';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AppMode } from '../types/types';
 import { useTransferStore } from '../store/transferStore';
 
 interface SenderViewProps {
@@ -32,12 +30,7 @@ interface SenderViewProps {
 }
 
 const SenderView: React.FC<SenderViewProps> = () => {
-  const { setStatus: setGlobalStatus } = useTransferStore();
-  const [manifest, setManifest] = useState<any>(null);
-  const [roomId, setRoomId] = useState<string | null>(null);
-  const [shareLink, setShareLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [status, setStatus] = useState<
+  type SenderStatus =
     | 'IDLE'
     | 'PREPARING'
     | 'WAITING'
@@ -45,8 +38,20 @@ const SenderView: React.FC<SenderViewProps> = () => {
     | 'TRANSFERRING'
     | 'REMOTE_PROCESSING'
     | 'READY_FOR_NEXT'
-    | 'DONE'
-  >('IDLE');
+    | 'DONE';
+  const [manifest, setManifest] = useState<any>(null);
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [shareLink, setShareLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<SenderStatus>('IDLE');
+  const setTransferStatus = (
+    next: SenderStatus | ((prev: SenderStatus) => SenderStatus)
+  ) => {
+    setStatus(prev => {
+      if (prev === 'DONE') return prev;
+      return typeof next === 'function' ? next(prev) : next;
+    });
+  };
   const [progressData, setProgressData] = useState({
     progress: 0,
     speed: 0,
@@ -74,18 +79,35 @@ const SenderView: React.FC<SenderViewProps> = () => {
     // SwarmManager 인스턴스 생성
     const swarmManager = new SwarmManager();
     swarmManagerRef.current = swarmManager;
+    const completionPoll = setInterval(() => {
+      if (swarmManager.isSessionComplete()) {
+        setTransferStatus('DONE');
+      }
+    }, 500);
 
     // 이벤트 핸들러 등록
     swarmManager.on('status', (s: any) => {
-      if (s === 'WAITING_FOR_PEER') setStatus('WAITING');
-      if (s === 'CONNECTING') setStatus('CONNECTING');
-      if (s === 'TRANSFERRING') setStatus('TRANSFERRING');
+      setTransferStatus(prev => {
+        if (prev === 'DONE') return prev;
+        if (s === 'WAITING_FOR_PEER') {
+          return prev === 'IDLE' || prev === 'PREPARING' || prev === 'WAITING'
+            ? 'WAITING'
+            : prev;
+        }
+        if (s === 'CONNECTING') {
+          return prev === 'IDLE' || prev === 'PREPARING' || prev === 'WAITING'
+            ? 'CONNECTING'
+            : prev;
+        }
+        if (s === 'TRANSFERRING') return 'TRANSFERRING';
+        return prev;
+      });
     });
 
     swarmManager.on('error', (errorMsg: string) => {
       console.error('[SenderView] SwarmManager error:', errorMsg);
       alert(`Transfer error: ${errorMsg}\n\nPlease try again.`);
-      setStatus('IDLE');
+      setTransferStatus('IDLE');
     });
 
     // 🚀 [Multi-Receiver] 피어 이벤트
@@ -144,12 +166,12 @@ const SenderView: React.FC<SenderViewProps> = () => {
       'transfer-batch-start',
       ({ peerCount }: { peerCount: number }) => {
         setCurrentTransferPeerCount(peerCount);
-        setStatus('TRANSFERRING');
+        setTransferStatus('TRANSFERRING');
       }
     );
 
     swarmManager.on('remote-processing', () => {
-      setStatus('REMOTE_PROCESSING');
+      setTransferStatus('REMOTE_PROCESSING');
     });
 
     // 🚀 [Multi-Receiver] 피어 완료 이벤트
@@ -171,14 +193,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
       'ready-for-next',
       ({ waitingCount }: { waitingCount: number }) => {
         setWaitingPeersCount(waitingCount);
-        setStatus('READY_FOR_NEXT');
+        setTransferStatus('READY_FOR_NEXT');
       }
     );
 
     // 🚀 [Multi-Receiver] 배치 완료 (대기 중인 피어 없음)
     swarmManager.on('batch-complete', () => {
       // 대기 중인 피어가 없으면 READY_FOR_NEXT로 전환
-      setStatus('READY_FOR_NEXT');
+      setTransferStatus('READY_FOR_NEXT');
     });
 
     // 🚀 [Multi-Receiver] 다음 전송 준비 중
@@ -187,7 +209,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       ({ queueSize }: { queueSize: number }) => {
         setCurrentTransferPeerCount(queueSize);
         setQueuedPeers([]); // 대기열 초기화
-        setStatus('TRANSFERRING');
+        setTransferStatus('TRANSFERRING');
       }
     );
 
@@ -224,17 +246,18 @@ const SenderView: React.FC<SenderViewProps> = () => {
       console.log(
         '[SenderView] 🎉 Received all-transfers-complete event, setting status to DONE'
       );
-      setStatus('DONE');
+      setTransferStatus('DONE');
     });
 
     swarmManager.on('complete', () => {
       console.log(
         '[SenderView] 🎉 Received complete event, setting status to DONE'
       );
-      setStatus('DONE');
+      setTransferStatus('DONE');
     });
 
     return () => {
+      clearInterval(completionPoll);
       swarmManager.cleanup();
       swarmManager.removeAllListeners();
     };
@@ -292,9 +315,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
     // 여러 파일이면 ZIP 압축 준비 중 표시
     if (files.length > 1) {
-      setStatus('PREPARING');
+      setTransferStatus('PREPARING');
     } else {
-      setStatus('WAITING');
+      setTransferStatus('WAITING');
     }
 
     const id = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -310,15 +333,17 @@ const SenderView: React.FC<SenderViewProps> = () => {
         '[SenderView] ✅ [DEBUG] SwarmManager initialized successfully'
       );
 
-      // 초기화 완료 후 WAITING 상태로 전환
-      setStatus('WAITING');
+      // 초기화 완료 후에도 이미 전송/완료 이벤트가 들어왔다면 상태를 되돌리지 않는다.
+      setTransferStatus(prev =>
+        prev === 'IDLE' || prev === 'PREPARING' ? 'WAITING' : prev
+      );
     } catch (error: any) {
       console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
 
       alert(
         `Failed to initialize transfer: ${error?.message || 'Unknown error'}\n\nPlease try again with different files.`
       );
-      setStatus('IDLE');
+      setTransferStatus('IDLE');
     }
   };
 
@@ -336,7 +361,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
-      <AnimatePresence mode="wait">
+      <AnimatePresence>
         {/* --- STATE: IDLE (File Selection) --- */}
         {status === 'IDLE' && (
           <motion.div
@@ -726,7 +751,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
                   </p>
                   <p>
                     Keep this window open. Transfer will start automatically
-                    when they click "Start Download".
+                    when they click &quot;Start Download&quot;.
                   </p>
                 </div>
               </div>

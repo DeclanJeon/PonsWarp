@@ -106,13 +106,17 @@ class RustSignalingAdapter {
 
     setTimeout(() => {
       if (this.url && (!this.ws || this.ws.readyState === WebSocket.CLOSED)) {
-        this.connect(this.url).catch(() => { });
+        this.connect(this.url).catch(() => {});
       }
     }, delay);
   }
 
   private handleMessage(message: RustMessage) {
-    console.log('[RustSignaling] 🔍 Handling message:', message.type, message.payload);
+    console.log(
+      '[RustSignaling] 🔍 Handling message:',
+      message.type,
+      message.payload
+    );
     const eventMap: Record<string, string> = {
       HeartbeatAck: 'heartbeat-ack',
       JoinedRoom: 'joined-room',
@@ -130,7 +134,7 @@ class RustSignalingAdapter {
     const eventName = eventMap[message.type] || message.type.toLowerCase();
 
     // 기본 변환 (snake_case -> camelCase)
-    let payload = this.transformPayload(message.payload);
+    const payload = this.transformPayload(message.payload);
 
     // 🚨 [CRITICAL FIX] 호환성 매핑: Rust의 'sdp' 필드를 프론트엔드가 찾는 'offer'/'answer'로 복사
     // 이 부분이 없어서 연결이 안 되었던 것입니다.
@@ -205,7 +209,7 @@ class RustSignalingAdapter {
         console.log(
           '[RustSignaling] Attempting to reconnect for send operation...'
         );
-        this.connect(this.url).catch(() => { });
+        this.connect(this.url).catch(() => {});
       }
       return;
     }

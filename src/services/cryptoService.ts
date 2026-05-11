@@ -27,6 +27,23 @@ const CRYPTO_VERSION = 1;
 const SUPPORTED_ALGORITHMS = ['ECDH-P256', 'AES-256-GCM', 'HKDF-SHA256'];
 const HKDF_INFO = new TextEncoder().encode('PonsWarp-E2E-v1');
 
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+export function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export class CryptoService {
   private keyPair: KeyPair | null = null;
   private sessionKey: Uint8Array | null = null;
@@ -50,7 +67,7 @@ export class CryptoService {
       this.keyPair.publicKey
     );
 
-    return this.arrayBufferToBase64(publicKeyRaw);
+    return bytesToBase64(new Uint8Array(publicKeyRaw));
   }
 
   /**
@@ -59,14 +76,14 @@ export class CryptoService {
   generateSalt(): string {
     this.salt = crypto.getRandomValues(new Uint8Array(32));
     this.isInitiator = true;
-    return this.arrayBufferToBase64(this.salt.buffer as ArrayBuffer);
+    return bytesToBase64(this.salt);
   }
 
   /**
    * Salt 설정 (Responder가 호출)
    */
   setSalt(saltBase64: string): void {
-    this.salt = this.base64ToUint8Array(saltBase64);
+    this.salt = base64ToBytes(saltBase64);
     this.isInitiator = false;
   }
 
@@ -81,7 +98,7 @@ export class CryptoService {
       throw new Error('Salt not set');
     }
 
-    this.peerPublicKey = this.base64ToUint8Array(peerPublicKeyBase64);
+    this.peerPublicKey = base64ToBytes(peerPublicKeyBase64);
 
     const peerPublicKey = await crypto.subtle.importKey(
       'raw',
@@ -161,7 +178,7 @@ export class CryptoService {
       new TextEncoder().encode('KEY_CONFIRM')
     );
 
-    return this.arrayBufferToBase64(confirmation);
+    return bytesToBase64(new Uint8Array(confirmation));
   }
 
   /**
@@ -180,7 +197,7 @@ export class CryptoService {
       ['verify']
     );
 
-    const confirmation = this.base64ToUint8Array(confirmationBase64);
+    const confirmation = base64ToBytes(confirmationBase64);
 
     return crypto.subtle.verify(
       'HMAC',
@@ -272,22 +289,8 @@ export class CryptoService {
 
   // ============ Utility Methods ============
 
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  }
-
   private base64ToUint8Array(base64: string): Uint8Array {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
+    return base64ToBytes(base64);
   }
 }
 
