@@ -4,10 +4,19 @@ console.log('[App.tsx] 🪲 [DEBUG] - Applying responsive grid layout');
 console.log('[App.tsx] 🪲 [DEBUG] - Implementing fluid typography');
 console.log('[App.tsx] 🪲 [DEBUG] - Adding visual hierarchy improvements');
 
-import React, { Suspense, lazy, useEffect } from 'react';
-import { Send, Download, ArrowRight, ShieldCheck, Zap } from 'lucide-react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
+import {
+  Send,
+  Download,
+  ArrowRight,
+  ShieldCheck,
+  Zap,
+  CloudUpload,
+} from 'lucide-react';
 import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
+import CloudSenderView from './components/CloudSenderView';
+import CloudDownloadView from './components/CloudDownloadView';
 import { AppMode } from './types/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { signalingFactory } from './services/signaling-factory';
@@ -24,14 +33,19 @@ const SpaceField = lazy(() => import('./components/SpaceField'));
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
   const { mode, setMode, setRoomId, status } = useTransferStore();
+  const [cloudShareId, setCloudShareId] = useState<string | null>(null);
 
   // URL 파라미터 체크 (앱 로드 시)
   useEffect(() => {
     const path = window.location.pathname;
-    const match = path.match(/^\/receive\/([A-Z0-9]{6})$/);
+    const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/);
+    const cloudMatch = path.match(/^\/cloud\/([A-Za-z0-9-]{8,80})$/);
 
-    if (match) {
-      const roomId = match[1];
+    if (cloudMatch) {
+      setCloudShareId(cloudMatch[1]);
+      setMode(AppMode.CLOUD_RECEIVER);
+    } else if (receiveMatch) {
+      const roomId = receiveMatch[1];
       setRoomId(roomId);
       setMode(AppMode.RECEIVER);
     }
@@ -102,6 +116,7 @@ const App: React.FC = () => {
         <header
           className="absolute top-0 left-0 w-full p-4 md:p-8 z-50 flex items-center justify-between cursor-pointer"
           onClick={() => {
+            setCloudShareId(null);
             setMode(AppMode.INTRO);
             window.history.pushState({}, '', '/');
           }}
@@ -173,8 +188,8 @@ const App: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 1.05, filter: 'blur(10px)' }}
-                // 모바일: 1열, 데스크탑: 2열 그리드
-                className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 max-w-4xl w-full px-4 items-center justify-center"
+                // 모바일: 1열, 데스크탑: 3열 그리드
+                className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 max-w-6xl w-full px-4 items-center justify-center"
               >
                 {/* SENDER CARD - 높이 축소 (Mobile: 200px, Desktop: 320px) */}
                 <MagneticButton
@@ -197,6 +212,30 @@ const App: React.FC = () => {
                     </h3>
                     <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
                       Create Gate
+                    </p>
+                  </div>
+                </MagneticButton>
+
+                {/* CLOUD CARD - 비동기 24시간 링크 공유 */}
+                <MagneticButton
+                  onClick={() => setMode(AppMode.CLOUD_SENDER)}
+                  className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-emerald-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
+                  <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
+                    <div className="absolute inset-0 bg-emerald-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
+                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-emerald-400 flex items-center justify-center relative z-10 shadow-lg">
+                      <CloudUpload className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                    </div>
+                  </div>
+
+                  <div className="relative z-10 text-center space-y-1">
+                    <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-emerald-400 transition-colors">
+                      CLOUD
+                    </h3>
+                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
+                      24H Drop
                     </p>
                   </div>
                 </MagneticButton>
@@ -249,6 +288,48 @@ const App: React.FC = () => {
                   className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
                 >
                   Abort Mission
+                </button>
+              </motion.div>
+            )}
+
+            {mode === AppMode.CLOUD_SENDER && (
+              <motion.div
+                key="cloud-sender"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
+              >
+                <CloudSenderView />
+
+                <button
+                  onClick={() => setMode(AppMode.SELECTION)}
+                  className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
+                >
+                  Close Drop
+                </button>
+              </motion.div>
+            )}
+
+            {mode === AppMode.CLOUD_RECEIVER && cloudShareId && (
+              <motion.div
+                key="cloud-receiver"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
+              >
+                <CloudDownloadView shareId={cloudShareId} />
+
+                <button
+                  onClick={() => {
+                    setCloudShareId(null);
+                    setMode(AppMode.SELECTION);
+                    window.history.pushState({}, '', '/');
+                  }}
+                  className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
+                >
+                  Close Drop
                 </button>
               </motion.div>
             )}

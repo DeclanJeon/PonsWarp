@@ -30,6 +30,7 @@ We bypass the browser's memory limits entirely by leveraging **StreamSaver.js** 
 - **⚡ Hyper-Fast P2P Transfer:** Direct connection via WebRTC (UDP/SCTP). If you are on the same network (LAN), it transfers at gigabit speeds.
 - **💾 Unlimited File Size:** Streams data directly to the file system. Transfer a 100GB 4K video file without spiking your RAM.
 - **🔐 End-to-End Encryption:** Powered by **Rust (WebAssembly)**. AES-256-GCM encryption ensures your data is unreadable to anyone else—even us.
+- **☁️ 24-Hour Cloud Drop:** Upload once to Cloudflare R2 and share a download-only link that expires after 24 hours.
 - **📂 Drag & Drop Folders:** Send entire directory structures. Files are streamed and preserved perfectly.
 - **🧠 Smart Congestion Control:** Custom backpressure algorithm with RTT-based AIMD congestion control preventing packet loss on unstable networks.
 - **🎨 Sci-Fi UI:** An immersive, hardware-accelerated 3D space environment.
@@ -94,7 +95,11 @@ Create a `.env` file in `PonsWarp/` if you need to override the local defaults:
 ```env
 VITE_USE_RUST_SIGNALING=true
 VITE_RUST_SIGNALING_URL=ws://localhost:5502/ws
+# Optional when the cloud API is served from a different origin.
+VITE_CLOUD_API_BASE_URL=https://warp.ponslink.com
 ```
+
+Cloud Drop stores up to 10GB per share. For larger or unlimited transfers, use the direct SEND/RECEIVE mode with both browsers online, or split large files into 10GB batches.
 
 ## 🌐 Browser Compatibility
 
