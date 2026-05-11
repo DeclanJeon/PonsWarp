@@ -21,6 +21,12 @@ export interface CreateCloudShareResponse {
   files: CloudUploadTarget[];
 }
 
+export interface CreateCloudShareOptions {
+  entitlementToken?: string;
+  retentionSeconds?: number;
+  downloadLimit?: number;
+}
+
 export interface PublicCloudFile {
   id: string;
   name: string;
@@ -79,6 +85,10 @@ export interface CloudPlansResponse {
   checkoutEnabled: boolean;
 }
 
+export interface BillingCheckoutResponse {
+  checkoutUrl: string;
+}
+
 const apiPath = (path: string) => `${API_BASE}${path}`;
 
 export const getCloudPlans = async (): Promise<CloudPlansResponse> => {
@@ -88,13 +98,15 @@ export const getCloudPlans = async (): Promise<CloudPlansResponse> => {
 
 export const createCloudShare = async (
   rootName: string,
-  scannedFiles: ScannedFile[]
+  scannedFiles: ScannedFile[],
+  options: CreateCloudShareOptions = {}
 ): Promise<CreateCloudShareResponse> => {
   const response = await fetch(apiPath('/api/cloud-share'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       rootName,
+      ...options,
       files: scannedFiles.map(item => ({
         name: item.file.name,
         path: item.path,
@@ -106,6 +118,20 @@ export const createCloudShare = async (
   });
 
   return readJsonResponse<CreateCloudShareResponse>(response);
+};
+
+export const createBillingCheckout = async (
+  mode: 'payment' | 'subscription',
+  sku: string,
+  returnUrl: string
+): Promise<BillingCheckoutResponse> => {
+  const response = await fetch(apiPath('/api/billing/checkout'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, sku, returnUrl }),
+  });
+
+  return readJsonResponse<BillingCheckoutResponse>(response);
 };
 
 export const completeCloudShare = async (

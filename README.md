@@ -144,7 +144,7 @@ pnpm lint         # ESLint with autofix
 - The public app is served at `https://warp.ponslink.com`.
 - Static frontend assets are built from `dist/`.
 - Direct transfer depends on signaling and TURN availability.
-- Cloud Drop free shares are capped at 10GB and 24 hours. Larger offline drops are shown as paid plans, but checkout remains disabled until the billing backend is deployed.
+- Cloud Drop free shares are capped at 10GB and 24 hours. Larger offline drops can use Stripe Checkout when the backend returns `checkoutEnabled=true`.
 - Cloud Drop shares should be configured with a 24-hour object lifecycle or cleanup job.
 - The Rust backend should pass `GET /ready` before Nginx routes traffic to it.
 

@@ -17,6 +17,7 @@ import {
   CloudPlanLimit,
   CloudPlansResponse,
   completeCloudShare,
+  createBillingCheckout,
   createCloudShare,
   getCloudPlans,
   uploadCloudFile,
@@ -124,6 +125,8 @@ const CloudSenderView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [fileProgress, setFileProgress] = useState<Record<string, number>>({});
+  const [entitlementToken, setEntitlementToken] = useState<string | null>(null);
+  const [checkoutSku, setCheckoutSku] = useState<string | null>(null);
   const [cloudPlans, setCloudPlans] =
     useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
 
@@ -139,6 +142,12 @@ const CloudSenderView: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
+    const params = new URLSearchParams(window.location.search);
+    const nextEntitlement = params.get('cloudEntitlement');
+    if (nextEntitlement) {
+      setEntitlementToken(nextEntitlement);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
 
     getCloudPlans()
       .then(nextPlans => {
@@ -178,7 +187,14 @@ const CloudSenderView: React.FC = () => {
     if (scannedFiles.length === 0) return;
 
     const { manifest: nextManifest } = createManifest(scannedFiles);
-    if (nextManifest.totalSize > freePlan.maxTotalBytes) {
+    const oversizedFile = scannedFiles.find(
+      item => item.file.size > freePlan.maxFileBytes
+    );
+    const requiresPaidPlan =
+      nextManifest.totalSize > freePlan.maxTotalBytes || Boolean(oversizedFile);
+    const shouldUseEntitlement = Boolean(entitlementToken && requiresPaidPlan);
+
+    if (!entitlementToken && nextManifest.totalSize > freePlan.maxTotalBytes) {
       setManifest(nextManifest);
       setShareLink(null);
       setExpiresAt(null);
@@ -192,10 +208,7 @@ const CloudSenderView: React.FC = () => {
       return;
     }
 
-    const oversizedFile = scannedFiles.find(
-      item => item.file.size > freePlan.maxFileBytes
-    );
-    if (oversizedFile) {
+    if (!entitlementToken && oversizedFile) {
       setManifest(nextManifest);
       setShareLink(null);
       setExpiresAt(null);
@@ -220,7 +233,8 @@ const CloudSenderView: React.FC = () => {
     try {
       const created = await createCloudShare(
         nextManifest.rootName,
-        scannedFiles
+        scannedFiles,
+        shouldUseEntitlement && entitlementToken ? { entitlementToken } : {}
       );
       const uploadedIds: string[] = [];
       let nextIndex = 0;
@@ -258,6 +272,9 @@ const CloudSenderView: React.FC = () => {
       setCurrentFile(null);
       setExpiresAt(completed.expiresAt);
       setShareLink(`${window.location.origin}${created.shareUrl}`);
+      if (shouldUseEntitlement) {
+        setEntitlementToken(null);
+      }
       setStatus('DONE');
     } catch (uploadError: any) {
       setStatus('ERROR');
@@ -270,6 +287,23 @@ const CloudSenderView: React.FC = () => {
     await navigator.clipboard.writeText(shareLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const startCheckout = async (plan: CloudPlanLimit) => {
+    if (!cloudPlans.checkoutEnabled || !plan.available) return;
+    setCheckoutSku(plan.sku);
+    setError(null);
+    try {
+      const response = await createBillingCheckout(
+        plan.sku === cloudPlans.pro.sku ? 'subscription' : 'payment',
+        plan.sku,
+        `${window.location.origin}${window.location.pathname}`
+      );
+      window.location.href = response.checkoutUrl;
+    } catch (checkoutError: any) {
+      setCheckoutSku(null);
+      setError(checkoutError?.message || 'Checkout failed');
+    }
   };
 
   const expiryLabel = expiresAt
@@ -328,6 +362,11 @@ const CloudSenderView: React.FC = () => {
                 {formatRetention(freePlan.retentionSeconds)}. Direct SEND stays
                 unlimited when both browsers are online.
               </p>
+              {entitlementToken && (
+                <p className="text-emerald-300 text-xs md:text-sm mb-5 font-mono">
+                  Paid Cloud Drop is active for the next upload.
+                </p>
+              )}
 
               <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm">
                 <button
@@ -586,10 +625,19 @@ const CloudSenderView: React.FC = () => {
                         </div>
                       </div>
                       <button
-                        disabled
-                        className="mt-auto w-full py-3 rounded-xl border border-gray-700 bg-gray-800/60 text-gray-500 font-bold tracking-wider cursor-not-allowed"
+                        disabled={!cloudPlans.checkoutEnabled || !plan.available || checkoutSku === plan.sku}
+                        onClick={() => startCheckout(plan)}
+                        className={`mt-auto w-full py-3 rounded-xl border font-bold tracking-wider transition-colors ${
+                          cloudPlans.checkoutEnabled && plan.available
+                            ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
+                            : 'border-gray-700 bg-gray-800/60 text-gray-500 cursor-not-allowed'
+                        }`}
                       >
-                        CHECKOUT SOON
+                        {checkoutSku === plan.sku
+                          ? 'OPENING CHECKOUT'
+                          : cloudPlans.checkoutEnabled && plan.available
+                            ? 'CHECKOUT'
+                            : 'CHECKOUT SOON'}
                       </button>
                     </div>
                   ))}
