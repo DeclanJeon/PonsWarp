@@ -16,6 +16,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   CloudPlanLimit,
   CloudPlansResponse,
+  captureBillingCheckout,
   completeCloudShare,
   createBillingCheckout,
   createCloudShare,
@@ -143,9 +144,39 @@ const CloudSenderView: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     const params = new URLSearchParams(window.location.search);
+    const checkoutStatus = params.get('checkout');
     const nextEntitlement = params.get('cloudEntitlement');
     if (nextEntitlement) {
       setEntitlementToken(nextEntitlement);
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (checkoutStatus === 'success') {
+      const paypalOrderId = params.get('token');
+      const paypalSubscriptionId = params.get('subscription_id');
+      if (paypalOrderId) {
+        captureBillingCheckout(paypalOrderId)
+          .then(response => {
+            if (cancelled) return;
+            setEntitlementToken(response.entitlementToken);
+            setError(null);
+            window.history.replaceState({}, '', window.location.pathname);
+          })
+          .catch(captureError => {
+            if (cancelled) return;
+            setStatus('ERROR');
+            setError(
+              captureError?.message || 'PayPal payment capture failed'
+            );
+          });
+      } else if (paypalSubscriptionId) {
+        setEntitlementToken(paypalSubscriptionId);
+        window.history.replaceState({}, '', window.location.pathname);
+      } else {
+        setError(
+          'PayPal checkout returned without a usable entitlement token. Please wait a moment and retry.'
+        );
+      }
+    } else if (checkoutStatus === 'cancelled') {
+      setError('PayPal checkout was cancelled.');
       window.history.replaceState({}, '', window.location.pathname);
     }
 

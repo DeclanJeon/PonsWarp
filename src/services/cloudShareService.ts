@@ -89,6 +89,10 @@ export interface BillingCheckoutResponse {
   checkoutUrl: string;
 }
 
+export interface BillingCaptureResponse {
+  entitlementToken: string;
+}
+
 const apiPath = (path: string) => `${API_BASE}${path}`;
 
 export const getCloudPlans = async (): Promise<CloudPlansResponse> => {
@@ -132,6 +136,18 @@ export const createBillingCheckout = async (
   });
 
   return readJsonResponse<BillingCheckoutResponse>(response);
+};
+
+export const captureBillingCheckout = async (
+  orderId: string
+): Promise<BillingCaptureResponse> => {
+  const response = await fetch(apiPath('/api/billing/capture'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orderId }),
+  });
+
+  return readJsonResponse<BillingCaptureResponse>(response);
 };
 
 export const completeCloudShare = async (
