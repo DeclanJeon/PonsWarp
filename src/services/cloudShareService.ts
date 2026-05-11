@@ -47,7 +47,44 @@ export interface UploadProgress {
   total: number;
 }
 
+export interface DirectP2PPlan {
+  label: string;
+  unlimited: boolean;
+  priceKrw: number;
+}
+
+export interface CloudPlanLimit {
+  sku: string;
+  label: string;
+  priceKrw: number;
+  maxTotalBytes: number;
+  maxFileBytes: number;
+  retentionSeconds: number;
+  downloadLimit?: number;
+  available: boolean;
+}
+
+export type DropPassPlan = CloudPlanLimit;
+
+export interface ProCloudPlan extends CloudPlanLimit {
+  monthlyQuotaBytes: number;
+  concurrentStorageBytes: number;
+}
+
+export interface CloudPlansResponse {
+  directP2p: DirectP2PPlan;
+  free: CloudPlanLimit;
+  passes: DropPassPlan[];
+  pro: ProCloudPlan;
+  checkoutEnabled: boolean;
+}
+
 const apiPath = (path: string) => `${API_BASE}${path}`;
+
+export const getCloudPlans = async (): Promise<CloudPlansResponse> => {
+  const response = await fetch(apiPath('/api/cloud-plans'));
+  return readJsonResponse<CloudPlansResponse>(response);
+};
 
 export const createCloudShare = async (
   rootName: string,

@@ -1,18 +1,24 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Check,
   CloudUpload,
   Copy,
+  CreditCard,
   FileIcon,
   FilePlus,
   Folder,
+  Infinity,
   Loader2,
+  ShieldCheck,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+  CloudPlanLimit,
+  CloudPlansResponse,
   completeCloudShare,
   createCloudShare,
+  getCloudPlans,
   uploadCloudFile,
 } from '../services/cloudShareService';
 import {
@@ -23,10 +29,89 @@ import {
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { TransferManifest } from '../types/types';
 
-type CloudUploadStatus = 'IDLE' | 'PREPARING' | 'UPLOADING' | 'DONE' | 'ERROR';
+type CloudUploadStatus =
+  | 'IDLE'
+  | 'PREPARING'
+  | 'UPLOADING'
+  | 'DONE'
+  | 'ERROR'
+  | 'LIMIT_EXCEEDED';
 
 const MAX_PARALLEL_UPLOADS = 3;
-const CLOUD_DROP_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+const GB = 1024 * 1024 * 1024;
+const TB = 1024 * GB;
+
+const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
+  directP2p: {
+    label: 'Direct P2P',
+    unlimited: true,
+    priceKrw: 0,
+  },
+  free: {
+    sku: 'free_cloud_10gb_24h',
+    label: 'Free Cloud Drop',
+    priceKrw: 0,
+    maxTotalBytes: 10 * GB,
+    maxFileBytes: 10 * GB,
+    retentionSeconds: 24 * 60 * 60,
+    available: true,
+  },
+  passes: [
+    {
+      sku: 'drop_100gb_3d',
+      label: '100GB Drop Pass',
+      priceKrw: 1900,
+      maxTotalBytes: 100 * GB,
+      maxFileBytes: 100 * GB,
+      retentionSeconds: 3 * 24 * 60 * 60,
+      downloadLimit: 10,
+      available: false,
+    },
+    {
+      sku: 'drop_500gb_7d',
+      label: '500GB Drop Pass',
+      priceKrw: 4900,
+      maxTotalBytes: 500 * GB,
+      maxFileBytes: 500 * GB,
+      retentionSeconds: 7 * 24 * 60 * 60,
+      downloadLimit: 20,
+      available: false,
+    },
+    {
+      sku: 'drop_1tb_7d',
+      label: '1TB Drop Pass',
+      priceKrw: 9900,
+      maxTotalBytes: TB,
+      maxFileBytes: TB,
+      retentionSeconds: 7 * 24 * 60 * 60,
+      downloadLimit: 30,
+      available: false,
+    },
+  ],
+  pro: {
+    sku: 'pro_monthly_krw_9900',
+    label: 'PonsWarp Pro',
+    priceKrw: 9900,
+    maxTotalBytes: TB,
+    maxFileBytes: TB,
+    retentionSeconds: 7 * 24 * 60 * 60,
+    downloadLimit: 30,
+    available: false,
+    monthlyQuotaBytes: 2 * TB,
+    concurrentStorageBytes: TB,
+  },
+  checkoutEnabled: false,
+};
+
+const formatKrw = (value: number) =>
+  `${new Intl.NumberFormat('ko-KR').format(value)}원`;
+
+const formatRetention = (seconds: number) => {
+  const days = Math.round(seconds / 86400);
+  if (days >= 1) return `${days} days`;
+  const hours = Math.round(seconds / 3600);
+  return `${hours} hours`;
+};
 
 const CloudSenderView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -39,6 +124,8 @@ const CloudSenderView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [fileProgress, setFileProgress] = useState<Record<string, number>>({});
+  const [cloudPlans, setCloudPlans] =
+    useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
 
   const uploadedBytes = useMemo(
     () =>
@@ -48,6 +135,27 @@ const CloudSenderView: React.FC = () => {
   const totalBytes = manifest?.totalSize || 0;
   const progress =
     totalBytes > 0 ? Math.min(100, (uploadedBytes / totalBytes) * 100) : 0;
+  const freePlan = cloudPlans.free;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getCloudPlans()
+      .then(nextPlans => {
+        if (!cancelled) {
+          setCloudPlans(nextPlans);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCloudPlans(FALLBACK_CLOUD_PLANS);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -70,7 +178,7 @@ const CloudSenderView: React.FC = () => {
     if (scannedFiles.length === 0) return;
 
     const { manifest: nextManifest } = createManifest(scannedFiles);
-    if (nextManifest.totalSize > CLOUD_DROP_MAX_BYTES) {
+    if (nextManifest.totalSize > freePlan.maxTotalBytes) {
       setManifest(nextManifest);
       setShareLink(null);
       setExpiresAt(null);
@@ -78,14 +186,14 @@ const CloudSenderView: React.FC = () => {
       setFileProgress({});
       setCurrentFile(null);
       setError(
-        `Cloud Drop is limited to ${formatBytes(CLOUD_DROP_MAX_BYTES)}. For unlimited transfer, use SEND and keep sender and receiver online together. Otherwise split the files into 10GB batches.`
+        `This Cloud Drop is ${formatBytes(nextManifest.totalSize)}, which is over the free ${formatBytes(freePlan.maxTotalBytes)} limit. Direct P2P remains unlimited, or use a paid Drop Pass when checkout is enabled.`
       );
-      setStatus('ERROR');
+      setStatus('LIMIT_EXCEEDED');
       return;
     }
 
     const oversizedFile = scannedFiles.find(
-      item => item.file.size > CLOUD_DROP_MAX_BYTES
+      item => item.file.size > freePlan.maxFileBytes
     );
     if (oversizedFile) {
       setManifest(nextManifest);
@@ -95,9 +203,9 @@ const CloudSenderView: React.FC = () => {
       setFileProgress({});
       setCurrentFile(null);
       setError(
-        `${oversizedFile.path} is larger than ${formatBytes(CLOUD_DROP_MAX_BYTES)}. Use direct P2P for unlimited transfer or split the file.`
+        `${oversizedFile.path} is larger than the free per-file Cloud Drop limit of ${formatBytes(freePlan.maxFileBytes)}. Direct P2P remains unlimited, or use a paid Drop Pass when checkout is enabled.`
       );
-      setStatus('ERROR');
+      setStatus('LIMIT_EXCEEDED');
       return;
     }
 
@@ -170,6 +278,7 @@ const CloudSenderView: React.FC = () => {
 
   const glassPanelClass =
     'bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
+  const paidPlans: CloudPlanLimit[] = [...cloudPlans.passes, cloudPlans.pro];
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
@@ -214,9 +323,10 @@ const CloudSenderView: React.FC = () => {
                 Upload once. Share a 24-hour download link.
               </p>
               <p className="text-gray-500 text-xs md:text-sm mb-6 max-w-md leading-relaxed">
-                Cloud Drop stores up to {formatBytes(CLOUD_DROP_MAX_BYTES)}. For
-                unlimited size, use direct SEND with both browsers online, or
-                split large files into 10GB batches.
+                Free Cloud Drop stores up to{' '}
+                {formatBytes(freePlan.maxTotalBytes)} for{' '}
+                {formatRetention(freePlan.retentionSeconds)}. Direct SEND stays
+                unlimited when both browsers are online.
               </p>
 
               <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm">
@@ -369,6 +479,123 @@ const CloudSenderView: React.FC = () => {
             <p className="text-xs text-gray-500 text-center font-mono mt-5">
               Expires {expiryLabel}
             </p>
+          </motion.div>
+        )}
+
+        {status === 'LIMIT_EXCEEDED' && (
+          <motion.div
+            key="cloud-limit"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            className={`w-full max-w-5xl p-5 md:p-7 ${glassPanelClass}`}
+          >
+            <div className="flex flex-col lg:flex-row gap-6">
+              <div className="lg:w-[32%] space-y-4">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30">
+                  <Infinity className="w-4 h-4 text-cyan-300" />
+                  <span className="text-[10px] font-bold text-cyan-300 tracking-[0.2em]">
+                    DIRECT P2P
+                  </span>
+                </div>
+                <div>
+                  <h2 className="text-2xl md:text-3xl font-bold brand-font text-white mb-3">
+                    FREE LIMIT REACHED
+                  </h2>
+                  <p className="text-sm text-gray-300 leading-relaxed">
+                    {error}
+                  </p>
+                </div>
+                <div className="bg-cyan-500/10 border border-cyan-500/25 rounded-2xl p-4">
+                  <div className="flex items-center gap-3 mb-2">
+                    <ShieldCheck className="w-5 h-5 text-cyan-300" />
+                    <p className="font-bold text-white text-sm">
+                      Unlimited transfer is still free
+                    </p>
+                  </div>
+                  <p className="text-xs text-gray-400 leading-relaxed">
+                    SEND remains the free path for very large files when both
+                    browsers are online. Cloud Drop covers offline pickup.
+                  </p>
+                </div>
+                <div className="bg-black/30 border border-white/10 rounded-2xl p-4">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
+                    Selected
+                  </p>
+                  <p className="text-sm text-white font-bold truncate">
+                    {manifest?.rootName}
+                  </p>
+                  <p className="text-xs text-gray-400 font-mono mt-1">
+                    {manifest?.totalFiles} files • {formatBytes(totalBytes)}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setStatus('IDLE')}
+                  className="w-full px-5 py-3 bg-white text-black rounded-full font-bold tracking-wider hover:bg-cyan-100 transition-colors"
+                >
+                  CHOOSE ANOTHER FILE
+                </button>
+              </div>
+
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-4">
+                  <CreditCard className="w-5 h-5 text-emerald-300" />
+                  <h3 className="text-lg font-bold text-white brand-font">
+                    CLOUD DROP OPTIONS
+                  </h3>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {paidPlans.map(plan => (
+                    <div
+                      key={plan.sku}
+                      className="bg-gray-900/50 border border-gray-700/60 rounded-2xl p-4 flex flex-col gap-4"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <div>
+                            <p className="text-white font-bold text-base">
+                              {plan.label}
+                            </p>
+                            <p className="text-xs text-gray-500 font-mono">
+                              up to {formatBytes(plan.maxTotalBytes)}
+                            </p>
+                          </div>
+                          <p className="text-emerald-300 font-black text-lg whitespace-nowrap">
+                            {formatKrw(plan.priceKrw)}
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="bg-black/30 rounded-xl p-3 border border-white/5">
+                            <p className="text-gray-500 uppercase tracking-widest text-[9px] mb-1">
+                              Retention
+                            </p>
+                            <p className="text-gray-200">
+                              {formatRetention(plan.retentionSeconds)}
+                            </p>
+                          </div>
+                          <div className="bg-black/30 rounded-xl p-3 border border-white/5">
+                            <p className="text-gray-500 uppercase tracking-widest text-[9px] mb-1">
+                              Downloads
+                            </p>
+                            <p className="text-gray-200">
+                              {plan.downloadLimit
+                                ? `${plan.downloadLimit} max`
+                                : 'basic'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        disabled
+                        className="mt-auto w-full py-3 rounded-xl border border-gray-700 bg-gray-800/60 text-gray-500 font-bold tracking-wider cursor-not-allowed"
+                      >
+                        CHECKOUT SOON
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </motion.div>
         )}
 

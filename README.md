@@ -114,9 +114,11 @@ Create `PonsWarp/.env` when local defaults need to be overridden:
 
 ```env
 VITE_USE_RUST_SIGNALING=true
-VITE_RUST_SIGNALING_URL=ws://localhost:5502/ws
+VITE_RUST_SIGNALING_URL=wss://warp.ponslink.com/ws
 VITE_CLOUD_API_BASE_URL=https://warp.ponslink.com
 ```
+
+For local development, use `ws://localhost:5502/ws` and leave `VITE_CLOUD_API_BASE_URL` empty when the Vite dev server proxies to the same origin.
 
 ### Scripts
 
@@ -142,7 +144,9 @@ pnpm lint         # ESLint with autofix
 - The public app is served at `https://warp.ponslink.com`.
 - Static frontend assets are built from `dist/`.
 - Direct transfer depends on signaling and TURN availability.
+- Cloud Drop free shares are capped at 10GB and 24 hours. Larger offline drops are shown as paid plans, but checkout remains disabled until the billing backend is deployed.
 - Cloud Drop shares should be configured with a 24-hour object lifecycle or cleanup job.
+- The Rust backend should pass `GET /ready` before Nginx routes traffic to it.
 
 ## Contributing
 
