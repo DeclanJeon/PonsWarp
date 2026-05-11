@@ -1,145 +1,159 @@
-# 🌌 PonsWarp
+# PonsWarp
 
-> **File Transfer at Warp Speed. Zero Limits.** > Transfer 100GB+ files directly between browsers. No servers, no storage caps, no RAM limits. Powered by Rust(WASM) & WebRTC.
+> Direct browser-to-browser file transfer for very large files, with an optional 24-hour Cloud Drop link when both people cannot stay online together.
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
-![React](https://img.shields.io/badge/React-19-blue)
-![WebRTC](https://img.shields.io/badge/WebRTC-P2P-green)
-![WASM](https://img.shields.io/badge/WASM-Powered-orange)
+<p align="center">
+  <a href="https://warp.ponslink.com"><strong>Live App</strong></a>
+  ·
+  <a href="#screenshots"><strong>Screenshots</strong></a>
+  ·
+  <a href="#development"><strong>Development</strong></a>
+</p>
 
-![PonsWarp Demo](https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExanc5ZDBwMm1tNG1lMHUzanQwM2h4bGd4MTJjZzZoM3YwMmdmYXpuaCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/8xorKjfKhatiFvjxgS/giphy.gif)
+<p align="center">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=0b1220">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-7-646cff?logo=vite&logoColor=white">
+  <img alt="WebRTC" src="https://img.shields.io/badge/WebRTC-P2P-22c55e">
+  <img alt="Rust WASM" src="https://img.shields.io/badge/Rust%20WASM-core-f97316?logo=rust&logoColor=white">
+  <img alt="Cloudflare R2" src="https://img.shields.io/badge/Cloudflare%20R2-24h%20Drop-f38020?logo=cloudflare&logoColor=white">
+</p>
 
-## ❓ Why PonsWarp?
+<p align="center">
+  <img src="docs/screenshots/ponswarp-home.png" alt="PonsWarp home screen" width="900">
+</p>
 
-Most web-based file transfer tools have a fatal flaw: **They crash your browser when handling large files.** They try to load the entire file into memory (RAM) before saving, limiting you to a few gigabytes at best.
+## What It Does
 
-**PonsWarp is different.**
+PonsWarp has two transfer paths:
 
-We bypass the browser's memory limits entirely by leveraging **StreamSaver.js** and **Rust (WASM)**. Data flows like water through a pipe—from the sender's disk, encrypted in transit, directly to the receiver's disk.
+| Mode | Best For | Limit | Availability |
+| --- | --- | --- | --- |
+| **SEND / RECEIVE** | Maximum-size direct P2P transfer | No app-defined size cap | Sender and receiver stay online together |
+| **CLOUD Drop** | Send once, share a download-only link | 10GB per share | Stored for 24 hours, then removed |
 
-| Feature             | 🌌 PonsWarp                   | ☁️ Traditional Cloud (WeTransfer/Google Drive) | 🕸️ Standard P2P Tools |
-| :------------------ | :---------------------------- | :--------------------------------------------- | :-------------------- |
-| **File Size Limit** | **Unlimited** (1TB+ Tested)   | 2GB - 15GB Caps                                | Browser Crash ~2GB    |
-| **Storage**         | **Direct Disk-to-Disk**       | Stored on Server                               | RAM / Blob Storage    |
-| **Privacy**         | **E2E Encrypted (WASM)**      | Accessible by Provider                         | Varies                |
-| **Speed**           | **Local Network / P2P Speed** | Upload + Download Time                         | P2P Speed             |
+Direct mode streams bytes from the sender's disk to the receiver's disk through WebRTC. It avoids loading the full file into memory, protects against incomplete saves, and can resume interrupted single-file or multi-file transfers from the receiver's current offset after reconnect.
 
-## 🚀 Key Features
+Cloud Drop uploads to Cloudflare R2 and returns a temporary link. It is intentionally capped at 10GB; for larger transfers, use direct P2P or split files into 10GB batches.
 
-- **⚡ Hyper-Fast P2P Transfer:** Direct connection via WebRTC (UDP/SCTP). If you are on the same network (LAN), it transfers at gigabit speeds.
-- **💾 Unlimited File Size:** Streams data directly to the file system. Transfer a 100GB 4K video file without spiking your RAM.
-- **🔐 End-to-End Encryption:** Powered by **Rust (WebAssembly)**. AES-256-GCM encryption ensures your data is unreadable to anyone else—even us.
-- **☁️ 24-Hour Cloud Drop:** Upload once to Cloudflare R2 and share a download-only link that expires after 24 hours.
-- **📂 Drag & Drop Folders:** Send entire directory structures. Files are streamed and preserved perfectly.
-- **🧠 Smart Congestion Control:** Custom backpressure algorithm with RTT-based AIMD congestion control preventing packet loss on unstable networks.
-- **🎨 Sci-Fi UI:** An immersive, hardware-accelerated 3D space environment.
+## Screenshots
 
-## 🏗️ Architecture
+| Transfer Modes | Direct Send |
+| --- | --- |
+| <img src="docs/screenshots/ponswarp-modes.png" alt="PonsWarp transfer mode selection" width="420"> | <img src="docs/screenshots/ponswarp-send.png" alt="PonsWarp direct send screen" width="420"> |
 
-PonsWarp uses a sophisticated pipeline to ensure stability and speed.
+| Cloud Drop | Home |
+| --- | --- |
+| <img src="docs/screenshots/ponswarp-cloud-drop.png" alt="PonsWarp Cloud Drop screen" width="420"> | <img src="docs/screenshots/ponswarp-home.png" alt="PonsWarp home screen" width="420"> |
+
+## Features
+
+- **Direct P2P transfer**: WebRTC data channels for browser-to-browser transfer.
+- **Large-file streaming**: direct disk writes through StreamSaver or the File System Access API.
+- **Interrupted transfer recovery**: receiver-side partial write detection plus reconnect/resume for resumable direct transfers.
+- **Multi-file and folder support**: raw source-byte transfer with receiver-side ZIP64 packaging for large folder downloads.
+- **24-hour Cloud Drop**: Cloudflare R2-backed temporary download links for asynchronous sharing.
+- **End-to-end protection**: WebRTC transport security plus the Rust/WASM transfer core.
+- **Adaptive flow control**: chunk sizing, backpressure, and buffer thresholds tuned for unstable networks.
+- **TURN-ready deployment**: signaling can provide production TURN credentials for NAT traversal.
+
+## Architecture
 
 ```mermaid
-graph LR
-    A[Sender Disk] -->|Read Stream| B(Worker Thread)
-    B -->|Encrypt (WASM)| C{WebRTC Channel}
-    C -->|P2P Transfer| D{Receiver Browser}
-    D -->|Decrypt (WASM)| E(StreamSaver / FSA)
-    E -->|Write Stream| F[Receiver Disk]
+flowchart LR
+  senderDisk[Sender disk] --> senderWorker[Sender worker]
+  senderWorker --> wasm[Rust / WASM core]
+  wasm --> dataChannel[WebRTC data channel]
+  dataChannel --> receiverWorker[Receiver worker]
+  receiverWorker --> writer[DirectFileWriter]
+  writer --> receiverDisk[Receiver disk]
 
-    style A fill:#f9f,stroke:#333,stroke-width:2px
-    style F fill:#f9f,stroke:#333,stroke-width:2px
-    style B fill:#bbf,stroke:#333
-    style E fill:#bbf,stroke:#333
+  cloudUpload[Cloud Drop upload] --> r2[Cloudflare R2]
+  r2 --> cloudDownload[24-hour download link]
 ```
 
-### Core Components
+### Main Pieces
 
-1.  **SwarmManager:** Orchestrates 1:N peer connections (Send to multiple people at once).
-2.  **WASM Core:** High-performance Rust module handling CRC32 verification and AES-256-GCM encryption.
-3.  **DirectFileWriter:** Intelligently switches between `StreamSaver.js` (Serverless MITM) and the `File System Access API` to bypass browser sandbox limitations.
+| Area | Files |
+| --- | --- |
+| App shell and mode routing | `src/App.tsx`, `src/types/types.ts` |
+| Direct sender flow | `src/components/SenderView.tsx`, `src/services/swarmManager.ts`, `src/workers/file-sender.worker.ts` |
+| Direct receiver flow | `src/components/ReceiverView.tsx`, `src/services/webRTCService.ts`, `src/workers/file-receiver.worker.ts` |
+| Disk writing and resume safety | `src/services/directFileWriter.ts` |
+| Cloud Drop | `src/components/CloudSenderView.tsx`, `src/components/CloudDownloadView.tsx`, `src/services/cloudShareService.ts` |
+| Signaling | `src/services/signaling-factory.ts`, `src/services/signaling-adapter.ts`, `src/services/signaling.ts` |
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-- **Frontend:** React 19, TypeScript 5.9, Vite 7
-- **Core Logic:** **Rust (WebAssembly)**
-- **P2P Networking:** WebRTC (simple-peer), Socket.io (Signaling)
-- **Storage:** StreamSaver.js, File System Access API
-- **Compression:** fflate (Streaming ZIP generation)
-- **Visuals:** Three.js, React Three Fiber, Tailwind CSS 4
+- **Frontend**: React 19, TypeScript 5.9, Vite 7
+- **UI**: Tailwind CSS 4, Framer Motion, lucide-react
+- **3D scene**: Three.js, React Three Fiber
+- **P2P**: WebRTC, simple-peer
+- **Signaling**: Socket.io client or Rust WebSocket signaling
+- **Storage**: StreamSaver, File System Access API, Cloudflare R2
+- **Core**: Rust/WASM package via `pons-core-wasm`
 
-## 📦 Installation & Development
+## Development
 
-### Prerequisites
+### Requirements
 
-- Node.js v20+
-- pnpm v8+
-- Rust (for building WASM core, optional if using pre-built binaries)
+- Node.js 20+
+- pnpm 8+
+- A signaling server for live direct-transfer testing
 
-### Quick Start
+### Setup
 
 ```bash
-# 1. Clone repository
-git clone [https://github.com/pons-dev/ponswarp.git](https://github.com/pons-dev/ponswarp.git)
-cd ponswarp
-
-# 2. Install dependencies
+git clone https://github.com/DeclanJeon/PonsWarp.git
+cd PonsWarp
 pnpm install
-
-# 3. Start development server
 pnpm dev
 ```
 
-Create a `.env` file in `PonsWarp/` if you need to override the local defaults:
+Create `PonsWarp/.env` when local defaults need to be overridden:
 
 ```env
 VITE_USE_RUST_SIGNALING=true
 VITE_RUST_SIGNALING_URL=ws://localhost:5502/ws
-# Optional when the cloud API is served from a different origin.
 VITE_CLOUD_API_BASE_URL=https://warp.ponslink.com
 ```
 
-Cloud Drop stores up to 10GB per share. For larger or unlimited transfers, use the direct SEND/RECEIVE mode with both browsers online, or split large files into 10GB batches.
+### Scripts
 
-## 🌐 Browser Compatibility
+```bash
+pnpm dev          # Start Vite
+pnpm build        # Production build
+pnpm preview      # Preview built app
+pnpm type-check   # TypeScript validation
+pnpm test         # Vitest suite
+pnpm lint         # ESLint with autofix
+```
 
-| Browser           |   Status    | Notes                                                  |
-| :---------------- | :---------: | :----------------------------------------------------- |
-| **Chrome / Edge** | ✅ **Best** | Full support for File System Access API & StreamSaver. |
-| **Firefox**       |   ⚠️ Good   | Uses StreamSaver fallback. Large file support is good. |
-| **Safari**        | ⚠️ Limited  | Basic P2P works, but file system APIs are restrictive. |
+## Browser Support
 
-## 🤝 Contributing
+| Browser | Status | Notes |
+| --- | --- | --- |
+| Chrome / Edge | Best | File System Access API and StreamSaver behavior are strongest here. |
+| Firefox | Good | Uses fallback save behavior where browser APIs differ. |
+| Safari | Limited | WebRTC works, but filesystem and background transfer behavior are more restrictive. |
 
-We love open source\! We are looking for beta testers and contributors to help with:
+## Production Notes
 
-- Improving NAT traversal (TURN server configurations).
-- Mobile UI responsiveness optimizations.
-- Testing on various network conditions.
+- The public app is served at `https://warp.ponslink.com`.
+- Static frontend assets are built from `dist/`.
+- Direct transfer depends on signaling and TURN availability.
+- Cloud Drop shares should be configured with a 24-hour object lifecycle or cleanup job.
 
-<!-- end list -->
+## Contributing
 
-1.  Fork the Project
-2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4.  Push to the Branch (`git push origin feature/AmazingFeature`)
-5.  Open a Pull Request
+1. Fork the repository.
+2. Create a branch: `git checkout -b feature/my-change`.
+3. Run `pnpm type-check`, `pnpm test`, and `pnpm build`.
+4. Open a pull request with the behavior change and verification notes.
 
-## 📄 License
+## Acknowledgments
 
-Distributed under the MIT License. See `LICENSE` for more information.
-
-## 🙏 Acknowledgments
-
-- [WebRTC](https://webrtc.org/) - The backbone of P2P.
-- [StreamSaver.js](https://www.google.com/search?q=https://github.com/jimmywarting/StreamSaver.js) - The magic behind saving large files.
-- [Rust & wasm-bindgen](https://rustwasm.github.io/) - For blazing fast crypto.
-
----
-
-\<div align="center"\>
-\<p\>Made with ❤️ by the PonsWarp Team\</p\>
-\<p\>
-\<a href="https://warp.ponslink.online"\>\<strong\>Try Live Demo\</strong\>\</a\>
-\</p\>
-\</div\>
+- [WebRTC](https://webrtc.org/) for browser-to-browser transport.
+- [StreamSaver.js](https://github.com/jimmywarting/StreamSaver.js/) for large streamed saves.
+- [Rust and wasm-bindgen](https://rustwasm.github.io/) for the high-performance browser core.
+- [Cloudflare R2](https://developers.cloudflare.com/r2/) for temporary Cloud Drop storage.
