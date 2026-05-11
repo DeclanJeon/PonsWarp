@@ -23,7 +23,7 @@
  */
 
 import streamSaver from 'streamsaver';
-import initPonsCore, { CryptoSession } from 'pons-core-wasm';
+import initPonsCore, { CryptoSession, Zip64Stream } from 'pons-core-wasm';
 import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
@@ -47,12 +47,13 @@ const WRITE_BUFFER_HIGH_MARK = 32 * 1024 * 1024;
 const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
 const ENCRYPTED_HEADER_SIZE = 38;
 const AUTH_TAG_SIZE = 16;
+const MAX_RESUME_ATTEMPTS = 3;
 
 export class DirectFileWriter {
   private manifest: {
     totalSize: number;
     totalFiles?: number;
-    files?: Array<{ path: string }>;
+    files?: Array<{ path: string; size: number }>;
     rootName?: string;
     isSizeEstimated?: boolean;
     downloadFileName?: string;
@@ -60,6 +61,7 @@ export class DirectFileWriter {
     totalSize: 0,
   };
   private totalBytesWritten = 0;
+  private outputBytesWritten = 0;
   private totalSize = 0;
   private startTime = 0;
   private lastProgressTime = 0;
@@ -104,6 +106,12 @@ export class DirectFileWriter {
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
   private cryptoSession: CryptoSession | null = null;
+  private resumeAttempts = 0;
+  private awaitingResume = false;
+  private receiverZipStream: Zip64Stream | null = null;
+  private receiverZipFileIndex = 0;
+  private receiverZipFileBytesWritten = 0;
+  private receiverZipFinalized = false;
 
   private onProgressCallback:
     | ((data: {
@@ -118,6 +126,9 @@ export class DirectFileWriter {
   // 🚀 [추가] 흐름 제어 콜백
   private onFlowControlCallback: ((action: 'PAUSE' | 'RESUME') => void) | null =
     null;
+  private onResumeRequestCallback:
+    | ((offset: number, reason: string) => void)
+    | null = null;
 
   /**
    * 스토리지 초기화
@@ -125,7 +136,7 @@ export class DirectFileWriter {
   public async initStorage(manifest: {
     totalSize: number;
     totalFiles?: number;
-    files?: Array<{ path: string }>;
+    files?: Array<{ path: string; size: number }>;
     rootName?: string;
     isSizeEstimated?: boolean;
     downloadFileName?: string;
@@ -134,12 +145,19 @@ export class DirectFileWriter {
     this.totalSize = manifest.totalSize;
     this.startTime = Date.now();
     this.totalBytesWritten = 0;
+    this.outputBytesWritten = 0;
     this.isFinalized = false;
     this.writeBuffer = [];
     this.currentBatchSize = 0;
     this.pendingBytesInBuffer = 0;
     this.isPaused = false;
+    this.resumeAttempts = 0;
+    this.awaitingResume = false;
     this.blobChunks = [];
+    this.receiverZipStream = null;
+    this.receiverZipFileIndex = 0;
+    this.receiverZipFileBytesWritten = 0;
+    this.receiverZipFinalized = false;
 
     const fileCount = manifest.totalFiles || manifest.files?.length || 0;
     logInfo('[DirectFileWriter]', `Initializing for ${fileCount} files`);
@@ -955,10 +973,11 @@ export class DirectFileWriter {
     // EOS 체크
     if (fileId === 0xffff) {
       logInfo('[DirectFileWriter]', 'EOS received signal.');
-      await this.flushBuffer(); // 남은 데이터 모두 쓰기
       await this.finalize();
       return;
     }
+
+    this.awaitingResume = false;
 
     const size = view.getUint32(14, true);
     const offset = Number(view.getBigUint64(6, true));
@@ -1103,30 +1122,10 @@ export class DirectFileWriter {
       offset += chunk.byteLength;
     }
 
-    // 2. 모드별 쓰기 처리
-    if (this.writerMode === 'blob-fallback') {
-      // Blob 모드: 메모리에 계속 적재 (finalize에서 한 번에 다운로드)
-      this.blobChunks.push(mergedBuffer);
-    } else if (this.writerMode === 'opfs-fallback') {
-      // OPFS 모드: 디스크에 직접 쓰기
-      if (this.opfsWriter) {
-        await this.opfsWriter.write({
-          type: 'write',
-          position: this.totalBytesWritten,
-          data: mergedBuffer,
-        });
-      }
-    } else if (this.writerMode === 'file-system-access') {
-      const fsWriter = this.writer as FileSystemWritableFileStream;
-      await fsWriter.write({
-        type: 'write',
-        position: this.totalBytesWritten, // 순차적으로 쓰므로 누적 오프셋 사용
-        data: mergedBuffer,
-      });
+    if (this.isReceiverZipMode()) {
+      await this.writeZipInput(mergedBuffer);
     } else {
-      const streamWriter = this.writer as WritableStreamDefaultWriter;
-      await streamWriter.ready;
-      await streamWriter.write(mergedBuffer);
+      await this.writeOutputData(mergedBuffer);
     }
 
     // 3. 상태 업데이트 및 초기화
@@ -1139,6 +1138,95 @@ export class DirectFileWriter {
     this.checkBackpressure();
 
     this.reportProgress();
+  }
+
+  private async writeOutputData(data: Uint8Array): Promise<void> {
+    if (data.byteLength === 0) return;
+
+    if (this.writerMode === 'blob-fallback') {
+      // Blob 모드: 메모리에 계속 적재 (finalize에서 한 번에 다운로드)
+      this.blobChunks.push(data);
+    } else if (this.writerMode === 'opfs-fallback') {
+      // OPFS 모드: 디스크에 직접 쓰기
+      if (this.opfsWriter) {
+        await this.opfsWriter.write({
+          type: 'write',
+          position: this.outputBytesWritten,
+          data: data as BufferSource,
+        });
+      }
+    } else if (this.writerMode === 'file-system-access') {
+      const fsWriter = this.writer as FileSystemWritableFileStream;
+      await fsWriter.write({
+        type: 'write',
+        position: this.outputBytesWritten,
+        data: data as BufferSource,
+      });
+    } else {
+      const streamWriter = this.writer as WritableStreamDefaultWriter;
+      await streamWriter.ready;
+      await streamWriter.write(data);
+    }
+
+    this.outputBytesWritten += data.byteLength;
+  }
+
+  private isReceiverZipMode(): boolean {
+    return (
+      !!this.manifest.isSizeEstimated && (this.manifest.totalFiles ?? 0) > 1
+    );
+  }
+
+  private async ensureReceiverZipStream(): Promise<Zip64Stream> {
+    if (!this.receiverZipStream) {
+      await initPonsCore();
+      this.receiverZipStream = new Zip64Stream(0);
+    }
+    return this.receiverZipStream;
+  }
+
+  private async writeZipInput(data: Uint8Array): Promise<void> {
+    const zip = await this.ensureReceiverZipStream();
+    let cursor = 0;
+
+    while (cursor < data.byteLength) {
+      const fileMeta = this.manifest.files?.[this.receiverZipFileIndex];
+      if (!fileMeta) {
+        throw new Error(
+          'Received more source data than the manifest describes'
+        );
+      }
+
+      if (this.receiverZipFileBytesWritten === 0) {
+        await this.writeOutputData(
+          zip.begin_file(fileMeta.path, BigInt(fileMeta.size))
+        );
+      }
+
+      const remainingForFile = fileMeta.size - this.receiverZipFileBytesWritten;
+      const take = Math.min(remainingForFile, data.byteLength - cursor);
+      const sourceSlice = data.subarray(cursor, cursor + take);
+      const zipChunk = zip.process_chunk(sourceSlice);
+      await this.writeOutputData(zipChunk);
+
+      cursor += take;
+      this.receiverZipFileBytesWritten += take;
+
+      if (this.receiverZipFileBytesWritten === fileMeta.size) {
+        await this.writeOutputData(zip.end_file());
+        this.receiverZipFileIndex++;
+        this.receiverZipFileBytesWritten = 0;
+      }
+    }
+  }
+
+  private async finalizeReceiverZip(): Promise<void> {
+    if (!this.isReceiverZipMode() || this.receiverZipFinalized) return;
+    if (this.totalBytesWritten !== this.totalSize) return;
+
+    const zip = await this.ensureReceiverZipStream();
+    await this.writeOutputData(zip.finalize());
+    this.receiverZipFinalized = true;
   }
 
   /**
@@ -1180,7 +1268,6 @@ export class DirectFileWriter {
       logInfo('[DirectFileWriter]', '⚠️ Already finalized, skipping');
       return;
     }
-    this.isFinalized = true;
 
     // 버퍼에 남은 잔여 데이터 강제 플러시
     await this.flushBuffer();
@@ -1189,14 +1276,45 @@ export class DirectFileWriter {
     if (this.reorderingBuffer) {
       const stats = this.reorderingBuffer.getStatus();
       if (stats.bufferedCount > 0) {
-        logError(
-          '[DirectFileWriter]',
-          `Finalizing with ${stats.bufferedCount} chunks still in buffer (Potential Data Loss)`
+        if (
+          this.requestResume(
+            stats.nextExpected,
+            `${stats.bufferedCount} buffered chunk(s) are waiting for missing data`
+          )
+        ) {
+          return;
+        }
+
+        await this.abortIncompleteTransfer(
+          `INCOMPLETE_TRANSFER|Transfer incomplete: ${stats.bufferedCount} chunk(s) are still waiting for missing data at offset ${stats.nextExpected}. Received ${formatBytes(this.totalBytesWritten)} of ${formatBytes(this.totalSize)}.`
         );
+        return;
       }
+    }
+
+    const incompleteError = this.getIncompleteTransferError();
+    if (incompleteError) {
+      if (
+        this.requestResume(
+          this.totalBytesWritten,
+          `received ${formatBytes(this.totalBytesWritten)} of ${formatBytes(this.totalSize)}`
+        )
+      ) {
+        return;
+      }
+
+      await this.abortIncompleteTransfer(incompleteError);
+      return;
+    }
+
+    this.isFinalized = true;
+
+    if (this.reorderingBuffer) {
       this.reorderingBuffer.clear();
       this.reorderingBuffer = null;
     }
+
+    await this.finalizeReceiverZip();
 
     // 🚀 [Blob 모드] 메모리에 모인 데이터를 Blob으로 다운로드
     if (this.writerMode === 'blob-fallback') {
@@ -1286,7 +1404,7 @@ export class DirectFileWriter {
           // ZIP 사이즈 불일치 문제 해결을 위한 Truncate
           // locked 속성 체크
           if (!(fsWriter as unknown as { locked: boolean }).locked) {
-            await fsWriter.truncate(this.totalBytesWritten);
+            await fsWriter.truncate(this.outputBytesWritten);
             await fsWriter.close();
           }
         } else {
@@ -1311,6 +1429,34 @@ export class DirectFileWriter {
 
     this.writer = null;
     this.onCompleteCallback?.(this.totalBytesWritten);
+  }
+
+  private getIncompleteTransferError(): string | null {
+    const isSizeStrict = this.manifest && !this.manifest.isSizeEstimated;
+
+    if (isSizeStrict && this.totalSize > 0) {
+      if (this.totalBytesWritten === this.totalSize) {
+        return null;
+      }
+
+      return `INCOMPLETE_TRANSFER|Transfer incomplete: received ${formatBytes(this.totalBytesWritten)} of ${formatBytes(this.totalSize)}. The partial file was discarded. Please retry, or use Cloud Drop if the sender cannot stay connected.`;
+    }
+
+    if (this.manifest?.isSizeEstimated && this.totalSize > 0) {
+      if (this.totalBytesWritten >= this.totalSize) {
+        return null;
+      }
+
+      return `INCOMPLETE_TRANSFER|Transfer incomplete: received ${formatBytes(this.totalBytesWritten)} but expected at least ${formatBytes(this.totalSize)}. The partial file was discarded. Please retry, or use Cloud Drop if the sender cannot stay connected.`;
+    }
+
+    return null;
+  }
+
+  private async abortIncompleteTransfer(message: string): Promise<never> {
+    logError('[DirectFileWriter]', message);
+    await this.cleanup();
+    throw new Error(message);
   }
 
   /**
@@ -1338,6 +1484,46 @@ export class DirectFileWriter {
   // 🚀 [추가] 콜백 등록 메서드
   public onFlowControl(callback: (action: 'PAUSE' | 'RESUME') => void): void {
     this.onFlowControlCallback = callback;
+  }
+
+  public onResumeRequest(
+    callback: (offset: number, reason: string) => void
+  ): void {
+    this.onResumeRequestCallback = callback;
+  }
+
+  public requestResumeFromCurrentOffset(reason: string): boolean {
+    return this.requestResume(this.totalBytesWritten, reason);
+  }
+
+  private requestResume(offset: number, reason: string): boolean {
+    if (!this.canRequestResume()) {
+      return false;
+    }
+
+    if (this.awaitingResume) {
+      return true;
+    }
+
+    this.resumeAttempts++;
+    this.awaitingResume = true;
+    logWarn(
+      '[DirectFileWriter]',
+      `Requesting resume from offset ${offset} (${this.resumeAttempts}/${MAX_RESUME_ATTEMPTS}): ${reason}`
+    );
+    this.onResumeRequestCallback?.(offset, reason);
+    return true;
+  }
+
+  private canRequestResume(): boolean {
+    return (
+      !!this.onResumeRequestCallback &&
+      (this.isReceiverZipMode() ||
+        (!this.manifest.isSizeEstimated &&
+          (this.manifest.totalFiles ?? this.manifest.files?.length ?? 0) ===
+            1)) &&
+      this.resumeAttempts < MAX_RESUME_ATTEMPTS
+    );
   }
 
   /**
@@ -1375,6 +1561,10 @@ export class DirectFileWriter {
     this.writeBuffer = []; // 메모리 해제
     this.blobChunks = []; // Blob 청크 메모리 해제
     this.isPaused = false;
+    this.awaitingResume = false;
+    this.receiverZipStream?.reset();
+    this.receiverZipStream = null;
+    this.receiverZipFinalized = false;
     if (this.sessionKey) {
       this.sessionKey.fill(0);
     }

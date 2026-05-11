@@ -186,12 +186,13 @@ const ReceiverView: React.FC = () => {
       setStatus('ROOM_FULL');
       return;
     }
-    if (msg.includes('closed')) return; // 단순 종료 무시
-
-    // 🚨 [핵심 수정] 이미 다운로드 중인 경우 에러 상태로 전환 방지
     const currentStatus = statusRef.current;
-    if (currentStatus === 'RECEIVING' && !isWaitingForSender) {
-      console.warn('[ReceiverView] Error ignored - already transferring');
+    if (msg.includes('closed')) {
+      if (currentStatus === 'DONE' || currentStatus === 'IDLE') {
+        return;
+      }
+      setErrorMsg('Connection closed before the file transfer completed.');
+      setStatus('ERROR');
       return;
     }
 
@@ -313,6 +314,18 @@ const ReceiverView: React.FC = () => {
     }
   }, []);
 
+  const handleReconnecting = useCallback(() => {
+    setIsWaitingForSender(true);
+    setErrorMsg('');
+    setStatus('RECEIVING');
+  }, [setStatus]);
+
+  const handleReconnected = useCallback(() => {
+    setIsWaitingForSender(false);
+    setErrorMsg('');
+    setStatus('RECEIVING');
+  }, [setStatus]);
+
   // 🚀 [핵심 수정] 이벤트 리스너 등록 Effect (한 번만 실행)
   useEffect(() => {
     // 리스너 등록
@@ -326,6 +339,8 @@ const ReceiverView: React.FC = () => {
     transferService.on('queued', handleQueued);
     transferService.on('transfer-starting', handleTransferStarting);
     transferService.on('ready-for-download', handleReadyForDownload);
+    transferService.on('reconnecting', handleReconnecting);
+    transferService.on('reconnected', handleReconnected);
 
     return () => {
       // 🚀 [핵심] 클린업 시 리스너만 제거 (transferService.cleanup은 컴포넌트 언마운트 시에만)
@@ -339,6 +354,8 @@ const ReceiverView: React.FC = () => {
       transferService.off('queued', handleQueued);
       transferService.off('transfer-starting', handleTransferStarting);
       transferService.off('ready-for-download', handleReadyForDownload);
+      transferService.off('reconnecting', handleReconnecting);
+      transferService.off('reconnected', handleReconnected);
     };
   }, [
     handleMetadata,
@@ -351,6 +368,8 @@ const ReceiverView: React.FC = () => {
     handleQueued,
     handleTransferStarting,
     handleReadyForDownload,
+    handleReconnecting,
+    handleReconnected,
   ]);
 
   // 🚀 [핵심 수정] 방 참여 Effect (roomId가 있을 때 한 번만 실행)

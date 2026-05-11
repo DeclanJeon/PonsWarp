@@ -107,8 +107,9 @@ class DoubleBuffer {
 interface WorkerState {
   files: File[];
   manifest: any;
-  mode: 'single' | 'zip';
+  mode: 'single' | 'multi-raw' | 'zip';
   currentFileOffset: number;
+  currentFileIndex: number;
   zipStream: ReadableStream<Uint8Array> | null;
   zipReader: ReadableStreamDefaultReader<Uint8Array> | null;
   startTime: number;
@@ -121,6 +122,7 @@ const state: WorkerState = {
   manifest: null,
   mode: 'single',
   currentFileOffset: 0,
+  currentFileIndex: 0,
   zipStream: null,
   zipReader: null,
   startTime: 0,
@@ -195,6 +197,9 @@ self.onmessage = (e: MessageEvent) => {
       break;
     case 'process-batch':
       processBatch(payload.count);
+      break;
+    case 'resume-single-file':
+      resumeSingleFile(payload.offset);
       break;
     case 'reset':
       resetWorker();
@@ -274,6 +279,7 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   state.isInitialized = true;
   state.isCompleted = false;
   state.currentFileOffset = 0;
+  state.currentFileIndex = 0;
 
   isTransferActive = true;
   prefetchPromise = null;
@@ -293,19 +299,68 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   if (fileCount === 1) {
     state.mode = 'single';
   } else {
-    state.mode = 'zip';
-    try {
-      await initZipStream();
-      await prefetchBatch();
-    } catch (error: any) {
-      console.error('[Sender Worker] ZIP init failed:', error);
-      self.postMessage({ type: 'error', payload: { message: error.message } });
-      return;
-    }
+    state.mode = 'multi-raw';
   }
 
   triggerPrefetch();
   self.postMessage({ type: 'init-complete' });
+}
+
+async function resumeSingleFile(offset: number) {
+  if (!state.isInitialized) {
+    self.postMessage({
+      type: 'error',
+      payload: {
+        message: 'Resume is only available for initialized transfers',
+      },
+    });
+    return;
+  }
+
+  const totalSize = state.manifest?.totalSize ?? state.files[0]?.size ?? 0;
+  const safeOffset = Math.max(0, Math.min(offset, totalSize));
+
+  try {
+    await singleFileReader?.cancel();
+  } catch {
+    // Ignore reader cancellation during resume.
+  }
+
+  doubleBuffer.clear();
+  singleFileBuffer = null;
+  prefetchPromise = null;
+  state.currentFileOffset = safeOffset;
+  state.isCompleted = safeOffset >= totalSize;
+  isTransferActive = true;
+
+  if (state.files.length === 1) {
+    const file = state.files[0];
+    state.mode = 'single';
+    state.currentFileIndex = 0;
+    singleFileReader =
+      safeOffset < file.size
+        ? file.slice(safeOffset).stream().getReader()
+        : null;
+  } else {
+    state.mode = 'multi-raw';
+    seekMultiFileOffset(safeOffset);
+  }
+
+  if (zeroCopyPool) {
+    zeroCopyPool.set_total_bytes(BigInt(safeOffset));
+  } else {
+    self.postMessage({
+      type: 'error',
+      payload: { message: 'Resume requires the zero-copy packet encoder' },
+    });
+    return;
+  }
+
+  fallbackTotalBytes = safeOffset;
+  fallbackSequence = Math.floor(safeOffset / CHUNK_SIZE_MAX);
+
+  triggerPrefetch();
+  self.postMessage({ type: 'resume-ready', payload: { offset: safeOffset } });
 }
 
 let zipSourceBytesRead = 0;
@@ -472,6 +527,8 @@ function resetWorker() {
   state.isInitialized = false;
   state.isCompleted = false;
   state.files = [];
+  state.currentFileIndex = 0;
+  state.currentFileOffset = 0;
 
   doubleBuffer.clear();
   zipBuffer = null;
@@ -512,11 +569,35 @@ async function prefetchBatch(): Promise<void> {
 }
 
 async function createNextChunk(): Promise<ArrayBuffer | null> {
-  return state.mode === 'single' ? createSingleFileChunk() : createZipChunk();
+  if (state.mode === 'single') return createSingleFileChunk();
+  if (state.mode === 'multi-raw') return createMultiFileChunk();
+  return createZipChunk();
 }
 
 let singleFileReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 let singleFileBuffer: Uint8Array | null = null;
+
+function seekMultiFileOffset(globalOffset: number): void {
+  let remaining = globalOffset;
+  state.currentFileIndex = 0;
+
+  while (
+    state.currentFileIndex < state.files.length &&
+    remaining >= state.files[state.currentFileIndex].size
+  ) {
+    remaining -= state.files[state.currentFileIndex].size;
+    state.currentFileIndex++;
+  }
+
+  if (state.currentFileIndex >= state.files.length) {
+    singleFileReader = null;
+    state.isCompleted = true;
+    return;
+  }
+
+  const file = state.files[state.currentFileIndex];
+  singleFileReader = file.slice(remaining).stream().getReader();
+}
 
 async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   if (state.files.length === 0) return null;
@@ -589,6 +670,105 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
     }
   } catch (e) {
     console.error('[Sender Worker] Single chunk error:', e);
+    try {
+      await singleFileReader?.cancel();
+    } catch {
+      // Ignore reader cancellation after a read error.
+    }
+    singleFileReader = null;
+    singleFileBuffer = null;
+    return null;
+  }
+}
+
+function getCurrentFileStartOffset(): number {
+  let offset = 0;
+  for (let i = 0; i < state.currentFileIndex; i++) {
+    offset += state.files[i].size;
+  }
+  return offset;
+}
+
+async function createMultiFileChunk(): Promise<ArrayBuffer | null> {
+  if (state.currentFileIndex >= state.files.length) {
+    state.isCompleted = true;
+    return null;
+  }
+
+  const currentChunkSize = adaptiveConfig.enableAdaptive
+    ? adaptiveConfig.chunkSize
+    : CHUNK_SIZE_MAX;
+
+  try {
+    for (;;) {
+      const file = state.files[state.currentFileIndex];
+      const fileStartOffset = getCurrentFileStartOffset();
+      const localOffset = state.currentFileOffset - fileStartOffset;
+
+      if (localOffset >= file.size) {
+        try {
+          await singleFileReader?.cancel();
+        } catch {
+          // Ignore reader cancellation when advancing files.
+        }
+        singleFileReader = null;
+        singleFileBuffer = null;
+        state.currentFileIndex++;
+
+        if (state.currentFileIndex >= state.files.length) {
+          state.isCompleted = true;
+          return null;
+        }
+
+        singleFileReader = state.files[state.currentFileIndex]
+          .stream()
+          .getReader();
+        continue;
+      }
+
+      if (!singleFileReader) {
+        singleFileReader = file.slice(localOffset).stream().getReader();
+      }
+
+      const bufferSize = singleFileBuffer?.length ?? 0;
+      const remainingInFile = file.size - localOffset;
+      if (bufferSize >= currentChunkSize || bufferSize >= remainingInFile) {
+        const take = Math.min(currentChunkSize, remainingInFile);
+        const dataToSend = singleFileBuffer!.slice(0, take);
+        const remaining = singleFileBuffer!.slice(take);
+        singleFileBuffer = remaining.length > 0 ? remaining : null;
+        state.currentFileOffset += dataToSend.length;
+        return createPacket(dataToSend);
+      }
+
+      const { done, value } = await singleFileReader.read();
+      if (done) {
+        if (singleFileBuffer && singleFileBuffer.length > 0) {
+          const take = Math.min(singleFileBuffer.length, remainingInFile);
+          const dataToSend = singleFileBuffer.slice(0, take);
+          const remaining = singleFileBuffer.slice(take);
+          singleFileBuffer = remaining.length > 0 ? remaining : null;
+          state.currentFileOffset += dataToSend.length;
+          return createPacket(dataToSend);
+        }
+
+        state.currentFileOffset = fileStartOffset + file.size;
+        continue;
+      }
+
+      if (singleFileBuffer) {
+        const newBuffer = new Uint8Array(
+          singleFileBuffer.length + value.length
+        );
+        newBuffer.set(singleFileBuffer);
+        newBuffer.set(value, singleFileBuffer.length);
+        singleFileBuffer = newBuffer;
+      } else {
+        singleFileBuffer = value;
+      }
+    }
+  } catch (e) {
+    console.error('[Sender Worker] Multi-file chunk error:', e);
     try {
       await singleFileReader?.cancel();
     } catch {
@@ -753,8 +933,8 @@ function createPacketLegacy(data: Uint8Array): ArrayBuffer {
  * 🦀 WASM 기반 패킷 생성 (암호화 지원)
  */
 function createPacket(data: Uint8Array): ArrayBuffer {
-  // Single File 모드 크기 제한 체크
-  if (state.mode === 'single' && state.manifest) {
+  // 원본 파일 바이트 전송 모드 크기 제한 체크
+  if (state.mode !== 'zip' && state.manifest) {
     const totalBytesSent = getTotalBytesSent();
     if (totalBytesSent >= BigInt(state.manifest.totalSize)) {
       return new ArrayBuffer(0);
@@ -778,11 +958,11 @@ function createPacket(data: Uint8Array): ArrayBuffer {
  * 전송된 총 바이트 수 조회
  */
 function getTotalBytesSent(): bigint {
-  if (encryptionEnabled && cryptoSession) {
-    return cryptoSession.total_bytes_encrypted;
-  }
   if (zeroCopyEnabled && zeroCopyPool) {
     return BigInt(zeroCopyPool.total_bytes);
+  }
+  if (encryptionEnabled && cryptoSession) {
+    return cryptoSession.total_bytes_encrypted;
   }
   if (wasmReady && packetEncoder) {
     return packetEncoder.total_bytes_sent;

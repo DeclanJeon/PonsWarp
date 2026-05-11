@@ -168,18 +168,18 @@ export class SinglePeerConnection {
   /**
    * 데이터 전송 (connected 상태일 때만)
    */
-  public send(data: ArrayBuffer | string): void {
+  public send(data: ArrayBuffer | string): boolean {
     if (!this.connected || this.destroyed || !this.pc) {
-      // 연결되지 않은 상태에서는 조용히 무시 (throw하지 않음)
-      return;
+      return false;
     }
 
     const channel = (this.pc as SimplePeerWithChannel)._channel;
     if (!channel || channel.readyState !== 'open') {
-      return;
+      return false;
     }
 
     this.pc.send(data);
+    return true;
   }
 
   /**

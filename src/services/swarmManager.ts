@@ -506,8 +506,11 @@ export class SwarmManager {
       }
 
       try {
-        peer.send(chunk);
-        successCount++;
+        if (peer.send(chunk)) {
+          successCount++;
+        } else {
+          failedPeers.push(peerId);
+        }
       } catch (error) {
         logError('[SwarmManager]', `Failed to send to peer ${peerId}:`, error);
         failedPeers.push(peerId);
@@ -591,6 +594,71 @@ export class SwarmManager {
     }
 
     return bufferOkay && receiversReady;
+  }
+
+  private isIncompleteDownloadSize(actualSize: number): boolean {
+    if (!this.pendingManifest || this.pendingManifest.totalSize <= 0) {
+      return false;
+    }
+
+    if (this.pendingManifest.isSizeEstimated) {
+      return actualSize < this.pendingManifest.totalSize;
+    }
+
+    return actualSize !== this.pendingManifest.totalSize;
+  }
+
+  private handleResumeRequest(peerId: string, msg: any): void {
+    const offset = Number(msg.offset);
+
+    if (!Number.isFinite(offset) || offset < 0) {
+      logError('[SwarmManager]', `Invalid resume offset from ${peerId}:`, msg);
+      return;
+    }
+
+    if (!this.canResumeSingleFileTransfer()) {
+      logWarn(
+        '[SwarmManager]',
+        `Resume requested by ${peerId}, but this transfer type is not resumable`
+      );
+      return;
+    }
+
+    const peer = this.peers.get(peerId);
+    if (!peer || !peer.connected) {
+      logWarn(
+        '[SwarmManager]',
+        `Resume requested by disconnected peer ${peerId}`
+      );
+      return;
+    }
+
+    logInfo(
+      '[SwarmManager]',
+      `Resuming transfer for ${peerId} from offset ${offset}`
+    );
+
+    this.currentTransferPeers = new Set([peerId]);
+    this.completedPeersInSession.delete(peerId);
+    this.pausedPeers.delete(peerId);
+    this.isTransferring = true;
+    this.isProcessingBatch = false;
+    this.totalBytesSent = offset;
+    this.transferStartTime = performance.now();
+
+    this.worker?.postMessage({
+      type: 'resume-single-file',
+      payload: { offset },
+    });
+  }
+
+  private canResumeSingleFileTransfer(): boolean {
+    return (
+      !!this.worker &&
+      !!this.pendingManifest &&
+      this.pendingManifest.totalFiles === this.files.length &&
+      this.files.length > 0
+    );
   }
 
   private handleDrain(_peerId: string): void {
@@ -777,8 +845,26 @@ export class SwarmManager {
       case 'DOWNLOAD_COMPLETE':
         console.log(
           '[SwarmManager] 📥 Received DOWNLOAD_COMPLETE from peer:',
-          peerId
+          peerId,
+          msg
         );
+
+        if (
+          this.pendingManifest &&
+          typeof msg.actualSize === 'number' &&
+          this.isIncompleteDownloadSize(msg.actualSize)
+        ) {
+          logError(
+            '[SwarmManager]',
+            `Peer ${peerId} reported incomplete download: ${msg.actualSize}/${this.pendingManifest.totalSize}`
+          );
+          this.removePeer(peerId, 'incomplete-download');
+          this.emit(
+            'transfer-failed',
+            `Receiver saved only ${msg.actualSize} of ${this.pendingManifest.totalSize} bytes`
+          );
+          return;
+        }
 
         // 🚀 [핵심 수정] 중복 메시지라도 checkTransferComplete를 강제 실행
         // 이유: 첫 메시지 처리 시 타이밍 이슈로 완료 처리가 안 되었을 수 있음
@@ -825,6 +911,10 @@ export class SwarmManager {
         }
         console.log('[SwarmManager] 🔄 Calling checkTransferComplete...');
         this.checkTransferComplete();
+        break;
+
+      case 'RESUME_REQUEST':
+        this.handleResumeRequest(peerId, msg);
         break;
 
       default:
@@ -1387,6 +1477,16 @@ export class SwarmManager {
           this.handleBatchFromWorker(payload);
           break;
 
+        case 'resume-ready':
+          logInfo(
+            '[SwarmManager]',
+            `Worker resume ready from offset ${payload?.offset ?? 0}`
+          );
+          this.workerInitialized = true;
+          this.isProcessingBatch = false;
+          this.requestMoreChunks();
+          break;
+
         case 'complete':
           console.log(
             '[SwarmManager] ✅ [DEBUG] Worker reported transfer complete'
@@ -1594,7 +1694,16 @@ export class SwarmManager {
     const view = new DataView(eosPacket);
     view.setUint16(0, 0xffff, true);
 
-    this.broadcastChunk(eosPacket);
+    const result = this.broadcastChunk(eosPacket);
+    for (const failedPeerId of result.failedPeers) {
+      this.removePeer(failedPeerId, 'eos-send-failed');
+    }
+
+    if (result.successCount === 0) {
+      this.emit('transfer-failed', 'Failed to send transfer completion signal');
+      return;
+    }
+
     logInfo('[SwarmManager]', 'EOS broadcast complete');
 
     this.emit('remote-processing', true);

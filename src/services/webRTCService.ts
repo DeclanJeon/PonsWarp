@@ -37,9 +37,14 @@ interface IFileWriter {
   onError(cb: (err: string) => void): void;
   // 🚀 [추가] 흐름 제어 인터페이스
   onFlowControl?(cb: (action: 'PAUSE' | 'RESUME') => void): void;
+  onResumeRequest?(cb: (offset: number, reason: string) => void): void;
+  requestResumeFromCurrentOffset?(reason: string): boolean;
   // 🔐 [E2E] 암호화 키 설정
   setEncryptionKey?(sessionKey: Uint8Array, randomPrefix: Uint8Array): void;
 }
+
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY_MS = 1000;
 
 class ReceiverService {
   // 연결 관리
@@ -48,6 +53,11 @@ class ReceiverService {
 
   // 파일 쓰기
   private writer: IFileWriter | null = null;
+  private currentManifest: any = null;
+  private isTransferActive = false;
+  private isReconnecting = false;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   // 상태 관리
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -192,8 +202,10 @@ class ReceiverService {
     });
 
     this.writer.onComplete(actualSize => {
+      this.isTransferActive = false;
+      this.isReconnecting = false;
       this.emit('complete', { actualSize });
-      this.notifyDownloadComplete();
+      this.notifyDownloadComplete(actualSize);
     });
 
     this.writer.onError(err => this.emit('error', err));
@@ -211,6 +223,27 @@ class ReceiverService {
         }
       });
     }
+
+    if (this.writer.onResumeRequest) {
+      this.writer.onResumeRequest((offset, reason) => {
+        if (!this.peer || !this.peer.connected) {
+          this.emit('error', 'Cannot resume transfer: peer disconnected');
+          return;
+        }
+
+        const sent = this.peer.send(
+          JSON.stringify({
+            type: 'RESUME_REQUEST',
+            offset,
+            reason,
+          })
+        );
+
+        if (!sent) {
+          this.emit('error', 'Cannot resume transfer: data channel closed');
+        }
+      });
+    }
   }
 
   /**
@@ -224,11 +257,15 @@ class ReceiverService {
 
     try {
       console.log('[Receiver] Initializing storage writer...');
+      this.currentManifest = manifest;
       await this.writer.initStorage(manifest);
 
       console.log('[Receiver] ✅ Storage ready. Sending TRANSFER_READY...');
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
+      this.isTransferActive = true;
+      this.isReconnecting = false;
+      this.reconnectAttempts = 0;
 
       // Sender에게 준비 완료 신호 전송. 일부 브라우저는 data channel open 직후
       // 첫 control frame을 조용히 누락시키는 경우가 있어 짧게 재전송한다.
@@ -258,6 +295,15 @@ class ReceiverService {
     logInfo('[Receiver]', 'Resetting state...');
     this.roomId = null;
     this.connectedPeerId = null;
+    this.currentManifest = null;
+    this.isTransferActive = false;
+    this.isReconnecting = false;
+    this.reconnectAttempts = 0;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
 
     if (this.peer) {
       this.peer.destroy();
@@ -377,6 +423,20 @@ class ReceiverService {
     peer.on('connected', () => {
       logInfo('[Receiver]', 'P2P Channel Connected!');
       this.emit('connected', true);
+
+      if (this.isReconnecting) {
+        this.isReconnecting = false;
+        this.reconnectAttempts = 0;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this.emit('status', 'RECEIVING');
+        this.emit('reconnected', true);
+        this.writer?.requestResumeFromCurrentOffset?.(
+          'connection restored after data channel close'
+        );
+      }
     });
 
     peer.on('data', this.handleData.bind(this));
@@ -388,8 +448,104 @@ class ReceiverService {
 
     peer.on('close', () => {
       logInfo('[Receiver]', 'Peer connection closed');
+      if (this.shouldAttemptReconnect()) {
+        this.scheduleReconnect();
+        return;
+      }
+
       this.emit('error', 'Connection closed');
     });
+  }
+
+  private shouldAttemptReconnect(): boolean {
+    return (
+      this.isTransferActive &&
+      !!this.roomId &&
+      !!this.writer &&
+      !!this.currentManifest &&
+      (this.currentManifest.totalFiles ??
+        this.currentManifest.files?.length ??
+        0) > 0 &&
+      this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS
+    );
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.roomId || this.reconnectTimer) {
+      return;
+    }
+
+    this.isReconnecting = true;
+    this.reconnectAttempts++;
+    this.connectedPeerId = null;
+
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * this.reconnectAttempts,
+      5000
+    );
+
+    logWarn(
+      '[Receiver]',
+      `Scheduling reconnect attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`
+    );
+    this.emit('reconnecting', {
+      attempt: this.reconnectAttempts,
+      maxAttempts: MAX_RECONNECT_ATTEMPTS,
+    });
+
+    const roomId = this.roomId;
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+
+      try {
+        await signalingService.connect();
+
+        try {
+          await signalingService.leaveRoom(roomId);
+        } catch {
+          // Rejoin still has a chance to trigger a fresh offer.
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 250));
+        await signalingService.joinRoom(roomId);
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+
+          if (this.isReconnecting && this.shouldAttemptReconnect()) {
+            this.scheduleReconnect();
+            return;
+          }
+
+          if (this.isReconnecting) {
+            this.isReconnecting = false;
+            this.isTransferActive = false;
+            this.emit(
+              'error',
+              'Connection lost and automatic reconnect failed'
+            );
+          }
+        }, 5000);
+      } catch (error: any) {
+        logError('[Receiver]', 'Reconnect attempt failed:', error);
+
+        if (this.shouldAttemptReconnect()) {
+          this.scheduleReconnect();
+          return;
+        }
+
+        this.isReconnecting = false;
+        this.isTransferActive = false;
+        this.emit(
+          'error',
+          error?.message || 'Connection lost and automatic reconnect failed'
+        );
+      }
+    }, delay);
+
+    if (this.peer && !this.peer.isDestroyed()) {
+      this.peer.destroy();
+    }
+    this.peer = null;
   }
 
   private handleData(data: ArrayBuffer) {
@@ -404,7 +560,10 @@ class ReceiverService {
       // Fire-and-forget 방식으로 쓰기 (블로킹 방지)
       this.writer.writeChunk(data).catch(err => {
         console.error('[Receiver] Write error:', err);
-        this.emit('error', 'Disk write failed');
+        this.emit(
+          'error',
+          err instanceof Error ? err.message : 'Disk write failed'
+        );
       });
     }
   }
@@ -463,9 +622,13 @@ class ReceiverService {
     }
   }
 
-  private notifyDownloadComplete() {
+  private notifyDownloadComplete(actualSize: number) {
     if (this.peer && this.peer.connected) {
-      const msg = JSON.stringify({ type: 'DOWNLOAD_COMPLETE' });
+      const msg = JSON.stringify({
+        type: 'DOWNLOAD_COMPLETE',
+        actualSize,
+        expectedSize: this.currentManifest?.totalSize,
+      });
       // 신뢰성을 위해 여러 번 전송
       for (let i = 0; i < 3; i++) {
         setTimeout(() => {
