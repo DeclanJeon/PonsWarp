@@ -152,7 +152,10 @@ const CloudSenderView: React.FC = () => {
     } else if (checkoutStatus === 'success') {
       const paypalOrderId = params.get('token');
       const paypalSubscriptionId = params.get('subscription_id');
-      if (paypalOrderId) {
+      if (paypalSubscriptionId) {
+        setEntitlementToken(paypalSubscriptionId);
+        window.history.replaceState({}, '', window.location.pathname);
+      } else if (paypalOrderId) {
         captureBillingCheckout(paypalOrderId)
           .then(response => {
             if (cancelled) return;
@@ -167,9 +170,6 @@ const CloudSenderView: React.FC = () => {
               captureError?.message || 'PayPal payment capture failed'
             );
           });
-      } else if (paypalSubscriptionId) {
-        setEntitlementToken(paypalSubscriptionId);
-        window.history.replaceState({}, '', window.location.pathname);
       } else {
         setError(
           'PayPal checkout returned without a usable entitlement token. Please wait a moment and retry.'
