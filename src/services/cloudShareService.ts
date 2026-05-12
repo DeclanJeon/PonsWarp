@@ -87,6 +87,7 @@ export interface CloudPlansResponse {
 
 export interface BillingCheckoutResponse {
   checkoutUrl: string;
+  checkoutId?: string;
 }
 
 export interface BillingCaptureResponse {

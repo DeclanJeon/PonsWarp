@@ -12,11 +12,13 @@ import {
   ShieldCheck,
   Zap,
   CloudUpload,
+  CreditCard,
 } from 'lucide-react';
 import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
 import CloudSenderView from './components/CloudSenderView';
 import CloudDownloadView from './components/CloudDownloadView';
+import PricingView from './components/PricingView';
 import { AppMode } from './types/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { signalingFactory } from './services/signaling-factory';
@@ -44,6 +46,8 @@ const App: React.FC = () => {
     if (cloudMatch) {
       setCloudShareId(cloudMatch[1]);
       setMode(AppMode.CLOUD_RECEIVER);
+    } else if (path === '/pricing') {
+      setMode(AppMode.PRICING);
     } else if (receiveMatch) {
       const roomId = receiveMatch[1];
       setRoomId(roomId);
@@ -61,6 +65,16 @@ const App: React.FC = () => {
   }, [setRoomId, setMode]);
 
   const startApp = () => setMode(AppMode.SELECTION);
+  const openPricing = () => {
+    setCloudShareId(null);
+    setMode(AppMode.PRICING);
+    window.history.pushState({}, '', '/pricing');
+  };
+  const openCloudDrop = () => {
+    setCloudShareId(null);
+    setMode(AppMode.CLOUD_SENDER);
+    window.history.pushState({}, '', '/');
+  };
 
   // Signaling 연결 관리
   useEffect(() => {
@@ -130,9 +144,21 @@ const App: React.FC = () => {
             </h1>
           </div>
           {/* Security Badge (Visual Assurance) */}
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-400 font-mono">
-            <ShieldCheck size={14} className="text-green-400" />
-            <span>End-to-End Encrypted</span>
+          <div
+            className="hidden md:flex items-center gap-3"
+            onClick={event => event.stopPropagation()}
+          >
+            <button
+              onClick={openPricing}
+              className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200 font-bold tracking-wider hover:bg-emerald-500/20 transition-colors"
+            >
+              <CreditCard size={14} />
+              <span>Pricing</span>
+            </button>
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-400 font-mono">
+              <ShieldCheck size={14} className="text-green-400" />
+              <span>End-to-End Encrypted</span>
+            </div>
           </div>
         </header>
 
@@ -169,15 +195,23 @@ const App: React.FC = () => {
                   </p>
                 </div>
 
-                <MagneticButton
-                  onClick={startApp}
-                  className="relative group bg-white text-black border border-white/50 px-8 py-3 md:px-12 md:py-5 rounded-full font-bold text-base md:text-lg tracking-widest hover:bg-cyan-500 hover:text-white hover:border-cyan-400 transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] overflow-hidden"
-                >
-                  <span className="relative z-10 flex items-center gap-3">
-                    INITIALIZE LINK
-                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                  </span>
-                </MagneticButton>
+                <div className="flex flex-col sm:flex-row items-center gap-3">
+                  <MagneticButton
+                    onClick={startApp}
+                    className="relative group bg-white text-black border border-white/50 px-8 py-3 md:px-12 md:py-5 rounded-full font-bold text-base md:text-lg tracking-widest hover:bg-cyan-500 hover:text-white hover:border-cyan-400 transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] overflow-hidden"
+                  >
+                    <span className="relative z-10 flex items-center gap-3">
+                      INITIALIZE LINK
+                      <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                    </span>
+                  </MagneticButton>
+                  <button
+                    onClick={openPricing}
+                    className="px-7 py-3 md:py-5 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-100 font-bold tracking-wider hover:bg-emerald-500/20 transition-colors"
+                  >
+                    VIEW PRICING
+                  </button>
+                </div>
               </motion.div>
             )}
 
@@ -188,82 +222,96 @@ const App: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 1.05, filter: 'blur(10px)' }}
-                // 모바일: 1열, 데스크탑: 3열 그리드
-                className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 max-w-6xl w-full px-4 items-center justify-center"
+                className="w-full max-w-6xl px-4"
               >
-                {/* SENDER CARD - 높이 축소 (Mobile: 200px, Desktop: 320px) */}
-                <MagneticButton
-                  onClick={() => setMode(AppMode.SENDER)}
-                  className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-cyan-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 w-full items-center justify-center">
+                  {/* SENDER CARD - 높이 축소 (Mobile: 200px, Desktop: 320px) */}
+                  <MagneticButton
+                    onClick={() => setMode(AppMode.SENDER)}
+                    className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-cyan-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
-                  {/* 아이콘 크기 축소 */}
-                  <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
-                    <div className="absolute inset-0 bg-cyan-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
-                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-cyan-400 flex items-center justify-center relative z-10 shadow-lg">
-                      <Send className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                    {/* 아이콘 크기 축소 */}
+                    <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
+                      <div className="absolute inset-0 bg-cyan-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
+                      <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-cyan-400 flex items-center justify-center relative z-10 shadow-lg">
+                        <Send className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="relative z-10 text-center space-y-1">
-                    <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-cyan-400 transition-colors">
-                      SEND
-                    </h3>
-                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                      Create Gate
-                    </p>
-                  </div>
-                </MagneticButton>
-
-                {/* CLOUD CARD - 비동기 24시간 링크 공유 */}
-                <MagneticButton
-                  onClick={() => setMode(AppMode.CLOUD_SENDER)}
-                  className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-emerald-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-
-                  <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
-                    <div className="absolute inset-0 bg-emerald-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
-                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-emerald-400 flex items-center justify-center relative z-10 shadow-lg">
-                      <CloudUpload className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                    <div className="relative z-10 text-center space-y-1">
+                      <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-cyan-400 transition-colors">
+                        SEND
+                      </h3>
+                      <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
+                        Create Gate
+                      </p>
                     </div>
-                  </div>
+                  </MagneticButton>
 
-                  <div className="relative z-10 text-center space-y-1">
-                    <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-emerald-400 transition-colors">
-                      CLOUD
-                    </h3>
-                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                      24H Drop
-                    </p>
-                  </div>
-                </MagneticButton>
+                  {/* CLOUD CARD - 비동기 24시간 링크 공유 */}
+                  <MagneticButton
+                    onClick={() => setMode(AppMode.CLOUD_SENDER)}
+                    className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-emerald-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
-                {/* RECEIVER CARD - 높이 축소 */}
-                <MagneticButton
-                  onClick={() => setMode(AppMode.RECEIVER)}
-                  className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-purple-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-
-                  <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
-                    <div className="absolute inset-0 bg-purple-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
-                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-purple-400 flex items-center justify-center relative z-10 shadow-lg">
-                      <Download className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                    <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
+                      <div className="absolute inset-0 bg-emerald-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
+                      <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-emerald-400 flex items-center justify-center relative z-10 shadow-lg">
+                        <CloudUpload className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="relative z-10 text-center space-y-1">
-                    <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-purple-400 transition-colors">
-                      RECEIVE
-                    </h3>
-                    <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                      Join Gate
-                    </p>
-                  </div>
-                </MagneticButton>
+                    <div className="relative z-10 text-center space-y-1">
+                      <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-emerald-400 transition-colors">
+                        CLOUD
+                      </h3>
+                      <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
+                        24H Drop
+                      </p>
+                    </div>
+                  </MagneticButton>
+
+                  {/* RECEIVER CARD - 높이 축소 */}
+                  <MagneticButton
+                    onClick={() => setMode(AppMode.RECEIVER)}
+                    className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-purple-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
+                    <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
+                      <div className="absolute inset-0 bg-purple-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
+                      <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-purple-400 flex items-center justify-center relative z-10 shadow-lg">
+                        <Download className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                      </div>
+                    </div>
+
+                    <div className="relative z-10 text-center space-y-1">
+                      <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-purple-400 transition-colors">
+                        RECEIVE
+                      </h3>
+                      <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
+                        Join Gate
+                      </p>
+                    </div>
+                  </MagneticButton>
+                </div>
+                <div className="mt-5 flex justify-center">
+                  <button
+                    onClick={openPricing}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black/40 border border-emerald-500/30 text-emerald-200 text-xs font-bold tracking-widest hover:bg-emerald-500/15 transition-colors"
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    VIEW CLOUD DROP PRICING
+                  </button>
+                </div>
               </motion.div>
+            )}
+
+            {mode === AppMode.PRICING && (
+              <PricingView onOpenCloud={openCloudDrop} />
             )}
 
             {/* --- ACTIVE STATES (SENDER/RECEIVER VIEWS) --- */}

@@ -42,6 +42,7 @@ type CloudUploadStatus =
 const MAX_PARALLEL_UPLOADS = 3;
 const GB = 1024 * 1024 * 1024;
 const TB = 1024 * GB;
+const ENTITLEMENT_STORAGE_KEY = 'ponswarpCloudEntitlementToken';
 
 const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
   directP2p: {
@@ -146,8 +147,16 @@ const CloudSenderView: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     const checkoutStatus = params.get('checkout');
     const nextEntitlement = params.get('cloudEntitlement');
+    const storedEntitlement = window.sessionStorage.getItem(
+      ENTITLEMENT_STORAGE_KEY
+    );
     if (nextEntitlement) {
       setEntitlementToken(nextEntitlement);
+      window.sessionStorage.removeItem(ENTITLEMENT_STORAGE_KEY);
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (storedEntitlement) {
+      setEntitlementToken(storedEntitlement);
+      window.sessionStorage.removeItem(ENTITLEMENT_STORAGE_KEY);
       window.history.replaceState({}, '', window.location.pathname);
     } else if (checkoutStatus === 'success') {
       const paypalOrderId = params.get('token');
@@ -166,9 +175,7 @@ const CloudSenderView: React.FC = () => {
           .catch(captureError => {
             if (cancelled) return;
             setStatus('ERROR');
-            setError(
-              captureError?.message || 'PayPal payment capture failed'
-            );
+            setError(captureError?.message || 'PayPal payment capture failed');
           });
       } else {
         setError(
@@ -656,7 +663,11 @@ const CloudSenderView: React.FC = () => {
                         </div>
                       </div>
                       <button
-                        disabled={!cloudPlans.checkoutEnabled || !plan.available || checkoutSku === plan.sku}
+                        disabled={
+                          !cloudPlans.checkoutEnabled ||
+                          !plan.available ||
+                          checkoutSku === plan.sku
+                        }
                         onClick={() => startCheckout(plan)}
                         className={`mt-auto w-full py-3 rounded-xl border font-bold tracking-wider transition-colors ${
                           cloudPlans.checkoutEnabled && plan.available
