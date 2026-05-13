@@ -7,6 +7,7 @@ import {
   FileIcon,
   Folder,
   Loader2,
+  Lock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -20,28 +21,49 @@ interface CloudDownloadViewProps {
   shareId: string;
 }
 
-type LoadStatus = 'LOADING' | 'READY' | 'ERROR';
+type LoadStatus = 'LOADING' | 'READY' | 'ERROR' | 'PASSWORD_REQUIRED';
+const DOWNLOAD_SESSION_PREFIX = 'ponswarpCloudDownloadSession:';
+
+const formatDropWindow = (secondsUntilExpiry: number) => {
+  const days = Math.ceil(secondsUntilExpiry / 86400);
+  if (days > 1) return `${days}D CLOUD DROP`;
+  return '24H CLOUD DROP';
+};
 
 const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
   const [status, setStatus] = useState<LoadStatus>('LOADING');
   const [share, setShare] = useState<PublicCloudShareResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [downloadSessionToken, setDownloadSessionToken] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
+    const storageKey = `${DOWNLOAD_SESSION_PREFIX}${shareId}`;
 
     const loadShare = async () => {
       setStatus('LOADING');
       setError(null);
       try {
-        const nextShare = await getCloudShare(shareId);
+        const storedToken = window.localStorage.getItem(storageKey);
+        const nextShare = await getCloudShare(shareId, {
+          downloadSessionToken: storedToken || undefined,
+        });
         if (cancelled) return;
+        const nextToken = nextShare.downloadSessionToken || storedToken;
+        if (nextToken) {
+          setDownloadSessionToken(nextToken);
+          window.localStorage.setItem(storageKey, nextToken);
+        }
         setShare(nextShare);
         setStatus('READY');
       } catch (loadError: any) {
         if (cancelled) return;
-        setError(loadError?.message || 'Cloud share not found');
-        setStatus('ERROR');
+        const message = loadError?.message || 'Cloud share not found';
+        setError(message);
+        setStatus(message === 'Password required' ? 'PASSWORD_REQUIRED' : 'ERROR');
       }
     };
 
@@ -54,6 +76,36 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
   const expiryLabel = share
     ? new Date(share.expiresAt * 1000).toLocaleString()
     : '';
+  const submitPassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedPassword = password.trim();
+    if (!trimmedPassword) return;
+
+    const storageKey = `${DOWNLOAD_SESSION_PREFIX}${shareId}`;
+    setStatus('LOADING');
+    setError(null);
+    try {
+      const nextShare = await getCloudShare(shareId, {
+        password: trimmedPassword,
+      });
+      const nextToken = nextShare.downloadSessionToken;
+      if (nextToken) {
+        setDownloadSessionToken(nextToken);
+        window.localStorage.setItem(storageKey, nextToken);
+      }
+      setShare(nextShare);
+      setPassword('');
+      setStatus('READY');
+    } catch (unlockError: any) {
+      const message = unlockError?.message || 'Cloud share unlock failed';
+      setError(message);
+      setStatus(
+        message === 'Password required' || message === 'Invalid password'
+          ? 'PASSWORD_REQUIRED'
+          : 'ERROR'
+      );
+    }
+  };
 
   const glassPanelClass =
     'bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
@@ -93,6 +145,45 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
           </motion.div>
         )}
 
+        {status === 'PASSWORD_REQUIRED' && (
+          <motion.form
+            key="cloud-password"
+            onSubmit={submitPassword}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            className="w-full max-w-md bg-black/40 backdrop-blur-2xl border border-emerald-500/25 rounded-[2rem] p-8"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mb-5">
+              <Lock className="w-6 h-6 text-emerald-300" />
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-3">
+              Password Required
+            </h2>
+            <p className="text-sm text-gray-400 mb-5">
+              Enter the password from the sender to open this Cloud Drop.
+            </p>
+            <input
+              type="password"
+              value={password}
+              onChange={event => setPassword(event.target.value)}
+              className="w-full bg-gray-950/70 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-4 py-3 text-white mb-3"
+              autoComplete="current-password"
+              autoFocus
+            />
+            {error === 'Invalid password' && (
+              <p className="text-sm text-red-300 mb-3">Invalid password.</p>
+            )}
+            <button
+              type="submit"
+              disabled={!password.trim()}
+              className="w-full py-3 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-100 font-bold tracking-wider disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              UNLOCK DROP
+            </button>
+          </motion.form>
+        )}
+
         {status === 'READY' && share && (
           <motion.div
             key="cloud-ready"
@@ -110,7 +201,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
                   <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 mb-3">
                     <CheckCircle2 size={13} className="text-emerald-300" />
                     <span className="text-[10px] font-bold text-emerald-300 tracking-[0.2em]">
-                      24H CLOUD DROP
+                      {formatDropWindow(share.secondsUntilExpiry)}
                     </span>
                   </div>
                   <h2 className="text-2xl md:text-4xl font-bold brand-font text-white truncate">
@@ -156,7 +247,11 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
                     </p>
                   </div>
                   <a
-                    href={getCloudDownloadUrl(share.shareId, file.id)}
+                    href={getCloudDownloadUrl(
+                      share.shareId,
+                      file.id,
+                      downloadSessionToken || share.downloadSessionToken
+                    )}
                     className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-all ${
                       share.completed
                         ? 'bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300'

@@ -10,6 +10,7 @@ import {
   Folder,
   Infinity,
   Loader2,
+  Lock,
   ShieldCheck,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -24,6 +25,7 @@ import {
   getCloudPlans,
   uploadCloudFile,
 } from '../services/cloudShareService';
+import { AuthState } from '../services/authService';
 import {
   scanFiles,
   processInputFiles,
@@ -108,6 +110,12 @@ const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
   paymentProviders: [],
 };
 
+interface CloudSenderViewProps {
+  authState: AuthState;
+  authLoading: boolean;
+  onLogin: () => void;
+}
+
 const formatKrw = (value: number) =>
   `${new Intl.NumberFormat('ko-KR').format(value)}원`;
 
@@ -118,7 +126,11 @@ const formatRetention = (seconds: number) => {
   return `${hours} hours`;
 };
 
-const CloudSenderView: React.FC = () => {
+const CloudSenderView: React.FC<CloudSenderViewProps> = ({
+  authState,
+  authLoading,
+  onLogin,
+}) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<CloudUploadStatus>('IDLE');
@@ -135,6 +147,8 @@ const CloudSenderView: React.FC = () => {
     useState<PaymentProvider>('lemonSqueezy');
   const [cloudPlans, setCloudPlans] =
     useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
+  const [dropPassword, setDropPassword] = useState('');
+  const [downloadLimit, setDownloadLimit] = useState('');
 
   const uploadedBytes = useMemo(
     () =>
@@ -255,7 +269,7 @@ const CloudSenderView: React.FC = () => {
     );
     const requiresPaidPlan =
       nextManifest.totalSize > freePlan.maxTotalBytes || Boolean(oversizedFile);
-    const shouldUseEntitlement = Boolean(entitlementToken && requiresPaidPlan);
+    const shouldUseEntitlement = Boolean(entitlementToken);
 
     if (!entitlementToken && nextManifest.totalSize > freePlan.maxTotalBytes) {
       setManifest(nextManifest);
@@ -294,10 +308,21 @@ const CloudSenderView: React.FC = () => {
     setStatus('PREPARING');
 
     try {
+      const requestedDownloadLimit = Number.parseInt(downloadLimit, 10);
       const created = await createCloudShare(
         nextManifest.rootName,
         scannedFiles,
-        shouldUseEntitlement && entitlementToken ? { entitlementToken } : {}
+        shouldUseEntitlement && entitlementToken
+          ? {
+              entitlementToken,
+              password: dropPassword.trim() || undefined,
+              downloadLimit:
+                Number.isFinite(requestedDownloadLimit) &&
+                requestedDownloadLimit > 0
+                  ? requestedDownloadLimit
+                  : undefined,
+            }
+          : {}
       );
       const uploadedIds: string[] = [];
       let nextIndex = 0;
@@ -337,6 +362,8 @@ const CloudSenderView: React.FC = () => {
       setShareLink(`${window.location.origin}${created.shareUrl}`);
       if (shouldUseEntitlement) {
         setEntitlementToken(null);
+        setDropPassword('');
+        setDownloadLimit('');
       }
       setStatus('DONE');
     } catch (uploadError: any) {
@@ -354,6 +381,10 @@ const CloudSenderView: React.FC = () => {
 
   const startCheckout = async (plan: CloudPlanLimit) => {
     if (!cloudPlans.checkoutEnabled || !plan.available) return;
+    if (!authState.authenticated) {
+      onLogin();
+      return;
+    }
     setCheckoutSku(plan.sku);
     setError(null);
     try {
@@ -427,9 +458,45 @@ const CloudSenderView: React.FC = () => {
                 unlimited when both browsers are online.
               </p>
               {entitlementToken && (
-                <p className="text-emerald-300 text-xs md:text-sm mb-5 font-mono">
-                  Paid Cloud Drop is active for the next upload.
-                </p>
+                <div className="w-full max-w-md mb-5 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-4 text-left">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ShieldCheck className="w-4 h-4 text-emerald-300" />
+                    <p className="text-emerald-200 text-xs md:text-sm font-bold">
+                      Paid Cloud Drop is active for the next upload.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="flex items-center gap-1.5 text-[10px] text-gray-500 uppercase tracking-widest mb-1.5">
+                        <Lock className="w-3 h-3" />
+                        Password
+                      </span>
+                      <input
+                        type="password"
+                        value={dropPassword}
+                        onChange={event => setDropPassword(event.target.value)}
+                        placeholder="optional"
+                        className="w-full bg-black/40 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-3 py-2.5 text-sm text-white"
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest mb-1.5 block">
+                        Download cap
+                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={downloadLimit}
+                        onChange={event =>
+                          setDownloadLimit(event.target.value)
+                        }
+                        placeholder="plan max"
+                        className="w-full bg-black/40 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-3 py-2.5 text-sm text-white"
+                      />
+                    </label>
+                  </div>
+                </div>
               )}
 
               <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm">
@@ -721,6 +788,7 @@ const CloudSenderView: React.FC = () => {
                         disabled={
                           !cloudPlans.checkoutEnabled ||
                           !plan.available ||
+                          authLoading ||
                           checkoutSku === plan.sku
                         }
                         onClick={() => startCheckout(plan)}
@@ -733,7 +801,9 @@ const CloudSenderView: React.FC = () => {
                         {checkoutSku === plan.sku
                           ? 'OPENING CHECKOUT'
                           : cloudPlans.checkoutEnabled && plan.available
-                            ? 'CHECKOUT'
+                            ? authState.authenticated
+                              ? 'CHECKOUT'
+                              : 'SIGN IN'
                             : 'CHECKOUT SOON'}
                       </button>
                     </div>

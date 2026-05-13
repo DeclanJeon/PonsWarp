@@ -25,6 +25,7 @@ export interface CreateCloudShareOptions {
   entitlementToken?: string;
   retentionSeconds?: number;
   downloadLimit?: number;
+  password?: string;
 }
 
 export interface PublicCloudFile {
@@ -45,7 +46,14 @@ export interface PublicCloudShareResponse {
   expiresAt: number;
   secondsUntilExpiry: number;
   completed: boolean;
+  requiresPassword: boolean;
+  downloadSessionToken?: string;
   files: PublicCloudFile[];
+}
+
+export interface CloudShareAccessOptions {
+  password?: string;
+  downloadSessionToken?: string;
 }
 
 export interface UploadProgress {
@@ -182,21 +190,38 @@ export const completeCloudShare = async (
 };
 
 export const getCloudShare = async (
-  shareId: string
+  shareId: string,
+  options: CloudShareAccessOptions = {}
 ): Promise<PublicCloudShareResponse> => {
-  const response = await fetch(
-    apiPath(`/api/cloud-share/${encodeURIComponent(shareId)}`)
+  const url = apiPath(`/api/cloud-share/${encodeURIComponent(shareId)}`);
+  const hasAccessPayload = Boolean(
+    options.password || options.downloadSessionToken
   );
+  const response = hasAccessPayload
+    ? await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(options),
+      })
+    : await fetch(url);
 
   return readJsonResponse<PublicCloudShareResponse>(response);
 };
 
-export const getCloudDownloadUrl = (shareId: string, fileId: string) =>
-  apiPath(
+export const getCloudDownloadUrl = (
+  shareId: string,
+  fileId: string,
+  downloadSessionToken?: string
+) => {
+  const path = apiPath(
     `/api/cloud-share/${encodeURIComponent(shareId)}/files/${encodeURIComponent(
       fileId
     )}/download`
   );
+  if (!downloadSessionToken) return path;
+  const params = new URLSearchParams({ token: downloadSessionToken });
+  return `${path}?${params.toString()}`;
+};
 
 export const uploadCloudFile = (
   uploadUrl: string,

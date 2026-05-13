@@ -467,7 +467,11 @@ const App: React.FC = () => {
                 exit={{ opacity: 0 }}
                 className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
               >
-                <CloudSenderView />
+                <CloudSenderView
+                  authState={authState}
+                  authLoading={authLoading}
+                  onLogin={signIn}
+                />
 
                 <button
                   onClick={() => setMode(AppMode.SELECTION)}

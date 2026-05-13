@@ -1,6 +1,6 @@
 # PonsWarp
 
-> Direct browser-to-browser file transfer for very large files, with an optional 24-hour Cloud Drop link when both people cannot stay online together.
+> Direct browser-to-browser file transfer for very large files, with optional Cloud Drop links when both people cannot stay online together.
 
 <p align="center">
   <a href="https://warp.ponslink.com"><strong>Live App</strong></a>
@@ -16,7 +16,7 @@
   <img alt="Vite" src="https://img.shields.io/badge/Vite-7-646cff?logo=vite&logoColor=white">
   <img alt="WebRTC" src="https://img.shields.io/badge/WebRTC-P2P-22c55e">
   <img alt="Rust WASM" src="https://img.shields.io/badge/Rust%20WASM-core-f97316?logo=rust&logoColor=white">
-  <img alt="Cloudflare R2" src="https://img.shields.io/badge/Cloudflare%20R2-24h%20Drop-f38020?logo=cloudflare&logoColor=white">
+  <img alt="Cloudflare R2" src="https://img.shields.io/badge/Cloudflare%20R2-Cloud%20Drop-f38020?logo=cloudflare&logoColor=white">
 </p>
 
 <p align="center">
@@ -30,11 +30,11 @@ PonsWarp has two transfer paths:
 | Mode | Best For | Limit | Availability |
 | --- | --- | --- | --- |
 | **SEND / RECEIVE** | Maximum-size direct P2P transfer | No app-defined size cap | Sender and receiver stay online together |
-| **CLOUD Drop** | Send once, share a download-only link | 10GB per share | Stored for 24 hours, then removed |
+| **CLOUD Drop** | Send once, share a download-only link | Free 10GB, paid plans up to 1TB | 24 hours to 7 days, then removed |
 
 Direct mode streams bytes from the sender's disk to the receiver's disk through WebRTC. It avoids loading the full file into memory, protects against incomplete saves, and can resume interrupted single-file or multi-file transfers from the receiver's current offset after reconnect.
 
-Cloud Drop uploads to Cloudflare R2 and returns a temporary link. It is intentionally capped at 10GB; for larger transfers, use direct P2P or split files into 10GB batches.
+Cloud Drop uploads to Cloudflare R2 and returns a temporary link. Free Cloud Drop is capped at 10GB for 24 hours; paid Drop Pass and Pro plans add larger offline drops, longer retention, optional passwords, and download caps.
 
 ## Screenshots
 
@@ -52,7 +52,7 @@ Cloud Drop uploads to Cloudflare R2 and returns a temporary link. It is intentio
 - **Large-file streaming**: direct disk writes through StreamSaver or the File System Access API.
 - **Interrupted transfer recovery**: receiver-side partial write detection plus reconnect/resume for resumable direct transfers.
 - **Multi-file and folder support**: raw source-byte transfer with receiver-side ZIP64 packaging for large folder downloads.
-- **24-hour Cloud Drop**: Cloudflare R2-backed temporary download links for asynchronous sharing.
+- **Cloud Drop**: Cloudflare R2-backed temporary links with free 24-hour drops and paid password/download-limit controls.
 - **End-to-end protection**: WebRTC transport security plus the Rust/WASM transfer core.
 - **Adaptive flow control**: chunk sizing, backpressure, and buffer thresholds tuned for unstable networks.
 - **TURN-ready deployment**: signaling can provide production TURN credentials for NAT traversal.
@@ -69,7 +69,7 @@ flowchart LR
   writer --> receiverDisk[Receiver disk]
 
   cloudUpload[Cloud Drop upload] --> r2[Cloudflare R2]
-  r2 --> cloudDownload[24-hour download link]
+  r2 --> cloudDownload[24-hour or paid retention link]
 ```
 
 ### Main Pieces
@@ -144,8 +144,9 @@ pnpm lint         # ESLint with autofix
 - The public app is served at `https://warp.ponslink.com`.
 - Static frontend assets are built from `dist/`.
 - Direct transfer depends on signaling and TURN availability.
-- Cloud Drop free shares are capped at 10GB and 24 hours. Larger offline drops can use PayPal Checkout when the backend returns `checkoutEnabled=true`.
-- Cloud Drop shares should be configured with a 24-hour object lifecycle or cleanup job.
+- Cloud Drop free shares are capped at 10GB and 24 hours. Larger offline drops use hosted checkout when the backend returns `checkoutEnabled=true`; Lemon Squeezy is the default provider and PayPal can be offered as an alternate provider.
+- Paid Cloud Drop links can be protected with a password and counted by download session rather than by individual file click.
+- Cloud Drop shares should be cleaned by the Rust backend cleanup loop or by a storage lifecycle policy aligned to each share's retention window.
 - The Rust backend should pass `GET /ready` before Nginx routes traffic to it.
 
 ## Contributing
