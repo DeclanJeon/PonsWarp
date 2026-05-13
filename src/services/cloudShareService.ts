@@ -77,17 +77,28 @@ export interface ProCloudPlan extends CloudPlanLimit {
   concurrentStorageBytes: number;
 }
 
+export type PaymentProvider = 'lemonSqueezy' | 'payPal';
+
+export interface PaymentProviderStatus {
+  provider: PaymentProvider;
+  label: string;
+  available: boolean;
+  default: boolean;
+}
+
 export interface CloudPlansResponse {
   directP2p: DirectP2PPlan;
   free: CloudPlanLimit;
   passes: DropPassPlan[];
   pro: ProCloudPlan;
   checkoutEnabled: boolean;
+  paymentProviders: PaymentProviderStatus[];
 }
 
 export interface BillingCheckoutResponse {
   checkoutUrl: string;
   checkoutId?: string;
+  provider?: PaymentProvider;
 }
 
 export interface BillingCaptureResponse {
@@ -128,12 +139,14 @@ export const createCloudShare = async (
 export const createBillingCheckout = async (
   mode: 'payment' | 'subscription',
   sku: string,
-  returnUrl: string
+  returnUrl: string,
+  provider?: PaymentProvider
 ): Promise<BillingCheckoutResponse> => {
   const response = await fetch(apiPath('/api/billing/checkout'), {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode, sku, returnUrl }),
+    body: JSON.stringify({ mode, sku, returnUrl, provider }),
   });
 
   return readJsonResponse<BillingCheckoutResponse>(response);
@@ -144,6 +157,7 @@ export const captureBillingCheckout = async (
 ): Promise<BillingCaptureResponse> => {
   const response = await fetch(apiPath('/api/billing/capture'), {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ orderId }),
   });

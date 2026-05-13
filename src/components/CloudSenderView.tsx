@@ -16,6 +16,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   CloudPlanLimit,
   CloudPlansResponse,
+  PaymentProvider,
   captureBillingCheckout,
   completeCloudShare,
   createBillingCheckout,
@@ -104,6 +105,7 @@ const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
     concurrentStorageBytes: TB,
   },
   checkoutEnabled: false,
+  paymentProviders: [],
 };
 
 const formatKrw = (value: number) =>
@@ -129,6 +131,8 @@ const CloudSenderView: React.FC = () => {
   const [fileProgress, setFileProgress] = useState<Record<string, number>>({});
   const [entitlementToken, setEntitlementToken] = useState<string | null>(null);
   const [checkoutSku, setCheckoutSku] = useState<string | null>(null);
+  const [paymentProvider, setPaymentProvider] =
+    useState<PaymentProvider>('lemonSqueezy');
   const [cloudPlans, setCloudPlans] =
     useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
 
@@ -159,9 +163,19 @@ const CloudSenderView: React.FC = () => {
       window.sessionStorage.removeItem(ENTITLEMENT_STORAGE_KEY);
       window.history.replaceState({}, '', window.location.pathname);
     } else if (checkoutStatus === 'success') {
+      const checkoutProvider = params.get('provider');
+      const lemonCheckoutId = params.get('checkout_id');
       const paypalOrderId = params.get('token');
       const paypalSubscriptionId = params.get('subscription_id');
-      if (paypalSubscriptionId) {
+      if (
+        (checkoutProvider === 'lemonsqueezy' ||
+          checkoutProvider === 'lemonSqueezy') &&
+        lemonCheckoutId
+      ) {
+        setEntitlementToken(lemonCheckoutId);
+        setError(null);
+        window.history.replaceState({}, '', window.location.pathname);
+      } else if (paypalSubscriptionId) {
         setEntitlementToken(paypalSubscriptionId);
         window.history.replaceState({}, '', window.location.pathname);
       } else if (paypalOrderId) {
@@ -179,11 +193,11 @@ const CloudSenderView: React.FC = () => {
           });
       } else {
         setError(
-          'PayPal checkout returned without a usable entitlement token. Please wait a moment and retry.'
+          'Checkout returned without a usable entitlement token. Please wait a moment and retry.'
         );
       }
     } else if (checkoutStatus === 'cancelled') {
-      setError('PayPal checkout was cancelled.');
+      setError('Checkout was cancelled.');
       window.history.replaceState({}, '', window.location.pathname);
     }
 
@@ -191,6 +205,17 @@ const CloudSenderView: React.FC = () => {
       .then(nextPlans => {
         if (!cancelled) {
           setCloudPlans(nextPlans);
+          const defaultProvider = nextPlans.paymentProviders.find(
+            provider => provider.default && provider.available
+          );
+          const firstAvailable = nextPlans.paymentProviders.find(
+            provider => provider.available
+          );
+          setPaymentProvider(
+            defaultProvider?.provider ||
+              firstAvailable?.provider ||
+              'lemonSqueezy'
+          );
         }
       })
       .catch(() => {
@@ -335,7 +360,8 @@ const CloudSenderView: React.FC = () => {
       const response = await createBillingCheckout(
         plan.sku === cloudPlans.pro.sku ? 'subscription' : 'payment',
         plan.sku,
-        `${window.location.origin}${window.location.pathname}`
+        `${window.location.origin}${window.location.pathname}`,
+        paymentProvider
       );
       window.location.href = response.checkoutUrl;
     } catch (checkoutError: any) {
@@ -620,6 +646,35 @@ const CloudSenderView: React.FC = () => {
                   <h3 className="text-lg font-bold text-white brand-font">
                     CLOUD DROP OPTIONS
                   </h3>
+                </div>
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {(cloudPlans.paymentProviders.length
+                    ? cloudPlans.paymentProviders
+                    : [
+                        {
+                          provider: 'lemonSqueezy' as PaymentProvider,
+                          label: 'Lemon Squeezy',
+                          available: false,
+                          default: true,
+                        },
+                      ]
+                  ).map(provider => (
+                    <button
+                      key={provider.provider}
+                      type="button"
+                      disabled={!provider.available}
+                      onClick={() => setPaymentProvider(provider.provider)}
+                      className={`px-3 py-2 rounded-full border text-xs font-bold tracking-wider transition-colors ${
+                        paymentProvider === provider.provider
+                          ? 'border-emerald-400 bg-emerald-500/20 text-emerald-100'
+                          : provider.available
+                            ? 'border-white/15 bg-white/5 text-gray-300 hover:bg-white/10'
+                            : 'border-gray-700 bg-gray-900/60 text-gray-600 cursor-not-allowed'
+                      }`}
+                    >
+                      {provider.label}
+                    </button>
+                  ))}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {paidPlans.map(plan => (
