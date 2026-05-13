@@ -26,6 +26,66 @@ export interface AdminOverviewResponse {
   billingEvents: number;
 }
 
+export interface AdminOperationsResponse {
+  users: AdminUserListItem[];
+  subscriptions: AdminSubscriptionListItem[];
+  dropPasses: AdminDropPassListItem[];
+  cloudShares: AdminCloudShareListItem[];
+  billingEvents: AdminBillingEventListItem[];
+}
+
+export interface AdminUserListItem {
+  id: string;
+  email: string;
+  name?: string;
+  plan: string;
+  createdAt: number;
+  lastLoginAt?: number;
+}
+
+export interface AdminSubscriptionListItem {
+  id: string;
+  email: string;
+  status: string;
+  providerSubscriptionId?: string;
+  currentPeriodEnd?: number;
+  updatedAt: number;
+}
+
+export interface AdminDropPassListItem {
+  id: string;
+  email?: string;
+  sku: string;
+  status: string;
+  remainingUses: number;
+  maxTotalBytes: number;
+  retentionSeconds: number;
+  createdAt: number;
+  expiresAt?: number;
+}
+
+export interface AdminCloudShareListItem {
+  id: string;
+  ownerEmail?: string;
+  rootName: string;
+  totalSize: number;
+  totalFiles: number;
+  completed: boolean;
+  downloadCount: number;
+  downloadLimit?: number;
+  createdAt: number;
+  expiresAt: number;
+  deletedAt?: number;
+}
+
+export interface AdminBillingEventListItem {
+  provider: string;
+  id: string;
+  eventType: string;
+  createdAt: number;
+  processedAt: number;
+}
+
 export const getAdminMe = async (): Promise<AdminMeResponse> => {
   const response = await fetch(apiPath('/api/admin/me'), {
     credentials: 'include',
@@ -39,6 +99,14 @@ export const getAdminOverview =
       credentials: 'include',
     });
     return readJsonResponse<AdminOverviewResponse>(response);
+  };
+
+export const getAdminOperations =
+  async (): Promise<AdminOperationsResponse> => {
+    const response = await fetch(apiPath('/api/admin/operations'), {
+      credentials: 'include',
+    });
+    return readJsonResponse<AdminOperationsResponse>(response);
   };
 
 const readJsonResponse = async <T>(response: Response): Promise<T> => {

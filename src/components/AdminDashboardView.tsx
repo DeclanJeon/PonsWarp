@@ -13,8 +13,10 @@ import {
 import { AuthState } from '../services/authService';
 import {
   AdminMeResponse,
+  AdminOperationsResponse,
   AdminOverviewResponse,
   getAdminMe,
+  getAdminOperations,
   getAdminOverview,
 } from '../services/adminService';
 import { formatBytes } from '../utils/fileUtils';
@@ -34,6 +36,14 @@ const emptyOverview: AdminOverviewResponse = {
   billingEvents: 0,
 };
 
+const emptyOperations: AdminOperationsResponse = {
+  users: [],
+  subscriptions: [],
+  dropPasses: [],
+  cloudShares: [],
+  billingEvents: [],
+};
+
 const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   authState,
   authLoading,
@@ -42,6 +52,8 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [admin, setAdmin] = useState<AdminMeResponse | null>(null);
   const [overview, setOverview] =
     useState<AdminOverviewResponse>(emptyOverview);
+  const [operations, setOperations] =
+    useState<AdminOperationsResponse>(emptyOperations);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,11 +68,12 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
     setLoading(true);
     setError(null);
-    Promise.all([getAdminMe(), getAdminOverview()])
-      .then(([adminResponse, overviewResponse]) => {
+    Promise.all([getAdminMe(), getAdminOverview(), getAdminOperations()])
+      .then(([adminResponse, overviewResponse, operationsResponse]) => {
         if (cancelled) return;
         setAdmin(adminResponse);
         setOverview(overviewResponse);
+        setOperations(operationsResponse);
       })
       .catch(loadError => {
         if (cancelled) return;
@@ -173,19 +186,49 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         />
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {['Users', 'Cloud Drops', 'Billing'].map(title => (
-          <div
-            key={title}
-            className="rounded-2xl border border-white/10 bg-gray-950/60 p-5"
-          >
-            <p className="text-lg font-bold text-white">{title}</p>
-            <p className="mt-2 text-sm leading-relaxed text-gray-400">
-              Read-only list and search views will be added after the admin
-              access foundation is verified in production-like auth flows.
-            </p>
-          </div>
-        ))}
+      <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <AdminListPanel
+          title="Recent Users"
+          rows={operations.users.map(user => ({
+            key: user.id,
+            title: user.email,
+            meta: `${user.plan} · ${formatDate(user.lastLoginAt || user.createdAt)}`,
+          }))}
+        />
+        <AdminListPanel
+          title="Subscriptions"
+          rows={operations.subscriptions.map(subscription => ({
+            key: subscription.id,
+            title: subscription.email,
+            meta: `${subscription.status} · ${subscription.providerSubscriptionId || 'no provider id'}`,
+          }))}
+        />
+        <AdminListPanel
+          title="Drop Passes"
+          rows={operations.dropPasses.map(dropPass => ({
+            key: dropPass.id,
+            title: dropPass.email || 'unbound pass',
+            meta: `${dropPass.sku} · ${dropPass.status} · ${dropPass.remainingUses} uses · ${formatBytes(dropPass.maxTotalBytes)}`,
+          }))}
+        />
+        <AdminListPanel
+          title="Cloud Drops"
+          rows={operations.cloudShares.map(share => ({
+            key: share.id,
+            title: share.rootName,
+            meta: `${share.ownerEmail || 'anonymous'} · ${formatBytes(share.totalSize)} · ${share.completed ? 'complete' : 'pending'} · ${share.downloadCount}/${share.downloadLimit || '∞'}`,
+          }))}
+        />
+        <div className="xl:col-span-2">
+          <AdminListPanel
+            title="Billing Events"
+            rows={operations.billingEvents.map(event => ({
+              key: `${event.provider}:${event.id}`,
+              title: `${event.provider} · ${event.eventType}`,
+              meta: `${event.id} · processed ${formatDate(event.processedAt)}`,
+            }))}
+          />
+        </div>
       </div>
     </AdminFrame>
   );
@@ -239,5 +282,43 @@ const MetricCard: React.FC<{
     <p className="text-3xl font-black text-white">{value}</p>
   </div>
 );
+
+const AdminListPanel: React.FC<{
+  title: string;
+  rows: Array<{ key: string; title: string; meta: string }>;
+}> = ({ title, rows }) => (
+  <div className="rounded-2xl border border-white/10 bg-gray-950/60 p-5">
+    <div className="mb-4 flex items-center justify-between gap-3">
+      <p className="text-lg font-bold text-white">{title}</p>
+      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-bold text-gray-500">
+        {rows.length}
+      </span>
+    </div>
+    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+      {rows.length === 0 ? (
+        <p className="rounded-xl border border-white/5 bg-black/30 p-3 text-sm text-gray-500">
+          No records yet.
+        </p>
+      ) : (
+        rows.map(row => (
+          <div
+            key={row.key}
+            className="rounded-xl border border-white/5 bg-black/30 p-3"
+          >
+            <p className="truncate text-sm font-bold text-white">{row.title}</p>
+            <p className="mt-1 truncate font-mono text-xs text-gray-500">
+              {row.meta}
+            </p>
+          </div>
+        ))
+      )}
+    </div>
+  </div>
+);
+
+const formatDate = (timestamp?: number) => {
+  if (!timestamp) return 'no date';
+  return new Date(timestamp * 1000).toLocaleString('ko-KR');
+};
 
 export default AdminDashboardView;
