@@ -1,8 +1,9 @@
+import { debugLog } from './utils/logger';
 /* 🪲 [DEBUG] App.tsx UI/UX 개선 시작 */
-console.log('[App.tsx] 🪲 [DEBUG] UI/UX Enhancement Started:');
-console.log('[App.tsx] 🪲 [DEBUG] - Applying responsive grid layout');
-console.log('[App.tsx] 🪲 [DEBUG] - Implementing fluid typography');
-console.log('[App.tsx] 🪲 [DEBUG] - Adding visual hierarchy improvements');
+debugLog('[App.tsx] 🪲 [DEBUG] UI/UX Enhancement Started:');
+debugLog('[App.tsx] 🪲 [DEBUG] - Applying responsive grid layout');
+debugLog('[App.tsx] 🪲 [DEBUG] - Implementing fluid typography');
+debugLog('[App.tsx] 🪲 [DEBUG] - Adding visual hierarchy improvements');
 
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
@@ -40,6 +41,7 @@ import {
   logout,
   startGoogleSignIn,
 } from './services/authService';
+import { getErrorMessage } from './utils/errors';
 
 const SpaceField = lazy(() => import('./components/SpaceField'));
 
@@ -122,8 +124,8 @@ const App: React.FC = () => {
     try {
       await logout();
       setAuthState({ authenticated: false });
-    } catch (error: any) {
-      toast.error(error?.message || 'Failed to sign out');
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Failed to sign out'));
     }
   };
   const openPricing = () => {
@@ -151,16 +153,16 @@ const App: React.FC = () => {
   useEffect(() => {
     const initSignaling = async () => {
       try {
-        console.log(
+        debugLog(
           '[App] Connecting to signaling server:',
           signalingFactory.getServerUrl()
         );
         await signalingFactory.connect();
-        console.log(
+        debugLog(
           '[App] Signaling connected, using Rust:',
           signalingFactory.isUsingRust()
         );
-      } catch (error: any) {
+      } catch (error) {
         toast.error('Failed to connect to signaling server');
         console.error('[App] Signaling connection failed:', error);
       }
@@ -325,60 +327,63 @@ const App: React.FC = () => {
                 exit={{ opacity: 0, scale: 1.05, filter: 'blur(10px)' }}
                 className="w-full max-w-6xl px-4"
               >
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 w-full items-center justify-center">
-                  {/* SENDER CARD - 높이 축소 (Mobile: 200px, Desktop: 320px) */}
-                  <MagneticButton
-                    onClick={() => setMode(AppMode.SENDER)}
-                    className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-cyan-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
-                  >
-                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 w-full items-stretch justify-center">
+                  <div className="group relative flex min-h-[360px] md:min-h-[380px] flex-col justify-between bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-cyan-500 transition-all duration-300 shadow-2xl w-full overflow-hidden p-6 md:p-8">
+                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 via-transparent to-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
-                    {/* 아이콘 크기 축소 */}
-                    <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
-                      <div className="absolute inset-0 bg-cyan-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
-                      <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-cyan-400 flex items-center justify-center relative z-10 shadow-lg">
-                        <Send className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                    <div className="relative z-10 flex items-center gap-4">
+                      <div className="relative shrink-0">
+                        <div className="absolute inset-0 bg-cyan-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
+                        <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-cyan-400 flex items-center justify-center relative z-10 shadow-lg">
+                          <Send className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3 className="text-3xl md:text-5xl font-bold brand-font tracking-wider group-hover:text-cyan-400 transition-colors">
+                          SEND
+                        </h3>
+                        <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
+                          Choose a sending method
+                        </p>
                       </div>
                     </div>
 
-                    <div className="relative z-10 text-center space-y-1">
-                      <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-cyan-400 transition-colors">
-                        SEND
-                      </h3>
-                      <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                        Create Gate
-                      </p>
-                    </div>
-                  </MagneticButton>
+                    <div className="relative z-10 grid gap-3 md:gap-4">
+                      <button
+                        onClick={() => setMode(AppMode.SENDER)}
+                        className="group/p2p flex min-h-[104px] flex-col justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-5 py-4 text-left hover:bg-cyan-500/20 hover:border-cyan-300 transition-colors"
+                      >
+                        <span className="flex items-center gap-2 text-lg md:text-xl font-bold tracking-widest text-cyan-100">
+                          <Zap className="w-5 h-5" />
+                          SEND NOW
+                        </span>
+                        <span className="mt-2 text-sm md:text-base text-cyan-50/75 leading-snug">
+                          Send directly while both people stay on this page; if
+                          either person leaves, the transfer may fail.
+                        </span>
+                      </button>
 
-                  {/* CLOUD CARD - 비동기 24시간 링크 공유 */}
-                  <MagneticButton
-                    onClick={() => setMode(AppMode.CLOUD_SENDER)}
-                    className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-emerald-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
-                  >
-                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-
-                    <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
-                      <div className="absolute inset-0 bg-emerald-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
-                      <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-emerald-400 flex items-center justify-center relative z-10 shadow-lg">
-                        <CloudUpload className="w-8 h-8 md:w-10 md:h-10 text-white" />
-                      </div>
+                      <button
+                        onClick={() => setMode(AppMode.CLOUD_SENDER)}
+                        className="group/cloud flex min-h-[104px] flex-col justify-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-left hover:bg-emerald-500/20 hover:border-emerald-300 transition-colors"
+                      >
+                        <span className="flex items-center gap-2 text-lg md:text-xl font-bold tracking-widest text-emerald-100">
+                          <CloudUpload className="w-5 h-5" />
+                          SEND BY LINK
+                        </span>
+                        <span className="mt-2 text-sm md:text-base text-emerald-50/75 leading-snug">
+                          Upload once and share a download link; link sending is
+                          free up to 10GB.
+                        </span>
+                      </button>
                     </div>
-
-                    <div className="relative z-10 text-center space-y-1">
-                      <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-emerald-400 transition-colors">
-                        CLOUD
-                      </h3>
-                      <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                        24H Drop
-                      </p>
-                    </div>
-                  </MagneticButton>
+                  </div>
 
                   {/* RECEIVER CARD - 높이 축소 */}
                   <MagneticButton
                     onClick={() => setMode(AppMode.RECEIVER)}
-                    className="group relative flex flex-col items-center justify-center h-[200px] md:h-[320px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-purple-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
+                    className="group relative flex flex-col items-center justify-center min-h-[240px] md:min-h-[380px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-purple-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
@@ -394,7 +399,7 @@ const App: React.FC = () => {
                         RECEIVE
                       </h3>
                       <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                        Join Gate
+                        Enter a code or open a download link
                       </p>
                     </div>
                   </MagneticButton>
@@ -405,7 +410,7 @@ const App: React.FC = () => {
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black/40 border border-emerald-500/30 text-emerald-200 text-xs font-bold tracking-widest hover:bg-emerald-500/15 transition-colors"
                   >
                     <CreditCard className="w-4 h-4" />
-                    VIEW CLOUD DROP PRICING
+                    VIEW LINK SENDING PRICING
                   </button>
                 </div>
               </motion.div>

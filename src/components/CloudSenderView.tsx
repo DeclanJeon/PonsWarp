@@ -31,6 +31,7 @@ import {
   processInputFiles,
   ScannedFile,
 } from '../utils/fileScanner';
+import { getErrorMessage } from '../utils/errors';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import { TransferManifest } from '../types/types';
 
@@ -41,6 +42,12 @@ type CloudUploadStatus =
   | 'DONE'
   | 'ERROR'
   | 'LIMIT_EXCEEDED';
+
+type DirectoryInputProps = React.InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory: string;
+};
+
+const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
 
 const MAX_PARALLEL_UPLOADS = 3;
 const GB = 1024 * 1024 * 1024;
@@ -267,8 +274,6 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
     const oversizedFile = scannedFiles.find(
       item => item.file.size > freePlan.maxFileBytes
     );
-    const requiresPaidPlan =
-      nextManifest.totalSize > freePlan.maxTotalBytes || Boolean(oversizedFile);
     const shouldUseEntitlement = Boolean(entitlementToken);
 
     if (!entitlementToken && nextManifest.totalSize > freePlan.maxTotalBytes) {
@@ -366,9 +371,9 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
         setDownloadLimit('');
       }
       setStatus('DONE');
-    } catch (uploadError: any) {
+    } catch (uploadError) {
       setStatus('ERROR');
-      setError(uploadError?.message || 'Cloud upload failed');
+      setError(getErrorMessage(uploadError, 'Cloud upload failed'));
     }
   };
 
@@ -395,9 +400,9 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
         paymentProvider
       );
       window.location.href = response.checkoutUrl;
-    } catch (checkoutError: any) {
+    } catch (checkoutError) {
       setCheckoutSku(null);
-      setError(checkoutError?.message || 'Checkout failed');
+      setError(getErrorMessage(checkoutError, 'Checkout failed'));
     }
   };
 
@@ -438,7 +443,7 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
                 ref={folderInputRef}
                 onChange={handleFileSelect}
                 multiple
-                {...({ webkitdirectory: '' } as any)}
+                {...directoryInputProps}
               />
 
               <div className="w-16 h-16 md:w-20 md:h-20 bg-emerald-900/20 rounded-full flex items-center justify-center mb-6 md:mb-8 shadow-[0_0_30px_rgba(16,185,129,0.2)]">
@@ -488,9 +493,7 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
                         type="number"
                         min={1}
                         value={downloadLimit}
-                        onChange={event =>
-                          setDownloadLimit(event.target.value)
-                        }
+                        onChange={event => setDownloadLimit(event.target.value)}
                         placeholder="plan max"
                         className="w-full bg-black/40 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-3 py-2.5 text-sm text-white"
                       />

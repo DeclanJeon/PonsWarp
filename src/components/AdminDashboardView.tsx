@@ -124,7 +124,10 @@ const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         <AccessPanel
           icon={AlertTriangle}
           title="관리자 권한이 없습니다"
-          body={error || '현재 계정은 관리자 allowlist 또는 admin_members에 등록되어 있지 않습니다.'}
+          body={
+            error ||
+            '현재 계정은 관리자 allowlist 또는 admin_members에 등록되어 있지 않습니다.'
+          }
         />
       </AdminFrame>
     );

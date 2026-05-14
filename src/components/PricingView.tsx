@@ -20,6 +20,7 @@ import {
   createBillingCheckout,
   getCloudPlans,
 } from '../services/cloudShareService';
+import { getErrorMessage } from '../utils/errors';
 import { formatBytes } from '../utils/fileUtils';
 
 interface PricingViewProps {
@@ -261,9 +262,9 @@ const PricingView: React.FC<PricingViewProps> = ({
         );
       }
       window.location.href = response.checkoutUrl;
-    } catch (checkoutError: any) {
+    } catch (checkoutError) {
       setCheckoutSku(null);
-      setError(checkoutError?.message || 'Checkout failed');
+      setError(getErrorMessage(checkoutError, 'Checkout failed'));
     }
   };
 
@@ -439,8 +440,8 @@ const PricingView: React.FC<PricingViewProps> = ({
 
           <div className="mb-4 rounded-2xl border border-cyan-400/15 bg-cyan-500/5 px-4 py-3 text-xs text-gray-400">
             <span>
-              결제 진행 전 이용약관, 개인정보처리방침, 환불/결제 정책,
-              사업자 정보를 확인해 주세요.
+              결제 진행 전 이용약관, 개인정보처리방침, 환불/결제 정책, 사업자
+              정보를 확인해 주세요.
             </span>
             <div className="mt-2 flex flex-wrap gap-3 font-bold text-cyan-200">
               <a className="hover:text-white" href="/terms">

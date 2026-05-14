@@ -93,13 +93,12 @@ export const getAdminMe = async (): Promise<AdminMeResponse> => {
   return readJsonResponse<AdminMeResponse>(response);
 };
 
-export const getAdminOverview =
-  async (): Promise<AdminOverviewResponse> => {
-    const response = await fetch(apiPath('/api/admin/overview'), {
-      credentials: 'include',
-    });
-    return readJsonResponse<AdminOverviewResponse>(response);
-  };
+export const getAdminOverview = async (): Promise<AdminOverviewResponse> => {
+  const response = await fetch(apiPath('/api/admin/overview'), {
+    credentials: 'include',
+  });
+  return readJsonResponse<AdminOverviewResponse>(response);
+};
 
 export const getAdminOperations =
   async (): Promise<AdminOperationsResponse> => {
@@ -110,9 +109,9 @@ export const getAdminOperations =
   };
 
 const readJsonResponse = async <T>(response: Response): Promise<T> => {
-  let payload: any = null;
+  let payload: { error?: string } | null = null;
   try {
-    payload = await response.json();
+    payload = (await response.json()) as { error?: string };
   } catch {
     payload = null;
   }

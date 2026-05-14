@@ -15,6 +15,7 @@ import {
   getCloudShare,
   PublicCloudShareResponse,
 } from '../services/cloudShareService';
+import { getErrorMessage } from '../utils/errors';
 import { formatBytes } from '../utils/fileUtils';
 
 interface CloudDownloadViewProps {
@@ -59,11 +60,13 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
         }
         setShare(nextShare);
         setStatus('READY');
-      } catch (loadError: any) {
+      } catch (loadError) {
         if (cancelled) return;
-        const message = loadError?.message || 'Cloud share not found';
+        const message = getErrorMessage(loadError, 'Cloud share not found');
         setError(message);
-        setStatus(message === 'Password required' ? 'PASSWORD_REQUIRED' : 'ERROR');
+        setStatus(
+          message === 'Password required' ? 'PASSWORD_REQUIRED' : 'ERROR'
+        );
       }
     };
 
@@ -96,8 +99,8 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
       setShare(nextShare);
       setPassword('');
       setStatus('READY');
-    } catch (unlockError: any) {
-      const message = unlockError?.message || 'Cloud share unlock failed';
+    } catch (unlockError) {
+      const message = getErrorMessage(unlockError, 'Cloud share unlock failed');
       setError(message);
       setStatus(
         message === 'Password required' || message === 'Invalid password'

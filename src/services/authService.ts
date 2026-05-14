@@ -16,12 +16,24 @@ export interface AuthState {
 }
 
 const apiPath = (path: string) => `${API_BASE}${path}`;
+const anonymousAuthState: AuthState = { authenticated: false };
+
+const isAuthState = (payload: unknown): payload is AuthState => {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  return (
+    typeof (payload as { authenticated?: unknown }).authenticated === 'boolean'
+  );
+};
 
 export const getAuthState = async (): Promise<AuthState> => {
   const response = await fetch(apiPath('/api/auth/me'), {
     credentials: 'include',
   });
-  return readJsonResponse<AuthState>(response);
+  const payload = await readJsonResponse<unknown>(response);
+  return isAuthState(payload) ? payload : anonymousAuthState;
 };
 
 export const startGoogleSignIn = (returnTo: string) => {
@@ -41,9 +53,9 @@ export const logout = async (): Promise<void> => {
 const readJsonResponse = async <T = unknown>(
   response: Response
 ): Promise<T> => {
-  let payload: any = null;
+  let payload: { error?: string } | null = null;
   try {
-    payload = await response.json();
+    payload = (await response.json()) as { error?: string };
   } catch {
     payload = null;
   }
