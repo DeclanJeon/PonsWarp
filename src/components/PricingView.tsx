@@ -307,12 +307,12 @@ const PricingView: React.FC<PricingViewProps> = ({
               <p className="text-sm font-bold text-white">
                 {authState.authenticated
                   ? 'Paid Cloud Drop is tied to your Google account.'
-                  : 'Sign in before checkout to keep purchases attached to your account.'}
+                  : 'Free Cloud Drop does not require sign-in.'}
               </p>
               <p className="text-xs text-gray-500 font-mono mt-1">
                 {authState.authenticated
                   ? authState.user?.email
-                  : 'Free P2P and Free Cloud Drop remain available without an account.'}
+                  : 'Sign in only when buying larger paid drops or a subscription.'}
               </p>
             </div>
             {!authState.authenticated && (

@@ -475,12 +475,34 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
               <p className="text-emerald-100/60 text-sm md:text-lg mb-6 md:mb-8 font-rajdhani tracking-wide">
                 Upload once. Share a 24-hour download link.
               </p>
-              <p className="text-gray-500 text-xs md:text-sm mb-6 max-w-md leading-relaxed">
+              <p className="text-gray-500 text-xs md:text-sm mb-4 max-w-md leading-relaxed">
                 Free Cloud Drop stores up to{' '}
                 {formatBytes(freePlan.maxTotalBytes)} for{' '}
-                {formatRetention(freePlan.retentionSeconds)}. Direct SEND stays
-                unlimited when both browsers are online.
+                {formatRetention(freePlan.retentionSeconds)} without sign-in.
+                Direct SEND stays unlimited when both browsers are online.
               </p>
+              <div className="mb-6 flex flex-wrap items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em]">
+                <span className="rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-emerald-200">
+                  No sign-in for free drops
+                </span>
+                {authState.authenticated ? (
+                  <span
+                    className="max-w-[280px] truncate rounded-full border border-cyan-400/25 bg-cyan-500/10 px-3 py-1 text-cyan-100"
+                    title={authState.user?.email}
+                  >
+                    Paid drops linked to {authState.user?.email}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onLogin}
+                    disabled={authLoading}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300 transition-colors hover:bg-white/10 disabled:opacity-50"
+                  >
+                    Sign in only for paid drops
+                  </button>
+                )}
+              </div>
               {entitlementToken && (
                 <div className="w-full max-w-md mb-5 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-4 text-left">
                   <div className="flex items-center gap-2 mb-3">

@@ -14,8 +14,6 @@ import {
   Zap,
   CloudUpload,
   CreditCard,
-  LogOut,
-  User,
 } from 'lucide-react';
 import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
@@ -25,6 +23,7 @@ import PricingView from './components/PricingView';
 import LegalBeacon from './components/LegalBeacon';
 import LegalPageView from './components/LegalPageView';
 import AdminDashboardView from './components/AdminDashboardView';
+import AccountStatus from './components/AccountStatus';
 import { AppMode } from './types/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { signalingFactory } from './services/signaling-factory';
@@ -44,6 +43,7 @@ import {
 import { getErrorMessage } from './utils/errors';
 
 const SpaceField = lazy(() => import('./components/SpaceField'));
+const AUTH_LOGIN_PENDING_KEY = 'ponswarpAuthLoginPending';
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
@@ -112,18 +112,33 @@ const App: React.FC = () => {
   const refreshAuth = async () => {
     setAuthLoading(true);
     try {
-      setAuthState(await getAuthState());
+      const nextAuthState = await getAuthState();
+      setAuthState(nextAuthState);
+      if (
+        nextAuthState.authenticated &&
+        window.sessionStorage.getItem(AUTH_LOGIN_PENDING_KEY)
+      ) {
+        window.sessionStorage.removeItem(AUTH_LOGIN_PENDING_KEY);
+        toast.success(
+          `Signed in as ${nextAuthState.user?.email || 'Google account'}`
+        );
+      }
     } catch {
       setAuthState({ authenticated: false });
     } finally {
       setAuthLoading(false);
     }
   };
-  const signIn = () => startGoogleSignIn(window.location.pathname);
+  const signIn = () => {
+    window.sessionStorage.setItem(AUTH_LOGIN_PENDING_KEY, '1');
+    startGoogleSignIn(window.location.pathname);
+  };
   const signOut = async () => {
     try {
       await logout();
       setAuthState({ authenticated: false });
+      window.sessionStorage.removeItem(AUTH_LOGIN_PENDING_KEY);
+      toast.info('Signed out');
     } catch (error) {
       toast.error(getErrorMessage(error, 'Failed to sign out'));
     }
@@ -218,39 +233,23 @@ const App: React.FC = () => {
           </div>
           {/* Security Badge (Visual Assurance) */}
           <div
-            className="hidden md:flex items-center gap-3"
+            className="flex min-w-0 items-center gap-2 md:gap-3"
             onClick={event => event.stopPropagation()}
           >
             <button
               onClick={openPricing}
-              className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200 font-bold tracking-wider hover:bg-emerald-500/20 transition-colors"
+              className="hidden items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold tracking-wider text-emerald-200 transition-colors hover:bg-emerald-500/20 sm:flex"
             >
               <CreditCard size={14} />
               <span>Pricing</span>
             </button>
-            {authState.authenticated ? (
-              <button
-                onClick={signOut}
-                className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-300 font-mono hover:bg-white/10 transition-colors"
-                title={authState.user?.email}
-              >
-                <User size={14} className="text-cyan-300" />
-                <span className="max-w-[160px] truncate">
-                  {authState.user?.email}
-                </span>
-                <LogOut size={13} />
-              </button>
-            ) : (
-              <button
-                onClick={signIn}
-                disabled={authLoading}
-                className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-300 font-mono hover:bg-white/10 disabled:opacity-50 transition-colors"
-              >
-                <User size={14} className="text-cyan-300" />
-                <span>{authLoading ? 'Checking' : 'Sign in'}</span>
-              </button>
-            )}
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-gray-400 font-mono">
+            <AccountStatus
+              authState={authState}
+              authLoading={authLoading}
+              onLogin={signIn}
+              onLogout={signOut}
+            />
+            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-mono text-gray-400 lg:flex">
               <ShieldCheck size={14} className="text-green-400" />
               <span>End-to-End Encrypted</span>
             </div>
