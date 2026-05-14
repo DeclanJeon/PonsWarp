@@ -18,6 +18,49 @@ export default defineConfig(({ mode }) => {
     build: {
       rollupOptions: {
         input: path.resolve(__dirname, 'index.html'),
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+
+            if (
+              id.includes('/react/') ||
+              id.includes('/react-dom/') ||
+              id.includes('/zustand/')
+            ) {
+              return 'react-vendor';
+            }
+
+            if (
+              id.includes('/three/') ||
+              id.includes('/@react-three/') ||
+              id.includes('/three-stdlib/') ||
+              id.includes('/@monogrid/') ||
+              id.includes('/postprocessing/')
+            ) {
+              return 'three-vendor';
+            }
+
+            if (id.includes('/framer-motion/')) {
+              return 'motion-vendor';
+            }
+
+            if (
+              id.includes('/simple-peer/') ||
+              id.includes('/socket.io-client/')
+            ) {
+              return 'transport-vendor';
+            }
+
+            if (
+              id.includes('/lucide-react/') ||
+              id.includes('/qrcode.react/')
+            ) {
+              return 'ui-vendor';
+            }
+
+            return 'vendor';
+          },
+        },
       },
     },
     server: {

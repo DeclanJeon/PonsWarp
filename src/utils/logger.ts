@@ -28,7 +28,19 @@ const currentLogLevel = isDevelopment
  * @param message - 로그 메시지
  * @param data - 추가 데이터 (선택적)
  */
-export function log(level: LogLevel, tag: string, message: string, data?: any) {
+type LogPayload = unknown;
+type ConsoleMethod = 'debug' | 'info' | 'warn' | 'error';
+
+function writeConsole(method: ConsoleMethod, args: LogPayload[]) {
+  globalThis.console?.[method]?.(...args);
+}
+
+export function log(
+  level: LogLevel,
+  tag: string,
+  message: string,
+  data?: LogPayload
+) {
   // 현재 로그 레벨보다 낮은 레벨은 출력하지 않음
   if (level < currentLogLevel) {
     return;
@@ -39,16 +51,16 @@ export function log(level: LogLevel, tag: string, message: string, data?: any) {
 
   switch (level) {
     case LogLevel.DEBUG:
-      console.debug(logMessage, data || '');
+      writeConsole('debug', [logMessage, data || '']);
       break;
     case LogLevel.INFO:
-      console.info(logMessage, data || '');
+      writeConsole('info', [logMessage, data || '']);
       break;
     case LogLevel.WARN:
-      console.warn(logMessage, data || '');
+      writeConsole('warn', [logMessage, data || '']);
       break;
     case LogLevel.ERROR:
-      console.error(logMessage, data || '');
+      writeConsole('error', [logMessage, data || '']);
       break;
   }
 }
@@ -56,37 +68,44 @@ export function log(level: LogLevel, tag: string, message: string, data?: any) {
 /**
  * 디버그 로그 (개발 환경에서만 출력)
  */
-export function logDebug(tag: string, message: string, data?: any) {
+export function logDebug(tag: string, message: string, data?: LogPayload) {
   log(LogLevel.DEBUG, tag, message, data);
 }
 
 /**
  * 정보 로그 (개발 환경에서만 출력)
  */
-export function logInfo(tag: string, message: string, data?: any) {
+export function logInfo(tag: string, message: string, data?: LogPayload) {
   log(LogLevel.INFO, tag, message, data);
 }
 
 /**
  * 경고 로그 (모든 환경에서 출력)
  */
-export function logWarn(tag: string, message: string, data?: any) {
+export function logWarn(tag: string, message: string, data?: LogPayload) {
   log(LogLevel.WARN, tag, message, data);
 }
 
 /**
  * 에러 로그 (모든 환경에서 출력)
  */
-export function logError(tag: string, message: string, data?: any) {
+export function logError(tag: string, message: string, data?: LogPayload) {
   log(LogLevel.ERROR, tag, message, data);
 }
 
 /**
  * 프로덕션 환경에서도 출력해야 하는 중요 로그
  */
-export function logCritical(tag: string, message: string, data?: any) {
+export function logCritical(tag: string, message: string, data?: LogPayload) {
   // 프로덕션 환경에서도 항상 출력
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${tag} ${message}`;
-  console.error(logMessage, data || '');
+  writeConsole('error', [logMessage, data || '']);
+}
+
+export function debugLog(...args: LogPayload[]) {
+  if (LogLevel.DEBUG < currentLogLevel) {
+    return;
+  }
+  writeConsole('debug', args);
 }

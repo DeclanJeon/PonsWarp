@@ -110,15 +110,19 @@ pnpm install
 pnpm dev
 ```
 
-Create `PonsWarp/.env` when local defaults need to be overridden:
+Use environment-specific files. The values are bundled into browser JS, so keep secrets out of all `VITE_*` variables.
 
-```env
-VITE_USE_RUST_SIGNALING=true
-VITE_RUST_SIGNALING_URL=wss://warp.ponslink.com/ws
-VITE_CLOUD_API_BASE_URL=https://warp.ponslink.com
+```bash
+# Local development
+cp .env.local.example .env.local
+pnpm dev
+
+# Production build
+cp .env.production.example .env.production
+pnpm build
 ```
 
-For local development, use `ws://localhost:5502/ws` and leave `VITE_CLOUD_API_BASE_URL` empty when the Vite dev server proxies to the same origin.
+Local defaults point to `ws://localhost:5502/ws` and `http://localhost:5502`. Production defaults point to `https://warp.ponslink.com`.
 
 ### Scripts
 
@@ -128,6 +132,7 @@ pnpm build        # Production build
 pnpm preview      # Preview built app
 pnpm type-check   # TypeScript validation
 pnpm test         # Vitest suite
+pnpm test:e2e     # Playwright smoke suite
 pnpm lint         # ESLint with autofix
 ```
 
