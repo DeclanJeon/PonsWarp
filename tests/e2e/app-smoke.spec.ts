@@ -45,14 +45,6 @@ const cloudPlansFixture = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await page.route('**/api/auth/me', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ authenticated: false }),
-    });
-  });
-
   await page.route('**/api/cloud-plans', async route => {
     await route.fulfill({
       status: 200,
@@ -80,15 +72,12 @@ test('home selection exposes send methods and receive entry', async ({
   await expect(page.getByText('Free Cloud Drop stores up to')).toBeVisible();
 });
 
-test('pricing route renders plans without a live billing provider', async ({
-  page,
-}) => {
+test('pricing route is hidden while billing is disabled', async ({ page }) => {
   await page.goto('/pricing');
 
-  await expect(page.getByText('CLOUD DROP PRICING')).toBeVisible();
-  await expect(page.getByText('Free Direct Send')).toBeVisible();
-  await expect(page.getByText('PonsWarp Free', { exact: true })).toBeVisible();
-  await expect(page.getByText('100GB Drop Pass')).toBeVisible();
+  await expect(page.getByText('HYPER-SPEED')).toBeVisible();
+  await expect(page.getByText('CLOUD DROP PRICING')).toHaveCount(0);
+  await expect(page.getByText('100GB Drop Pass')).toHaveCount(0);
 });
 
 test('receive view accepts a six character transfer code', async ({ page }) => {

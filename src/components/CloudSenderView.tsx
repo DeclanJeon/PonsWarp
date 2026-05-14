@@ -4,28 +4,21 @@ import {
   Check,
   CloudUpload,
   Copy,
-  CreditCard,
   FileIcon,
   FilePlus,
   Folder,
   Infinity,
   Loader2,
-  Lock,
   ShieldCheck,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  CloudPlanLimit,
   CloudPlansResponse,
-  PaymentProvider,
-  captureBillingCheckout,
   completeCloudShare,
-  createBillingCheckout,
   createCloudShare,
   getCloudPlans,
   uploadCloudFile,
 } from '../services/cloudShareService';
-import { AuthState } from '../services/authService';
 import {
   scanFiles,
   processInputFiles,
@@ -56,7 +49,6 @@ const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
 const MAX_PARALLEL_UPLOADS = 3;
 const GB = 1024 * 1024 * 1024;
 const TB = 1024 * GB;
-const ENTITLEMENT_STORAGE_KEY = 'ponswarpCloudEntitlementToken';
 
 const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
   directP2p: {
@@ -121,15 +113,6 @@ const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
   paymentProviders: [],
 };
 
-interface CloudSenderViewProps {
-  authState: AuthState;
-  authLoading: boolean;
-  onLogin: () => void;
-}
-
-const formatKrw = (value: number) =>
-  `${new Intl.NumberFormat('ko-KR').format(value)}원`;
-
 const formatRetention = (seconds: number) => {
   const days = Math.round(seconds / 86400);
   if (days >= 1) return `${days} days`;
@@ -137,11 +120,7 @@ const formatRetention = (seconds: number) => {
   return `${hours} hours`;
 };
 
-const CloudSenderView: React.FC<CloudSenderViewProps> = ({
-  authState,
-  authLoading,
-  onLogin,
-}) => {
+const CloudSenderView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<CloudUploadStatus>('IDLE');
@@ -152,14 +131,8 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [fileProgress, setFileProgress] = useState<Record<string, number>>({});
-  const [entitlementToken, setEntitlementToken] = useState<string | null>(null);
-  const [checkoutSku, setCheckoutSku] = useState<string | null>(null);
-  const [paymentProvider, setPaymentProvider] =
-    useState<PaymentProvider>('lemonSqueezy');
   const [cloudPlans, setCloudPlans] =
     useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
-  const [dropPassword, setDropPassword] = useState('');
-  const [downloadLimit, setDownloadLimit] = useState('');
   const uploadStartedAtRef = useRef<number | null>(null);
 
   const uploadedBytes = useMemo(
@@ -185,74 +158,11 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
 
   useEffect(() => {
     let cancelled = false;
-    const params = new URLSearchParams(window.location.search);
-    const checkoutStatus = params.get('checkout');
-    const nextEntitlement = params.get('cloudEntitlement');
-    const storedEntitlement = window.sessionStorage.getItem(
-      ENTITLEMENT_STORAGE_KEY
-    );
-    if (nextEntitlement) {
-      setEntitlementToken(nextEntitlement);
-      window.sessionStorage.removeItem(ENTITLEMENT_STORAGE_KEY);
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (storedEntitlement) {
-      setEntitlementToken(storedEntitlement);
-      window.sessionStorage.removeItem(ENTITLEMENT_STORAGE_KEY);
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (checkoutStatus === 'success') {
-      const checkoutProvider = params.get('provider');
-      const lemonCheckoutId = params.get('checkout_id');
-      const paypalOrderId = params.get('token');
-      const paypalSubscriptionId = params.get('subscription_id');
-      if (
-        (checkoutProvider === 'lemonsqueezy' ||
-          checkoutProvider === 'lemonSqueezy') &&
-        lemonCheckoutId
-      ) {
-        setEntitlementToken(lemonCheckoutId);
-        setError(null);
-        window.history.replaceState({}, '', window.location.pathname);
-      } else if (paypalSubscriptionId) {
-        setEntitlementToken(paypalSubscriptionId);
-        window.history.replaceState({}, '', window.location.pathname);
-      } else if (paypalOrderId) {
-        captureBillingCheckout(paypalOrderId)
-          .then(response => {
-            if (cancelled) return;
-            setEntitlementToken(response.entitlementToken);
-            setError(null);
-            window.history.replaceState({}, '', window.location.pathname);
-          })
-          .catch(captureError => {
-            if (cancelled) return;
-            setStatus('ERROR');
-            setError(captureError?.message || 'PayPal payment capture failed');
-          });
-      } else {
-        setError(
-          'Checkout returned without a usable entitlement token. Please wait a moment and retry.'
-        );
-      }
-    } else if (checkoutStatus === 'cancelled') {
-      setError('Checkout was cancelled.');
-      window.history.replaceState({}, '', window.location.pathname);
-    }
 
     getCloudPlans()
       .then(nextPlans => {
         if (!cancelled) {
           setCloudPlans(nextPlans);
-          const defaultProvider = nextPlans.paymentProviders.find(
-            provider => provider.default && provider.available
-          );
-          const firstAvailable = nextPlans.paymentProviders.find(
-            provider => provider.available
-          );
-          setPaymentProvider(
-            defaultProvider?.provider ||
-              firstAvailable?.provider ||
-              'lemonSqueezy'
-          );
         }
       })
       .catch(() => {
@@ -290,9 +200,8 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
     const oversizedFile = scannedFiles.find(
       item => item.file.size > freePlan.maxFileBytes
     );
-    const shouldUseEntitlement = Boolean(entitlementToken);
 
-    if (!entitlementToken && nextManifest.totalSize > freePlan.maxTotalBytes) {
+    if (nextManifest.totalSize > freePlan.maxTotalBytes) {
       setManifest(nextManifest);
       setShareLink(null);
       setExpiresAt(null);
@@ -300,13 +209,13 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
       setFileProgress({});
       setCurrentFile(null);
       setError(
-        `This Cloud Drop is ${formatBytes(nextManifest.totalSize)}, which is over the free ${formatBytes(freePlan.maxTotalBytes)} limit. Direct P2P remains unlimited, or use a paid Drop Pass when checkout is enabled.`
+        `This Cloud Drop is ${formatBytes(nextManifest.totalSize)}, which is over the ${formatBytes(freePlan.maxTotalBytes)} link-sending limit. Direct SEND remains unlimited when both browsers stay online.`
       );
       setStatus('LIMIT_EXCEEDED');
       return;
     }
 
-    if (!entitlementToken && oversizedFile) {
+    if (oversizedFile) {
       setManifest(nextManifest);
       setShareLink(null);
       setExpiresAt(null);
@@ -314,7 +223,7 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
       setFileProgress({});
       setCurrentFile(null);
       setError(
-        `${oversizedFile.path} is larger than the free per-file Cloud Drop limit of ${formatBytes(freePlan.maxFileBytes)}. Direct P2P remains unlimited, or use a paid Drop Pass when checkout is enabled.`
+        `${oversizedFile.path} is larger than the per-file link-sending limit of ${formatBytes(freePlan.maxFileBytes)}. Direct SEND remains unlimited when both browsers stay online.`
       );
       setStatus('LIMIT_EXCEEDED');
       return;
@@ -329,21 +238,9 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
     setStatus('PREPARING');
 
     try {
-      const requestedDownloadLimit = Number.parseInt(downloadLimit, 10);
       const created = await createCloudShare(
         nextManifest.rootName,
-        scannedFiles,
-        shouldUseEntitlement && entitlementToken
-          ? {
-              entitlementToken,
-              password: dropPassword.trim() || undefined,
-              downloadLimit:
-                Number.isFinite(requestedDownloadLimit) &&
-                requestedDownloadLimit > 0
-                  ? requestedDownloadLimit
-                  : undefined,
-            }
-          : {}
+        scannedFiles
       );
       const uploadedIds: string[] = [];
       let nextIndex = 0;
@@ -382,11 +279,6 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
       setCurrentFile(null);
       setExpiresAt(completed.expiresAt);
       setShareLink(`${window.location.origin}${created.shareUrl}`);
-      if (shouldUseEntitlement) {
-        setEntitlementToken(null);
-        setDropPassword('');
-        setDownloadLimit('');
-      }
       setStatus('DONE');
     } catch (uploadError) {
       setStatus('ERROR');
@@ -403,35 +295,12 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const startCheckout = async (plan: CloudPlanLimit) => {
-    if (!cloudPlans.checkoutEnabled || !plan.available) return;
-    if (!authState.authenticated) {
-      onLogin();
-      return;
-    }
-    setCheckoutSku(plan.sku);
-    setError(null);
-    try {
-      const response = await createBillingCheckout(
-        plan.sku === cloudPlans.pro.sku ? 'subscription' : 'payment',
-        plan.sku,
-        `${window.location.origin}${window.location.pathname}`,
-        paymentProvider
-      );
-      window.location.href = response.checkoutUrl;
-    } catch (checkoutError) {
-      setCheckoutSku(null);
-      setError(getErrorMessage(checkoutError, 'Checkout failed'));
-    }
-  };
-
   const expiryLabel = expiresAt
     ? new Date(expiresAt * 1000).toLocaleString()
     : '24 hours after upload';
 
   const glassPanelClass =
     'bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
-  const paidPlans: CloudPlanLimit[] = [...cloudPlans.passes, cloudPlans.pro];
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
@@ -483,65 +352,12 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
               </p>
               <div className="mb-6 flex flex-wrap items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em]">
                 <span className="rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-emerald-200">
-                  No sign-in for free drops
+                  No sign-in required
                 </span>
-                {authState.authenticated ? (
-                  <span
-                    className="max-w-[280px] truncate rounded-full border border-cyan-400/25 bg-cyan-500/10 px-3 py-1 text-cyan-100"
-                    title={authState.user?.email}
-                  >
-                    Paid drops linked to {authState.user?.email}
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={onLogin}
-                    disabled={authLoading}
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-gray-300 transition-colors hover:bg-white/10 disabled:opacity-50"
-                  >
-                    Sign in only for paid drops
-                  </button>
-                )}
+                <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-3 py-1 text-cyan-100">
+                  10GB per link
+                </span>
               </div>
-              {entitlementToken && (
-                <div className="w-full max-w-md mb-5 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-4 text-left">
-                  <div className="flex items-center gap-2 mb-3">
-                    <ShieldCheck className="w-4 h-4 text-emerald-300" />
-                    <p className="text-emerald-200 text-xs md:text-sm font-bold">
-                      Paid Cloud Drop is active for the next upload.
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <label className="block">
-                      <span className="flex items-center gap-1.5 text-[10px] text-gray-500 uppercase tracking-widest mb-1.5">
-                        <Lock className="w-3 h-3" />
-                        Password
-                      </span>
-                      <input
-                        type="password"
-                        value={dropPassword}
-                        onChange={event => setDropPassword(event.target.value)}
-                        placeholder="optional"
-                        className="w-full bg-black/40 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-3 py-2.5 text-sm text-white"
-                        autoComplete="new-password"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest mb-1.5 block">
-                        Download cap
-                      </span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={downloadLimit}
-                        onChange={event => setDownloadLimit(event.target.value)}
-                        placeholder="plan max"
-                        className="w-full bg-black/40 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-3 py-2.5 text-sm text-white"
-                      />
-                    </label>
-                  </div>
-                </div>
-              )}
 
               <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm">
                 <button
@@ -718,158 +534,50 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            className={`w-full max-w-5xl p-5 md:p-7 ${glassPanelClass}`}
+            className={`w-full max-w-xl p-5 md:p-7 ${glassPanelClass}`}
           >
-            <div className="flex flex-col lg:flex-row gap-6">
-              <div className="lg:w-[32%] space-y-4">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30">
-                  <Infinity className="w-4 h-4 text-cyan-300" />
-                  <span className="text-[10px] font-bold text-cyan-300 tracking-[0.2em]">
-                    DIRECT P2P
-                  </span>
-                </div>
-                <div>
-                  <h2 className="text-2xl md:text-3xl font-bold brand-font text-white mb-3">
-                    FREE LIMIT REACHED
-                  </h2>
-                  <p className="text-sm text-gray-300 leading-relaxed">
-                    {error}
-                  </p>
-                </div>
-                <div className="bg-cyan-500/10 border border-cyan-500/25 rounded-2xl p-4">
-                  <div className="flex items-center gap-3 mb-2">
-                    <ShieldCheck className="w-5 h-5 text-cyan-300" />
-                    <p className="font-bold text-white text-sm">
-                      Unlimited transfer is still free
-                    </p>
-                  </div>
-                  <p className="text-xs text-gray-400 leading-relaxed">
-                    SEND remains the free path for very large files when both
-                    browsers are online. Cloud Drop covers offline pickup.
-                  </p>
-                </div>
-                <div className="bg-black/30 border border-white/10 rounded-2xl p-4">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
-                    Selected
-                  </p>
-                  <p className="text-sm text-white font-bold truncate">
-                    {manifest?.rootName}
-                  </p>
-                  <p className="text-xs text-gray-400 font-mono mt-1">
-                    {manifest?.totalFiles} files • {formatBytes(totalBytes)}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setStatus('IDLE')}
-                  className="w-full px-5 py-3 bg-white text-black rounded-full font-bold tracking-wider hover:bg-cyan-100 transition-colors"
-                >
-                  CHOOSE ANOTHER FILE
-                </button>
+            <div className="space-y-4">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30">
+                <Infinity className="w-4 h-4 text-cyan-300" />
+                <span className="text-[10px] font-bold text-cyan-300 tracking-[0.2em]">
+                  DIRECT P2P
+                </span>
               </div>
-
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-4">
-                  <CreditCard className="w-5 h-5 text-emerald-300" />
-                  <h3 className="text-lg font-bold text-white brand-font">
-                    CLOUD DROP OPTIONS
-                  </h3>
-                </div>
-                <div className="mb-4 flex flex-wrap gap-2">
-                  {(cloudPlans.paymentProviders.length
-                    ? cloudPlans.paymentProviders
-                    : [
-                        {
-                          provider: 'lemonSqueezy' as PaymentProvider,
-                          label: 'Lemon Squeezy',
-                          available: false,
-                          default: true,
-                        },
-                      ]
-                  ).map(provider => (
-                    <button
-                      key={provider.provider}
-                      type="button"
-                      disabled={!provider.available}
-                      onClick={() => setPaymentProvider(provider.provider)}
-                      className={`px-3 py-2 rounded-full border text-xs font-bold tracking-wider transition-colors ${
-                        paymentProvider === provider.provider
-                          ? 'border-emerald-400 bg-emerald-500/20 text-emerald-100'
-                          : provider.available
-                            ? 'border-white/15 bg-white/5 text-gray-300 hover:bg-white/10'
-                            : 'border-gray-700 bg-gray-900/60 text-gray-600 cursor-not-allowed'
-                      }`}
-                    >
-                      {provider.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {paidPlans.map(plan => (
-                    <div
-                      key={plan.sku}
-                      className="bg-gray-900/50 border border-gray-700/60 rounded-2xl p-4 flex flex-col gap-4"
-                    >
-                      <div>
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <div>
-                            <p className="text-white font-bold text-base">
-                              {plan.label}
-                            </p>
-                            <p className="text-xs text-gray-500 font-mono">
-                              up to {formatBytes(plan.maxTotalBytes)}
-                            </p>
-                          </div>
-                          <p className="text-emerald-300 font-black text-lg whitespace-nowrap">
-                            {formatKrw(plan.priceKrw)}
-                          </p>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="bg-black/30 rounded-xl p-3 border border-white/5">
-                            <p className="text-gray-500 uppercase tracking-widest text-[9px] mb-1">
-                              Retention
-                            </p>
-                            <p className="text-gray-200">
-                              {formatRetention(plan.retentionSeconds)}
-                            </p>
-                          </div>
-                          <div className="bg-black/30 rounded-xl p-3 border border-white/5">
-                            <p className="text-gray-500 uppercase tracking-widest text-[9px] mb-1">
-                              Downloads
-                            </p>
-                            <p className="text-gray-200">
-                              {plan.downloadLimit
-                                ? `${plan.downloadLimit} max`
-                                : 'basic'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                      <button
-                        disabled={
-                          !cloudPlans.checkoutEnabled ||
-                          !plan.available ||
-                          authLoading ||
-                          checkoutSku === plan.sku
-                        }
-                        onClick={() => startCheckout(plan)}
-                        className={`mt-auto w-full py-3 rounded-xl border font-bold tracking-wider transition-colors ${
-                          cloudPlans.checkoutEnabled && plan.available
-                            ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
-                            : 'border-gray-700 bg-gray-800/60 text-gray-500 cursor-not-allowed'
-                        }`}
-                      >
-                        {checkoutSku === plan.sku
-                          ? 'OPENING CHECKOUT'
-                          : cloudPlans.checkoutEnabled && plan.available
-                            ? authState.authenticated
-                              ? 'CHECKOUT'
-                              : 'SIGN IN'
-                            : 'CHECKOUT SOON'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
+              <div>
+                <h2 className="text-2xl md:text-3xl font-bold brand-font text-white mb-3">
+                  FREE LIMIT REACHED
+                </h2>
+                <p className="text-sm text-gray-300 leading-relaxed">{error}</p>
               </div>
+              <div className="bg-cyan-500/10 border border-cyan-500/25 rounded-2xl p-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <ShieldCheck className="w-5 h-5 text-cyan-300" />
+                  <p className="font-bold text-white text-sm">
+                    Unlimited transfer is still free
+                  </p>
+                </div>
+                <p className="text-xs text-gray-400 leading-relaxed">
+                  SEND remains the free path for very large files when both
+                  browsers are online. Cloud Drop covers offline pickup.
+                </p>
+              </div>
+              <div className="bg-black/30 border border-white/10 rounded-2xl p-4">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
+                  Selected
+                </p>
+                <p className="text-sm text-white font-bold truncate">
+                  {manifest?.rootName}
+                </p>
+                <p className="text-xs text-gray-400 font-mono mt-1">
+                  {manifest?.totalFiles} files • {formatBytes(totalBytes)}
+                </p>
+              </div>
+              <button
+                onClick={() => setStatus('IDLE')}
+                className="w-full px-5 py-3 bg-white text-black rounded-full font-bold tracking-wider hover:bg-cyan-100 transition-colors"
+              >
+                CHOOSE ANOTHER FILE
+              </button>
             </div>
           </motion.div>
         )}

@@ -13,17 +13,11 @@ import {
   ShieldCheck,
   Zap,
   CloudUpload,
-  CreditCard,
 } from 'lucide-react';
 import SenderView from './components/SenderView';
 import ReceiverView from './components/ReceiverView';
 import CloudSenderView from './components/CloudSenderView';
 import CloudDownloadView from './components/CloudDownloadView';
-import PricingView from './components/PricingView';
-import LegalBeacon from './components/LegalBeacon';
-import LegalPageView from './components/LegalPageView';
-import AdminDashboardView from './components/AdminDashboardView';
-import AccountStatus from './components/AccountStatus';
 import { AppMode } from './types/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { signalingFactory } from './services/signaling-factory';
@@ -34,26 +28,13 @@ import { ToastContainer } from './components/ui/ToastContainer';
 import { StatusOverlay } from './components/ui/StatusOverlay';
 import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
-import {
-  AuthState,
-  getAuthState,
-  logout,
-  startGoogleSignIn,
-} from './services/authService';
-import { getErrorMessage } from './utils/errors';
 
 const SpaceField = lazy(() => import('./components/SpaceField'));
-const AUTH_LOGIN_PENDING_KEY = 'ponswarpAuthLoginPending';
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
   const { mode, setMode, setRoomId, status } = useTransferStore();
   const [cloudShareId, setCloudShareId] = useState<string | null>(null);
-  const [legalPath, setLegalPath] = useState('/legal');
-  const [authState, setAuthState] = useState<AuthState>({
-    authenticated: false,
-  });
-  const [authLoading, setAuthLoading] = useState(true);
 
   // URL 파라미터 체크 (앱 로드 시)
   useEffect(() => {
@@ -61,28 +42,10 @@ const App: React.FC = () => {
       const path = window.location.pathname;
       const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/);
       const cloudMatch = path.match(/^\/cloud\/([A-Za-z0-9-]{8,80})$/);
-      const legalMatch = [
-        '/legal',
-        '/privacy',
-        '/terms',
-        '/refund',
-        '/commerce-disclosure',
-        '/contact',
-      ].includes(path);
 
       if (cloudMatch) {
         setCloudShareId(cloudMatch[1]);
         setMode(AppMode.CLOUD_RECEIVER);
-      } else if (path === '/pricing') {
-        setCloudShareId(null);
-        setMode(AppMode.PRICING);
-      } else if (path === '/admin' || path.startsWith('/admin/')) {
-        setCloudShareId(null);
-        setMode(AppMode.ADMIN);
-      } else if (legalMatch) {
-        setCloudShareId(null);
-        setLegalPath(path);
-        setMode(AppMode.LEGAL);
       } else if (receiveMatch) {
         const roomId = receiveMatch[1];
         setRoomId(roomId);
@@ -109,60 +72,6 @@ const App: React.FC = () => {
   }, [setRoomId, setMode]);
 
   const startApp = () => setMode(AppMode.SELECTION);
-  const refreshAuth = async () => {
-    setAuthLoading(true);
-    try {
-      const nextAuthState = await getAuthState();
-      setAuthState(nextAuthState);
-      if (
-        nextAuthState.authenticated &&
-        window.sessionStorage.getItem(AUTH_LOGIN_PENDING_KEY)
-      ) {
-        window.sessionStorage.removeItem(AUTH_LOGIN_PENDING_KEY);
-        toast.success(
-          `Signed in as ${nextAuthState.user?.email || 'Google account'}`
-        );
-      }
-    } catch {
-      setAuthState({ authenticated: false });
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-  const signIn = () => {
-    window.sessionStorage.setItem(AUTH_LOGIN_PENDING_KEY, '1');
-    startGoogleSignIn(window.location.pathname);
-  };
-  const signOut = async () => {
-    try {
-      await logout();
-      setAuthState({ authenticated: false });
-      window.sessionStorage.removeItem(AUTH_LOGIN_PENDING_KEY);
-      toast.info('Signed out');
-    } catch (error) {
-      toast.error(getErrorMessage(error, 'Failed to sign out'));
-    }
-  };
-  const openPricing = () => {
-    setCloudShareId(null);
-    setMode(AppMode.PRICING);
-    window.history.pushState({}, '', '/pricing');
-  };
-  const openCloudDrop = () => {
-    setCloudShareId(null);
-    setMode(AppMode.CLOUD_SENDER);
-    window.history.pushState({}, '', '/');
-  };
-  const openLegal = (path: string) => {
-    setCloudShareId(null);
-    setLegalPath(path);
-    setMode(AppMode.LEGAL);
-    window.history.pushState({}, '', path);
-  };
-
-  useEffect(() => {
-    refreshAuth();
-  }, []);
 
   // Signaling 연결 관리
   useEffect(() => {
@@ -236,20 +145,7 @@ const App: React.FC = () => {
             className="flex min-w-0 items-center gap-2 md:gap-3"
             onClick={event => event.stopPropagation()}
           >
-            <button
-              onClick={openPricing}
-              className="hidden items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold tracking-wider text-emerald-200 transition-colors hover:bg-emerald-500/20 sm:flex"
-            >
-              <CreditCard size={14} />
-              <span>Pricing</span>
-            </button>
-            <AccountStatus
-              authState={authState}
-              authLoading={authLoading}
-              onLogin={signIn}
-              onLogout={signOut}
-            />
-            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-mono text-gray-400 lg:flex">
+            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-mono text-gray-400 sm:flex">
               <ShieldCheck size={14} className="text-green-400" />
               <span>End-to-End Encrypted</span>
             </div>
@@ -257,15 +153,7 @@ const App: React.FC = () => {
         </header>
 
         {/* 4. Main Content Area */}
-        <main
-          className={`relative z-10 w-full h-full ${
-            mode === AppMode.PRICING ||
-            mode === AppMode.LEGAL ||
-            mode === AppMode.ADMIN
-              ? 'overflow-hidden'
-              : 'flex flex-col items-center justify-center p-4'
-          }`}
-        >
+        <main className="relative z-10 w-full h-full flex flex-col items-center justify-center p-4">
           <AnimatePresence mode="wait">
             {/* --- INTRO SCREEN --- */}
             {mode === AppMode.INTRO && (
@@ -307,12 +195,6 @@ const App: React.FC = () => {
                       <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                     </span>
                   </MagneticButton>
-                  <button
-                    onClick={openPricing}
-                    className="px-7 py-3 md:py-5 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-100 font-bold tracking-wider hover:bg-emerald-500/20 transition-colors"
-                  >
-                    VIEW PRICING
-                  </button>
                 </div>
               </motion.div>
             )}
@@ -403,38 +285,7 @@ const App: React.FC = () => {
                     </div>
                   </MagneticButton>
                 </div>
-                <div className="mt-5 flex justify-center">
-                  <button
-                    onClick={openPricing}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-black/40 border border-emerald-500/30 text-emerald-200 text-xs font-bold tracking-widest hover:bg-emerald-500/15 transition-colors"
-                  >
-                    <CreditCard className="w-4 h-4" />
-                    VIEW LINK SENDING PRICING
-                  </button>
-                </div>
               </motion.div>
-            )}
-
-            {mode === AppMode.PRICING && (
-              <PricingView
-                authState={authState}
-                authLoading={authLoading}
-                onLogin={signIn}
-                onAuthRefresh={refreshAuth}
-                onOpenCloud={openCloudDrop}
-              />
-            )}
-
-            {mode === AppMode.LEGAL && (
-              <LegalPageView path={legalPath} onNavigate={openLegal} />
-            )}
-
-            {mode === AppMode.ADMIN && (
-              <AdminDashboardView
-                authState={authState}
-                authLoading={authLoading}
-                onLogin={signIn}
-              />
             )}
 
             {/* --- ACTIVE STATES (SENDER/RECEIVER VIEWS) --- */}
@@ -471,11 +322,7 @@ const App: React.FC = () => {
                 exit={{ opacity: 0 }}
                 className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
               >
-                <CloudSenderView
-                  authState={authState}
-                  authLoading={authLoading}
-                  onLogin={signIn}
-                />
+                <CloudSenderView />
 
                 <button
                   onClick={() => setMode(AppMode.SELECTION)}
@@ -532,7 +379,6 @@ const App: React.FC = () => {
             )}
           </AnimatePresence>
         </main>
-        {mode !== AppMode.LEGAL && <LegalBeacon onNavigate={openLegal} />}
       </div>
     </ErrorBoundary>
   );
