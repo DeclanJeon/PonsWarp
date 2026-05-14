@@ -13,6 +13,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+  abortCloudShareUploads,
+  CompletedMultipartUpload,
+  CreateCloudShareResponse,
   CloudPlansResponse,
   completeCloudShare,
   createCloudShare,
@@ -28,7 +31,10 @@ import { getErrorMessage } from '../utils/errors';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import {
   estimateRemainingSeconds,
-  formatDuration,
+  formatRemainingTime,
+  getTransferFeedbackLabel,
+  updateRollingSpeedSample,
+  type RollingSpeedSample,
 } from '../utils/transferEstimate';
 import { TransferManifest } from '../types/types';
 
@@ -133,7 +139,8 @@ const CloudSenderView: React.FC = () => {
   const [fileProgress, setFileProgress] = useState<Record<string, number>>({});
   const [cloudPlans, setCloudPlans] =
     useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
-  const uploadStartedAtRef = useRef<number | null>(null);
+  const uploadSpeedSampleRef = useRef<RollingSpeedSample | null>(null);
+  const [uploadSpeed, setUploadSpeed] = useState(0);
 
   const uploadedBytes = useMemo(
     () =>
@@ -143,18 +150,29 @@ const CloudSenderView: React.FC = () => {
   const totalBytes = manifest?.totalSize || 0;
   const progress =
     totalBytes > 0 ? Math.min(100, (uploadedBytes / totalBytes) * 100) : 0;
-  const uploadElapsedSeconds =
-    uploadStartedAtRef.current && uploadedBytes > 0
-      ? (Date.now() - uploadStartedAtRef.current) / 1000
-      : 0;
-  const uploadSpeed =
-    uploadElapsedSeconds > 0 ? uploadedBytes / uploadElapsedSeconds : 0;
   const estimatedUploadSecondsRemaining = estimateRemainingSeconds(
     uploadedBytes,
     totalBytes,
     uploadSpeed
   );
+  const uploadFeedbackLabel = getTransferFeedbackLabel(
+    uploadedBytes,
+    totalBytes,
+    uploadSpeed
+  );
   const freePlan = cloudPlans.free;
+
+  useEffect(() => {
+    if (status !== 'UPLOADING' || !uploadSpeedSampleRef.current) return;
+
+    const nextSample = updateRollingSpeedSample(
+      uploadSpeedSampleRef.current,
+      uploadedBytes,
+      Date.now()
+    );
+    uploadSpeedSampleRef.current = nextSample;
+    setUploadSpeed(nextSample.bytesPerSecond);
+  }, [status, uploadedBytes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +225,8 @@ const CloudSenderView: React.FC = () => {
       setExpiresAt(null);
       setCopied(false);
       setFileProgress({});
+      uploadSpeedSampleRef.current = null;
+      setUploadSpeed(0);
       setCurrentFile(null);
       setError(
         `This Cloud Drop is ${formatBytes(nextManifest.totalSize)}, which is over the ${formatBytes(freePlan.maxTotalBytes)} link-sending limit. Direct SEND remains unlimited when both browsers stay online.`
@@ -221,6 +241,8 @@ const CloudSenderView: React.FC = () => {
       setExpiresAt(null);
       setCopied(false);
       setFileProgress({});
+      uploadSpeedSampleRef.current = null;
+      setUploadSpeed(0);
       setCurrentFile(null);
       setError(
         `${oversizedFile.path} is larger than the per-file link-sending limit of ${formatBytes(freePlan.maxFileBytes)}. Direct SEND remains unlimited when both browsers stay online.`
@@ -235,18 +257,27 @@ const CloudSenderView: React.FC = () => {
     setCopied(false);
     setError(null);
     setFileProgress({});
+    uploadSpeedSampleRef.current = null;
+    setUploadSpeed(0);
     setStatus('PREPARING');
+    let createdShare: CreateCloudShareResponse | null = null;
 
     try {
       const created = await createCloudShare(
         nextManifest.rootName,
         scannedFiles
       );
+      createdShare = created;
       const uploadedIds: string[] = [];
+      const multipartUploads: CompletedMultipartUpload[] = [];
       let nextIndex = 0;
 
       setStatus('UPLOADING');
-      uploadStartedAtRef.current = Date.now();
+      uploadSpeedSampleRef.current = {
+        bytesTransferred: 0,
+        timestampMs: Date.now(),
+        bytesPerSecond: 0,
+      };
 
       const uploadWorker = async () => {
         while (nextIndex < created.files.length) {
@@ -258,8 +289,8 @@ const CloudSenderView: React.FC = () => {
           if (!target || !source) continue;
 
           setCurrentFile(target.path);
-          await uploadCloudFile(
-            target.uploadUrl,
+          const multipartUpload = await uploadCloudFile(
+            target,
             source.file,
             progressEvent => {
               setFileProgress(prev => ({
@@ -268,6 +299,9 @@ const CloudSenderView: React.FC = () => {
               }));
             }
           );
+          if (multipartUpload) {
+            multipartUploads.push(multipartUpload);
+          }
           uploadedIds.push(target.id);
         }
       };
@@ -275,16 +309,34 @@ const CloudSenderView: React.FC = () => {
       const workerCount = Math.min(MAX_PARALLEL_UPLOADS, created.files.length);
       await Promise.all(Array.from({ length: workerCount }, uploadWorker));
 
-      const completed = await completeCloudShare(created.shareId, uploadedIds);
+      const completed = await completeCloudShare(
+        created.shareId,
+        uploadedIds,
+        multipartUploads
+      );
       setCurrentFile(null);
       setExpiresAt(completed.expiresAt);
       setShareLink(`${window.location.origin}${created.shareUrl}`);
       setStatus('DONE');
     } catch (uploadError) {
+      if (createdShare) {
+        const multipartUploadsToAbort = createdShare.files
+          .filter(target => target.multipart)
+          .map(target => ({
+            fileId: target.id,
+            uploadId: target.multipart!.uploadId,
+          }));
+        abortCloudShareUploads(
+          createdShare.shareId,
+          multipartUploadsToAbort
+        ).catch(error => {
+          console.warn('Failed to abort incomplete Cloud Drop upload', error);
+        });
+      }
       setStatus('ERROR');
       setError(getErrorMessage(uploadError, 'Cloud upload failed'));
     } finally {
-      uploadStartedAtRef.current = null;
+      uploadSpeedSampleRef.current = null;
     }
   };
 
@@ -401,6 +453,9 @@ const CloudSenderView: React.FC = () => {
                 {progress.toFixed(1)}
                 <span className="text-2xl text-gray-500">%</span>
               </p>
+              <p className="mt-3 text-sm text-emerald-100/70 font-mono">
+                {uploadFeedbackLabel}
+              </p>
             </div>
 
             <div className="relative h-6 bg-gray-900/50 rounded-full overflow-hidden border border-gray-700 shadow-inner">
@@ -434,7 +489,7 @@ const CloudSenderView: React.FC = () => {
                   Time Left
                 </p>
                 <p className="font-mono text-white text-base md:text-lg">
-                  {formatDuration(estimatedUploadSecondsRemaining)}
+                  {formatRemainingTime(estimatedUploadSecondsRemaining)}
                 </p>
               </div>
               <div className="bg-black/30 backdrop-blur-md p-4 rounded-2xl border border-white/5 text-center">
@@ -598,7 +653,7 @@ const CloudSenderView: React.FC = () => {
               onClick={() => setStatus('IDLE')}
               className="px-5 py-3 bg-white text-black rounded-full font-bold tracking-wider hover:bg-red-100 transition-colors"
             >
-              TRY AGAIN
+              RETRY UPLOAD
             </button>
           </motion.div>
         )}

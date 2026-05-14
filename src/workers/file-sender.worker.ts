@@ -18,12 +18,15 @@ import init, {
   ZeroCopyPacketPool,
 } from 'pons-core-wasm';
 import { TransferManifest } from '../types/types';
-
-const CHUNK_SIZE_MIN = 16 * 1024;
-const CHUNK_SIZE_MAX = 64 * 1024;
-
-const BUFFER_SIZE = 8 * 1024 * 1024;
-const PREFETCH_BATCH = 16;
+import {
+  BATCH_SIZE_INITIAL,
+  BATCH_SIZE_MAX,
+  BATCH_SIZE_MIN,
+  CHUNK_SIZE_INITIAL,
+  CHUNK_SIZE_MAX,
+  CHUNK_SIZE_MIN,
+  PREFETCH_BUFFER_SIZE,
+} from '../utils/constants';
 
 const ZIP_QUEUE_HIGH_WATER_MARK = 32 * 1024 * 1024;
 const ZIP_QUEUE_LOW_WATER_MARK = 8 * 1024 * 1024;
@@ -133,12 +136,12 @@ const state: WorkerState = {
 };
 
 const adaptiveConfig: AdaptiveConfig = {
-  chunkSize: CHUNK_SIZE_MAX,
-  prefetchBatch: PREFETCH_BATCH,
+  chunkSize: CHUNK_SIZE_INITIAL,
+  prefetchBatch: BATCH_SIZE_INITIAL,
   enableAdaptive: true,
 };
 
-const doubleBuffer = new DoubleBuffer(BUFFER_SIZE);
+const doubleBuffer = new DoubleBuffer(PREFETCH_BUFFER_SIZE);
 let isTransferActive = false;
 let prefetchPromise: Promise<void> | null = null;
 
@@ -209,6 +212,9 @@ self.onmessage = (e: MessageEvent) => {
     case 'update-config':
       updateAdaptiveConfig(payload);
       break;
+    case 'update-adaptive-config':
+      updateAdaptiveConfig(payload);
+      break;
     case 'set-encryption-key':
       setEncryptionKey(payload);
       break;
@@ -251,8 +257,8 @@ function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
   }
   if (config.prefetchBatch !== undefined) {
     adaptiveConfig.prefetchBatch = Math.max(
-      4,
-      Math.min(32, config.prefetchBatch)
+      BATCH_SIZE_MIN,
+      Math.min(BATCH_SIZE_MAX, config.prefetchBatch)
     );
   }
   if (config.enableAdaptive !== undefined) {
@@ -362,7 +368,7 @@ async function resumeSingleFile(offset: number) {
   }
 
   fallbackTotalBytes = safeOffset;
-  fallbackSequence = Math.floor(safeOffset / CHUNK_SIZE_MAX);
+  fallbackSequence = Math.floor(safeOffset / CHUNK_SIZE_INITIAL);
 
   triggerPrefetch();
   self.postMessage({ type: 'resume-ready', payload: { offset: safeOffset } });
@@ -563,7 +569,7 @@ function triggerPrefetch() {
 async function prefetchBatch(): Promise<void> {
   const batchSize = adaptiveConfig.enableAdaptive
     ? adaptiveConfig.prefetchBatch
-    : PREFETCH_BATCH;
+    : BATCH_SIZE_INITIAL;
   for (
     let i = 0;
     i < batchSize && isTransferActive && !state.isCompleted;
@@ -628,7 +634,7 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
 
   const currentChunkSize = adaptiveConfig.enableAdaptive
     ? adaptiveConfig.chunkSize
-    : CHUNK_SIZE_MAX;
+    : CHUNK_SIZE_INITIAL;
 
   try {
     for (;;) {
@@ -705,7 +711,7 @@ async function createMultiFileChunk(): Promise<ArrayBuffer | null> {
 
   const currentChunkSize = adaptiveConfig.enableAdaptive
     ? adaptiveConfig.chunkSize
-    : CHUNK_SIZE_MAX;
+    : CHUNK_SIZE_INITIAL;
 
   try {
     for (;;) {
@@ -798,7 +804,7 @@ async function createZipChunk(): Promise<ArrayBuffer | null> {
 
   const targetChunkSize = adaptiveConfig.enableAdaptive
     ? adaptiveConfig.chunkSize
-    : CHUNK_SIZE_MAX;
+    : CHUNK_SIZE_INITIAL;
 
   if (zipBuffer && zipBuffer.length >= targetChunkSize) {
     const chunkData = zipBuffer.slice(0, targetChunkSize);

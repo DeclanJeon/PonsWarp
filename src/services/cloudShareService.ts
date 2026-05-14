@@ -10,7 +10,37 @@ export interface CloudUploadTarget {
   name: string;
   path: string;
   size: number;
+  uploadUrl?: string;
+  multipart?: CloudMultipartUploadTarget;
+}
+
+export interface CloudMultipartUploadTarget {
+  uploadId: string;
+  partSize: number;
+  parts: CloudMultipartUploadPartTarget[];
+}
+
+export interface CloudMultipartUploadPartTarget {
+  partNumber: number;
+  offset: number;
+  size: number;
   uploadUrl: string;
+}
+
+export interface CompletedMultipartUpload {
+  fileId: string;
+  uploadId: string;
+  parts: CompletedMultipartUploadPart[];
+}
+
+export interface CompletedMultipartUploadPart {
+  partNumber: number;
+  eTag: string;
+}
+
+export interface AbortMultipartUpload {
+  fileId: string;
+  uploadId: string;
 }
 
 export interface CreateCloudShareResponse {
@@ -175,18 +205,37 @@ export const captureBillingCheckout = async (
 
 export const completeCloudShare = async (
   shareId: string,
-  uploadedFileIds: string[]
+  uploadedFileIds: string[],
+  multipartUploads: CompletedMultipartUpload[] = []
 ): Promise<PublicCloudShareResponse> => {
   const response = await fetch(
     apiPath(`/api/cloud-share/${encodeURIComponent(shareId)}/complete`),
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadedFileIds }),
+      body: JSON.stringify({ uploadedFileIds, multipartUploads }),
     }
   );
 
   return readJsonResponse<PublicCloudShareResponse>(response);
+};
+
+export const abortCloudShareUploads = async (
+  shareId: string,
+  multipartUploads: AbortMultipartUpload[]
+): Promise<void> => {
+  if (multipartUploads.length === 0) return;
+
+  const response = await fetch(
+    apiPath(`/api/cloud-share/${encodeURIComponent(shareId)}/abort`),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ multipartUploads }),
+    }
+  );
+
+  await readJsonResponse<{ ok: boolean }>(response);
 };
 
 export const getCloudShare = async (
@@ -223,9 +272,123 @@ export const getCloudDownloadUrl = (
   return `${path}?${params.toString()}`;
 };
 
-export const uploadCloudFile = (
-  uploadUrl: string,
+export const uploadCloudFile = async (
+  target: CloudUploadTarget,
   file: File,
+  onProgress: (progress: UploadProgress) => void
+): Promise<CompletedMultipartUpload | undefined> => {
+  if (target.multipart) {
+    const completedParts: CompletedMultipartUploadPart[] = [];
+    const partLoaded = new Map<number, number>();
+    let nextPartIndex = 0;
+
+    const emitMultipartProgress = () => {
+      const loaded = Array.from(partLoaded.values()).reduce(
+        (total, value) => total + value,
+        0
+      );
+      onProgress({ loaded, total: file.size });
+    };
+
+    const uploadPartWorker = async () => {
+      for (;;) {
+        const part = target.multipart?.parts[nextPartIndex];
+        nextPartIndex += 1;
+        if (!part) return;
+
+        const blob = file.slice(part.offset, part.offset + part.size);
+        const eTag = await uploadBlobPartWithRetry(
+          part.uploadUrl,
+          blob,
+          progressEvent => {
+            partLoaded.set(part.partNumber, progressEvent.loaded);
+            emitMultipartProgress();
+          },
+          () => {
+            partLoaded.set(part.partNumber, 0);
+            emitMultipartProgress();
+          }
+        );
+        partLoaded.set(part.partNumber, part.size);
+        emitMultipartProgress();
+        completedParts.push({ partNumber: part.partNumber, eTag });
+      }
+    };
+
+    const partWorkerCount = Math.min(
+      MULTIPART_PART_CONCURRENCY,
+      target.multipart.parts.length
+    );
+    await Promise.all(
+      Array.from({ length: partWorkerCount }, uploadPartWorker)
+    );
+
+    completedParts.sort((left, right) => left.partNumber - right.partNumber);
+
+    if (completedParts.length !== target.multipart.parts.length) {
+      throw new Error('Multipart upload did not complete every part');
+    }
+
+    return {
+      fileId: target.id,
+      uploadId: target.multipart.uploadId,
+      parts: completedParts,
+    };
+  }
+
+  if (!target.uploadUrl) {
+    throw new Error('Cloud upload target is missing an upload URL');
+  }
+  await uploadBlobWithRetry(target.uploadUrl, file, onProgress);
+  return undefined;
+};
+
+const MULTIPART_PART_CONCURRENCY = 3;
+const UPLOAD_MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 600;
+
+const wait = (delayMs: number) =>
+  new Promise(resolve => setTimeout(resolve, delayMs));
+
+const uploadBlobWithRetry = async (
+  uploadUrl: string,
+  blob: Blob,
+  onProgress: (progress: UploadProgress) => void
+): Promise<void> => {
+  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
+    try {
+      await uploadBlob(uploadUrl, blob, onProgress);
+      return;
+    } catch (error) {
+      if (attempt === UPLOAD_MAX_ATTEMPTS) throw error;
+      onProgress({ loaded: 0, total: blob.size });
+      await wait(RETRY_BASE_DELAY_MS * attempt);
+    }
+  }
+};
+
+const uploadBlobPartWithRetry = async (
+  uploadUrl: string,
+  blob: Blob,
+  onProgress: (progress: UploadProgress) => void,
+  onRetry: () => void
+): Promise<string> => {
+  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await uploadBlobPart(uploadUrl, blob, onProgress);
+    } catch (error) {
+      if (attempt === UPLOAD_MAX_ATTEMPTS) throw error;
+      onRetry();
+      await wait(RETRY_BASE_DELAY_MS * attempt);
+    }
+  }
+
+  throw new Error('Multipart upload failed');
+};
+
+const uploadBlob = (
+  uploadUrl: string,
+  blob: Blob,
   onProgress: (progress: UploadProgress) => void
 ): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -239,7 +402,7 @@ export const uploadCloudFile = (
 
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress({ loaded: file.size, total: file.size });
+        onProgress({ loaded: blob.size, total: blob.size });
         resolve();
         return;
       }
@@ -248,7 +411,44 @@ export const uploadCloudFile = (
 
     xhr.onerror = () => reject(new Error('Upload failed'));
     xhr.onabort = () => reject(new Error('Upload cancelled'));
-    xhr.send(file);
+    xhr.send(blob);
+  });
+
+const uploadBlobPart = (
+  uploadUrl: string,
+  blob: Blob,
+  onProgress: (progress: UploadProgress) => void
+): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+
+    xhr.upload.onprogress = event => {
+      if (!event.lengthComputable) return;
+      onProgress({ loaded: event.loaded, total: event.total });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const eTag = xhr.getResponseHeader('ETag');
+        if (!eTag) {
+          reject(
+            new Error(
+              'Multipart upload part completed but ETag was not exposed by storage CORS'
+            )
+          );
+          return;
+        }
+        onProgress({ loaded: blob.size, total: blob.size });
+        resolve(eTag);
+        return;
+      }
+      reject(new Error(`Upload failed with HTTP ${xhr.status}`));
+    };
+
+    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.onabort = () => reject(new Error('Upload cancelled'));
+    xhr.send(blob);
   });
 
 const readJsonResponse = async <T>(response: Response): Promise<T> => {

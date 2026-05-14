@@ -27,7 +27,8 @@ import { TransferManifest } from '../types/types';
 import { getErrorMessage, getErrorName } from '../utils/errors';
 import {
   estimateRemainingSeconds,
-  formatDuration,
+  formatRemainingTime,
+  getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
 
 type ReceiverProgressPayload = {
@@ -529,6 +530,11 @@ const ReceiverView: React.FC = () => {
     progressData.totalBytes,
     progressData.speed
   );
+  const transferFeedbackLabel = getTransferFeedbackLabel(
+    progressData.bytesTransferred,
+    progressData.totalBytes,
+    progressData.speed
+  );
 
   // Common Styles
   const glassPanelClass =
@@ -763,6 +769,9 @@ const ReceiverView: React.FC = () => {
                 <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">
                   INCOMING STREAM
                 </span>
+                <span className="text-[10px] text-cyan-100/60 font-mono mt-2 px-4 text-center">
+                  {transferFeedbackLabel}
+                </span>
               </div>
             </div>
 
@@ -789,7 +798,7 @@ const ReceiverView: React.FC = () => {
                   Time Left
                 </p>
                 <p className="font-mono text-xl text-white">
-                  {formatDuration(estimatedSecondsRemaining)}
+                  {formatRemainingTime(estimatedSecondsRemaining)}
                 </p>
               </div>
             </div>
@@ -851,7 +860,7 @@ const ReceiverView: React.FC = () => {
                 onClick={() => window.location.reload()}
                 className="bg-white/10 border border-white/20 text-white px-6 py-3 rounded-full hover:bg-white/20 flex items-center gap-2 mx-auto transition-all"
               >
-                <RefreshCw size={18} /> Retry
+                <RefreshCw size={18} /> Retry Transfer
               </button>
             </div>
           </motion.div>

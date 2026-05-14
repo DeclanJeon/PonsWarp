@@ -17,6 +17,7 @@ import {
 } from '../services/cloudShareService';
 import { getErrorMessage } from '../utils/errors';
 import { formatBytes } from '../utils/fileUtils';
+import { formatRemainingTime } from '../utils/transferEstimate';
 
 interface CloudDownloadViewProps {
   shareId: string;
@@ -218,7 +219,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
 
               <div className="text-left md:text-right text-xs font-mono text-gray-500">
                 <p>Expires {expiryLabel}</p>
-                <p>{Math.floor(share.secondsUntilExpiry / 3600)}h remaining</p>
+                <p>{formatRemainingTime(share.secondsUntilExpiry)}</p>
               </div>
             </div>
 

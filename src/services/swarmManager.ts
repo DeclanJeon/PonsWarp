@@ -32,6 +32,7 @@ import {
   BATCH_SIZE_INITIAL,
 } from '../utils/constants';
 import { bytesToBase64, CryptoService } from './cryptoService';
+import { networkController, AdaptiveParams } from './networkAdaptiveController';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -135,6 +136,7 @@ export class SwarmManager {
 
   // Keep-alive 타이머
   private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
+  private adaptiveStatsInterval: ReturnType<typeof setInterval> | null = null;
 
   // 🚀 [Flow Control] 원격 피어의 일시정지 상태 추적
   private pausedPeers: Set<string> = new Set();
@@ -152,6 +154,7 @@ export class SwarmManager {
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
   private cryptoSessionAnnouncedPeers: Set<string> = new Set();
+  private lastAdaptiveConfig: AdaptiveParams | null = null;
 
   // Bound Handlers to allow removal
   private boundHandlePeerJoined = this.handlePeerJoined.bind(this);
@@ -691,8 +694,95 @@ export class SwarmManager {
   private handleDrain(_peerId: string): void {
     // 글로벌 backpressure 재평가
     if (this.isTransferring && this.canRequestMoreChunks()) {
+      this.updateAdaptiveTransferConfig();
       this.requestMoreChunks();
     }
+  }
+
+  private getPeerStats(
+    peer: SinglePeerConnection
+  ): Promise<RTCStatsReport> | null {
+    const simplePeer = peer.pc as { _pc?: RTCPeerConnection } | null;
+
+    const nativePeer = simplePeer?._pc;
+    if (!nativePeer || typeof nativePeer.getStats !== 'function') {
+      return null;
+    }
+
+    return nativePeer.getStats();
+  }
+
+  private updateAdaptiveTransferConfig(): void {
+    if (!this.worker || !this.isTransferring) return;
+
+    networkController.updateBufferState(this.getHighestBufferedAmount());
+
+    const nextConfig = networkController.getAdaptiveParams();
+    this.currentBatchSize = nextConfig.batchSize;
+
+    if (
+      this.lastAdaptiveConfig &&
+      this.lastAdaptiveConfig.batchSize === nextConfig.batchSize &&
+      this.lastAdaptiveConfig.chunkSize === nextConfig.chunkSize
+    ) {
+      return;
+    }
+
+    this.lastAdaptiveConfig = nextConfig;
+    this.worker.postMessage({
+      type: 'update-adaptive-config',
+      payload: {
+        chunkSize: nextConfig.chunkSize,
+        prefetchBatch: nextConfig.batchSize,
+        enableAdaptive: true,
+      },
+    });
+  }
+
+  private async sampleAdaptiveStats(): Promise<void> {
+    if (!this.isTransferring) return;
+
+    const activePeers = [...this.currentTransferPeers]
+      .map(peerId => this.peers.get(peerId))
+      .filter((peer): peer is SinglePeerConnection => !!peer && peer.connected);
+
+    const statsRequests = activePeers
+      .map(peer => this.getPeerStats(peer))
+      .filter((request): request is Promise<RTCStatsReport> => !!request);
+
+    const statsResults = await Promise.allSettled(statsRequests);
+    for (const result of statsResults) {
+      if (result.status === 'fulfilled') {
+        networkController.updateFromWebRTCStats(result.value);
+      }
+    }
+
+    this.updateAdaptiveTransferConfig();
+  }
+
+  private startAdaptiveControl(): void {
+    this.stopAdaptiveControl();
+    networkController.reset();
+    networkController.start();
+    this.lastAdaptiveConfig = null;
+    this.currentBatchSize = networkController.getAdaptiveParams().batchSize;
+    this.updateAdaptiveTransferConfig();
+
+    this.adaptiveStatsInterval = setInterval(() => {
+      this.sampleAdaptiveStats().catch(error => {
+        logDebug('[SwarmManager]', 'Adaptive stats sample skipped:', error);
+      });
+    }, 500);
+  }
+
+  private stopAdaptiveControl(): void {
+    if (this.adaptiveStatsInterval) {
+      clearInterval(this.adaptiveStatsInterval);
+      this.adaptiveStatsInterval = null;
+    }
+    this.lastAdaptiveConfig = null;
+    networkController.reset();
+    this.currentBatchSize = BATCH_SIZE_INITIAL;
   }
 
   // ======================= 데이터 처리 =======================
@@ -1582,6 +1672,7 @@ export class SwarmManager {
         );
 
         const result = this.broadcastChunk(chunk);
+        networkController.recordSend(chunk.byteLength);
         this.totalBytesSent += chunk.byteLength;
 
         debugLog('[SwarmManager] 📊 [DEBUG] Chunk broadcast result:', {
@@ -1602,6 +1693,7 @@ export class SwarmManager {
 
       // 진행률 방출
       this.emitProgress(progressData);
+      this.updateAdaptiveTransferConfig();
 
       // Backpressure 체크 후 다음 배치 요청
       const canRequestMore = this.canRequestMoreChunks();
@@ -1648,6 +1740,7 @@ export class SwarmManager {
     this.transferStartTime = performance.now();
     this.workerInitialized = false;
     this.pendingTransferStart = true;
+    this.startAdaptiveControl();
 
     // 🚀 [대기열] Worker 재초기화 (새 전송 시작)
     if (this.worker) {
@@ -1703,6 +1796,7 @@ export class SwarmManager {
     }
 
     this.isProcessingBatch = true;
+    this.updateAdaptiveTransferConfig();
     this.worker.postMessage({
       type: 'process-batch',
       payload: { count: this.currentBatchSize },
@@ -1711,6 +1805,7 @@ export class SwarmManager {
 
   private async finishTransfer(): Promise<void> {
     this.isTransferring = false;
+    this.stopAdaptiveControl();
 
     // 버퍼가 비워질 때까지 대기
     await this.waitForBufferZero();
@@ -1855,6 +1950,7 @@ export class SwarmManager {
     this.isTransferring = false;
     this.isProcessingBatch = false;
     this.roomId = null;
+    this.stopAdaptiveControl();
 
     // Keep-alive 정리
     this.stopKeepAlive();

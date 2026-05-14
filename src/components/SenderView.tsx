@@ -31,7 +31,8 @@ import { TransferManifest } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
 import {
   estimateRemainingSeconds,
-  formatDuration,
+  formatRemainingTime,
+  getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
 
 interface SenderViewProps {
@@ -83,6 +84,11 @@ const SenderView: React.FC<SenderViewProps> = () => {
     totalBytes: 0,
   });
   const estimatedSecondsRemaining = estimateRemainingSeconds(
+    progressData.bytesTransferred,
+    progressData.totalBytes,
+    progressData.speed
+  );
+  const transferFeedbackLabel = getTransferFeedbackLabel(
     progressData.bytesTransferred,
     progressData.totalBytes,
     progressData.speed
@@ -618,6 +624,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 {progressData.progress.toFixed(1)}
                 <span className="text-2xl text-gray-500">%</span>
               </p>
+              <p className="mt-3 text-sm text-cyan-100/70 font-mono">
+                {transferFeedbackLabel}
+              </p>
             </div>
 
             {/* Peer Status Badge */}
@@ -673,7 +682,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
                   Time Left
                 </p>
                 <p className="font-mono text-white text-base md:text-lg">
-                  {formatDuration(estimatedSecondsRemaining)}
+                  {formatRemainingTime(estimatedSecondsRemaining)}
                 </p>
               </div>
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">

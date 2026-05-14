@@ -10,7 +10,8 @@
 
 import { logInfo, logDebug } from '../utils/logger';
 import {
-  CHUNK_SIZE_MAX,
+  CHUNK_SIZE_INITIAL,
+  BATCH_SIZE_INITIAL,
   BATCH_SIZE_MIN,
   BATCH_SIZE_MAX,
   MAX_BUFFERED_AMOUNT,
@@ -44,8 +45,8 @@ export class NetworkAdaptiveController {
   };
 
   private adaptiveParams: AdaptiveParams = {
-    batchSize: 32, // 초기값
-    chunkSize: CHUNK_SIZE_MAX,
+    batchSize: BATCH_SIZE_INITIAL,
+    chunkSize: CHUNK_SIZE_INITIAL,
   };
 
   // 통계 계산용
@@ -192,8 +193,8 @@ export class NetworkAdaptiveController {
       rttVar: 0,
     };
     this.adaptiveParams = {
-      batchSize: 32,
-      chunkSize: CHUNK_SIZE_MAX,
+      batchSize: BATCH_SIZE_INITIAL,
+      chunkSize: CHUNK_SIZE_INITIAL,
     };
     this.rttSamples = [];
     this.throughputSamples = [];
