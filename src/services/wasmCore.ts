@@ -1,3 +1,4 @@
+import { debugLog } from '../utils/logger';
 /**
  * WASM Core Module Wrapper
  * Rust로 작성된 핵심 연산 모듈을 로드하고 관리합니다.
@@ -45,7 +46,7 @@ export async function initWasmCore(): Promise<void> {
   initPromise = (async () => {
     await init();
     wasmInitialized = true;
-    console.log('[WASM] pons-core-wasm initialized (with E2E crypto)');
+    debugLog('[WASM] pons-core-wasm initialized (with E2E crypto)');
   })();
 
   await initPromise;

@@ -1,8 +1,9 @@
+import { debugLog } from '../utils/logger';
 /* 🪲 [DEBUG] ReceiverView UI/UX 개선 시작 */
-console.log('[ReceiverView] 🪲 [DEBUG] UI/UX Enhancement Started:');
-console.log('[ReceiverView] 🪲 [DEBUG] - Applying HUD-style circular progress');
-console.log('[ReceiverView] 🪲 [DEBUG] - Implementing mobile-optimized input');
-console.log('[ReceiverView] 🪲 [DEBUG] - Adding focal point principles');
+debugLog('[ReceiverView] 🪲 [DEBUG] UI/UX Enhancement Started:');
+debugLog('[ReceiverView] 🪲 [DEBUG] - Applying HUD-style circular progress');
+debugLog('[ReceiverView] 🪲 [DEBUG] - Implementing mobile-optimized input');
+debugLog('[ReceiverView] 🪲 [DEBUG] - Adding focal point principles');
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -22,6 +23,19 @@ import { DirectFileWriter } from '../services/directFileWriter';
 import { formatBytes } from '../utils/fileUtils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
+import { TransferManifest } from '../types/types';
+import { getErrorMessage, getErrorName } from '../utils/errors';
+
+type ReceiverProgressPayload = {
+  progress?: number;
+  speed?: number;
+  bytesTransferred?: number;
+  totalBytes?: number;
+};
+
+type ReceiverCompletePayload = {
+  actualSize?: number;
+};
 
 const ReceiverView: React.FC = () => {
   // 전역 상태 사용
@@ -47,6 +61,10 @@ const ReceiverView: React.FC = () => {
 
   // 🚨 [추가] 송신자 응답 대기 상태 변수
   const [isWaitingForSender, setIsWaitingForSender] = useState(false);
+  const isWaitingForSenderRef = useRef(isWaitingForSender);
+  useEffect(() => {
+    isWaitingForSenderRef.current = isWaitingForSender;
+  }, [isWaitingForSender]);
 
   // 🚀 [Multi-Receiver] 대기열 상태
   const [queuePosition, setQueuePosition] = useState<number>(0);
@@ -68,7 +86,7 @@ const ReceiverView: React.FC = () => {
 
   // 🚀 [핵심] 이벤트 핸들러들을 useCallback으로 메모이제이션하여 안정성 확보
   const handleMetadata = useCallback(
-    (m: any) => {
+    (m: TransferManifest) => {
       // 🚨 [수정] 메타데이터 수신 시 타임아웃 해제 및 에러 상태 초기화
       if (connectionTimeoutRef.current) {
         clearTimeout(connectionTimeoutRef.current);
@@ -81,7 +99,7 @@ const ReceiverView: React.FC = () => {
       // 대기열에서 전송이 시작된 것이므로 RECEIVING으로 전환
       const currentStatus = statusRef.current;
       if (currentStatus === 'QUEUED') {
-        console.log(
+        debugLog(
           '[ReceiverView] Manifest received while QUEUED - transfer starting'
         );
         setQueuePosition(0);
@@ -104,7 +122,7 @@ const ReceiverView: React.FC = () => {
         setStatus('WAITING');
       }
     },
-    [setStatus, updateProgress]
+    [setManifest, setStatus, updateProgress]
   );
 
   const handleRemoteStarted = useCallback(() => {
@@ -117,7 +135,7 @@ const ReceiverView: React.FC = () => {
   }, []);
 
   const handleProgress = useCallback(
-    (p: any) => {
+    (p: ReceiverProgressPayload | number) => {
       // 1. 대기 상태 해제 (데이터가 들어오기 시작함)
       setIsWaitingForSender(false);
 
@@ -128,7 +146,7 @@ const ReceiverView: React.FC = () => {
 
       // 3. 🚀 [성능 최적화] UI 업데이트 스로틀링
       const now = Date.now();
-      const val = typeof p === 'object' ? p.progress : p;
+      const val = typeof p === 'object' ? (p.progress ?? 0) : p;
 
       // 100ms가 안 지났고, 완료(100%)가 아니면 업데이트 스킵
       if (
@@ -154,133 +172,148 @@ const ReceiverView: React.FC = () => {
     [status, setStatus, updateProgress]
   );
 
-  const handleComplete = useCallback((payload: any) => {
-    console.log('[ReceiverView] Transfer Complete.', payload);
-    if (payload && payload.actualSize) {
-      setActualSize(payload.actualSize);
-    }
-    setStatus('DONE');
-  }, []);
+  const handleComplete = useCallback(
+    (payload: ReceiverCompletePayload) => {
+      debugLog('[ReceiverView] Transfer Complete.', payload);
+      if (payload.actualSize) {
+        setActualSize(payload.actualSize);
+      }
+      setStatus('DONE');
+    },
+    [setStatus]
+  );
 
   // 🚨 [핵심 수정] room-full 이벤트 핸들러
-  const handleRoomFull = useCallback((msg: string) => {
-    console.warn('[ReceiverView] Room full:', msg);
-    if (connectionTimeoutRef.current)
-      clearTimeout(connectionTimeoutRef.current);
-    setErrorMsg(msg);
-    setStatus('ROOM_FULL');
-  }, []);
-
-  const handleError = useCallback((e: any) => {
-    console.error('[ReceiverView] Error:', e);
-    if (connectionTimeoutRef.current)
-      clearTimeout(connectionTimeoutRef.current);
-    setIsWaitingForSender(false);
-
-    const msg = typeof e === 'string' ? e : 'Unknown Error';
-    if (msg.includes('Room full')) {
-      // 🚨 [핵심 수정] 방이 꽉 찼을 때 ERROR가 아닌 ROOM_FULL 상태로 전환
-      setErrorMsg(
-        'Room is currently occupied. Please wait for the current transfer to complete.'
-      );
-      setStatus('ROOM_FULL');
-      return;
-    }
-    const currentStatus = statusRef.current;
-    if (msg.includes('closed')) {
-      if (currentStatus === 'DONE' || currentStatus === 'IDLE') {
-        return;
-      }
-      setErrorMsg('Connection closed before the file transfer completed.');
-      setStatus('ERROR');
-      return;
-    }
-
-    setErrorMsg(msg);
-    setStatus('ERROR');
-  }, []);
-
-  const handleJoin = useCallback(async (id: string) => {
-    if (!id || id.length < 6) return;
-
-    setStatus('CONNECTING');
-    setErrorMsg('');
-
-    if (connectionTimeoutRef.current)
-      clearTimeout(connectionTimeoutRef.current);
-
-    // 🚨 [핵심 수정] 연결 타임아웃 로직 개선
-    connectionTimeoutRef.current = setTimeout(() => {
-      const currentStatus = statusRef.current;
-      console.log(
-        '[ReceiverView] Timeout check. Current status:',
-        currentStatus
-      );
-
-      // 🚨 [수정] 메타데이터를 받은 경우(정상 연결) 타임아웃 무시
-      if (
-        currentStatus === 'WAITING' ||
-        currentStatus === 'RECEIVING' ||
-        currentStatus === 'DONE'
-      ) {
-        console.log('[ReceiverView] Timeout ignored - already connected');
-        return;
-      }
-
-      // 🚨 [수정] 아직 CONNECTING 상태일 때만 타임아웃 처리
-      if (currentStatus === 'CONNECTING') {
-        console.warn(
-          '[ReceiverView] Connection timed out. Status:',
-          currentStatus
-        );
-        setErrorMsg('Connection timed out. Sender may be offline.');
-        setStatus('ERROR');
-        transferService.cleanup();
-      }
-    }, CONNECTION_TIMEOUT_MS);
-
-    try {
-      await transferService.initReceiver(id.toUpperCase());
-    } catch (e) {
+  const handleRoomFull = useCallback(
+    (msg: string) => {
+      console.warn('[ReceiverView] Room full:', msg);
       if (connectionTimeoutRef.current)
         clearTimeout(connectionTimeoutRef.current);
-      console.error('[ReceiverView] Init failed:', e);
-      setErrorMsg('Failed to initialize connection');
+      setErrorMsg(msg);
+      setStatus('ROOM_FULL');
+    },
+    [setStatus]
+  );
+
+  const handleError = useCallback(
+    (e: unknown) => {
+      console.error('[ReceiverView] Error:', e);
+      if (connectionTimeoutRef.current)
+        clearTimeout(connectionTimeoutRef.current);
+      setIsWaitingForSender(false);
+
+      const msg = getErrorMessage(e, 'Unknown Error');
+      if (msg.includes('Room full')) {
+        // 🚨 [핵심 수정] 방이 꽉 찼을 때 ERROR가 아닌 ROOM_FULL 상태로 전환
+        setErrorMsg(
+          'Room is currently occupied. Please wait for the current transfer to complete.'
+        );
+        setStatus('ROOM_FULL');
+        return;
+      }
+      const currentStatus = statusRef.current;
+      if (msg.includes('closed')) {
+        if (currentStatus === 'DONE' || currentStatus === 'IDLE') {
+          return;
+        }
+        setErrorMsg('Connection closed before the file transfer completed.');
+        setStatus('ERROR');
+        return;
+      }
+
+      setErrorMsg(msg);
       setStatus('ERROR');
-    }
-  }, []);
+    },
+    [setStatus]
+  );
+
+  const handleJoin = useCallback(
+    async (id: string) => {
+      if (!id || id.length < 6) return;
+
+      setStatus('CONNECTING');
+      setErrorMsg('');
+
+      if (connectionTimeoutRef.current)
+        clearTimeout(connectionTimeoutRef.current);
+
+      // 🚨 [핵심 수정] 연결 타임아웃 로직 개선
+      connectionTimeoutRef.current = setTimeout(() => {
+        const currentStatus = statusRef.current;
+        debugLog(
+          '[ReceiverView] Timeout check. Current status:',
+          currentStatus
+        );
+
+        // 🚨 [수정] 메타데이터를 받은 경우(정상 연결) 타임아웃 무시
+        if (
+          currentStatus === 'WAITING' ||
+          currentStatus === 'RECEIVING' ||
+          currentStatus === 'DONE'
+        ) {
+          debugLog('[ReceiverView] Timeout ignored - already connected');
+          return;
+        }
+
+        // 🚨 [수정] 아직 CONNECTING 상태일 때만 타임아웃 처리
+        if (currentStatus === 'CONNECTING') {
+          console.warn(
+            '[ReceiverView] Connection timed out. Status:',
+            currentStatus
+          );
+          setErrorMsg('Connection timed out. Sender may be offline.');
+          setStatus('ERROR');
+          transferService.cleanup();
+        }
+      }, CONNECTION_TIMEOUT_MS);
+
+      try {
+        await transferService.initReceiver(id.toUpperCase());
+      } catch (e) {
+        if (connectionTimeoutRef.current)
+          clearTimeout(connectionTimeoutRef.current);
+        console.error('[ReceiverView] Init failed:', e);
+        setErrorMsg('Failed to initialize connection');
+        setStatus('ERROR');
+      }
+    },
+    [setStatus]
+  );
 
   // 🚨 [핵심 수정] 중복 초기화 방지를 위한 Ref
   const isInitializedRef = useRef(false);
 
   // 🚀 [Multi-Receiver] 전송 놓침 핸들러
-  const handleTransferMissed = useCallback((msg: string) => {
-    console.warn('[ReceiverView] Transfer missed:', msg);
-    if (connectionTimeoutRef.current)
-      clearTimeout(connectionTimeoutRef.current);
-    setIsWaitingForSender(false);
-    setErrorMsg(
-      'Transfer has already started. Please wait for it to complete or refresh to join the next transfer.'
-    );
-    setStatus('ERROR');
-  }, []);
+  const handleTransferMissed = useCallback(
+    (msg: string) => {
+      console.warn('[ReceiverView] Transfer missed:', msg);
+      if (connectionTimeoutRef.current)
+        clearTimeout(connectionTimeoutRef.current);
+      setIsWaitingForSender(false);
+      setErrorMsg(
+        'Transfer has already started. Please wait for it to complete or refresh to join the next transfer.'
+      );
+      setStatus('ERROR');
+    },
+    [setStatus]
+  );
 
   // 🚀 [Multi-Receiver] 대기열 추가 핸들러
   const handleQueued = useCallback(
     (data: { message: string; position: number }) => {
-      console.log('[ReceiverView] Added to queue:', data);
+      debugLog('[ReceiverView] Added to queue:', data);
       if (connectionTimeoutRef.current)
         clearTimeout(connectionTimeoutRef.current);
       setQueuePosition(data.position);
       setQueueMessage(data.message);
       setStatus('QUEUED');
     },
-    []
+    [setStatus]
   );
 
   // 🚀 [Multi-Receiver] 전송 시작 핸들러 (대기열에서 나옴)
   const handleTransferStarting = useCallback(() => {
-    console.log('[ReceiverView] Transfer starting from queue');
+    debugLog('[ReceiverView] Transfer starting from queue');
     // 대기열 상태 초기화
     setQueuePosition(0);
     setQueueMessage('');
@@ -302,17 +335,20 @@ const ReceiverView: React.FC = () => {
   }, [manifest, updateProgress, setStatus]);
 
   // 🚀 [Multi-Receiver] 다운로드 가능 알림 핸들러
-  const handleReadyForDownload = useCallback((data: { message: string }) => {
-    console.log('[ReceiverView] Ready for download:', data);
-    // 이미 WAITING 상태면 무시
-    if (statusRef.current === 'WAITING') return;
-    // QUEUED 상태에서 WAITING으로 전환
-    if (statusRef.current === 'QUEUED') {
-      setStatus('WAITING');
-      setQueuePosition(0);
-      setQueueMessage('');
-    }
-  }, []);
+  const handleReadyForDownload = useCallback(
+    (data: { message: string }) => {
+      debugLog('[ReceiverView] Ready for download:', data);
+      // 이미 WAITING 상태면 무시
+      if (statusRef.current === 'WAITING') return;
+      // QUEUED 상태에서 WAITING으로 전환
+      if (statusRef.current === 'QUEUED') {
+        setStatus('WAITING');
+        setQueuePosition(0);
+        setQueueMessage('');
+      }
+    },
+    [setStatus]
+  );
 
   const handleReconnecting = useCallback(() => {
     setIsWaitingForSender(true);
@@ -396,7 +432,7 @@ const ReceiverView: React.FC = () => {
       // 약간의 딜레이를 주어 StrictMode의 재마운트를 감지
       setTimeout(() => {
         if (!isMountedRef.current) {
-          console.log('[ReceiverView] Component unmounted, cleaning up...');
+          debugLog('[ReceiverView] Component unmounted, cleaning up...');
           transferService.cleanup();
         }
       }, 100);
@@ -423,10 +459,10 @@ const ReceiverView: React.FC = () => {
 
       // DirectFileWriter 사용 (File System Access API 또는 StreamSaver)
       // 브라우저 저장소 quota 제한 없이 무제한 파일 크기 지원
-      console.log(
+      debugLog(
         '[ReceiverView] Using DirectFileWriter (no storage quota limit)'
       );
-      console.log(
+      debugLog(
         '[ReceiverView] Manifest:',
         manifest.totalFiles,
         'files,',
@@ -440,13 +476,16 @@ const ReceiverView: React.FC = () => {
       transferService.setWriter(writer);
 
       // 🚨 [핵심] 수신 시작 - 이 함수가 완료되어야 TRANSFER_READY가 전송됨
-      console.log('[ReceiverView] Starting receiver initialization...');
+      debugLog('[ReceiverView] Starting receiver initialization...');
       await transferService.startReceiving(manifest);
-      console.log('[ReceiverView] ✅ Receiver initialization complete');
+      debugLog('[ReceiverView] ✅ Receiver initialization complete');
 
       // 다운로드 시작 후 새로운 타임아웃 설정 (송신자 응답 대기)
       connectionTimeoutRef.current = setTimeout(() => {
-        if (statusRef.current === 'RECEIVING' && isWaitingForSender) {
+        if (
+          statusRef.current === 'RECEIVING' &&
+          isWaitingForSenderRef.current
+        ) {
           console.warn(
             '[ReceiverView] Download start timeout - no response from sender'
           );
@@ -456,17 +495,17 @@ const ReceiverView: React.FC = () => {
           transferService.cleanup();
         }
       }, 10000); // 10초 타임아웃
-    } catch (e: any) {
+    } catch (e) {
       console.error('[ReceiverView] startDirectDownload error:', e);
 
-      if (e.name === 'AbortError') {
-        console.log('[ReceiverView] User cancelled file selection');
+      if (getErrorName(e) === 'AbortError') {
+        debugLog('[ReceiverView] User cancelled file selection');
         setIsWaitingForSender(false);
         setStatus('WAITING');
         return;
       }
 
-      const errorMessage = e.message || String(e);
+      const errorMessage = getErrorMessage(e, String(e));
       console.error(
         '[ReceiverView] Download initialization failed:',
         errorMessage
@@ -475,7 +514,7 @@ const ReceiverView: React.FC = () => {
       setStatus('ERROR');
       setIsWaitingForSender(false);
     }
-  }, [manifest]);
+  }, [manifest, setStatus]);
 
   // Progress Calculation
   const safeProgress =

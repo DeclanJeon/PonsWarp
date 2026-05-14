@@ -1,10 +1,22 @@
+import { debugLog } from '../utils/logger';
 import { io, Socket } from 'socket.io-client';
 import { SIGNALING_SERVER_URL } from '../utils/constants';
 
 // SIGNALING_SERVER_URL이 undefined일 경우 기본값 사용
 const SERVER_URL = SIGNALING_SERVER_URL || 'http://localhost:5501';
 
-type SignalHandler = (data: any) => void;
+type SignalHandler = (data: unknown) => void;
+type TurnServerStatusResponse = {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+  message?: string;
+};
+type TurnConnectionTestResult = {
+  success?: boolean;
+  error?: string;
+  connectionTime?: number;
+};
 
 // TURN 설정 관련 타입 정의
 export interface TurnCredentials {
@@ -52,17 +64,17 @@ class SignalingService {
 
   public async connect(): Promise<void> {
     if (this.socket?.connected) {
-      console.log('[Signaling] ✅ Already connected:', this.socket.id);
+      debugLog('[Signaling] ✅ Already connected:', this.socket.id);
       return Promise.resolve();
     }
 
     if (this.isConnecting && this.connectionPromise) {
-      console.log('[Signaling] ⏳ Connection already in progress, waiting...');
+      debugLog('[Signaling] ⏳ Connection already in progress, waiting...');
       return this.connectionPromise;
     }
 
     this.isConnecting = true;
-    console.log('[Signaling] 🔌 Initiating connection to:', SERVER_URL);
+    debugLog('[Signaling] 🔌 Initiating connection to:', SERVER_URL);
 
     this.connectionPromise = new Promise((resolve, reject) => {
       // 🚨 [수정] 옵션 최적화: 불필요한 재연결 시도를 줄이고 타임아웃 설정
@@ -77,7 +89,7 @@ class SignalingService {
       this.socket.on('connect', () => {
         this.isConnecting = false;
         this.reconnectAttempts = 0;
-        console.log(
+        debugLog(
           '✅ [Signaling] Connected to signaling server:',
           this.socket?.id
         );
@@ -102,20 +114,16 @@ class SignalingService {
 
       this.socket.on('disconnect', reason => {
         this.isConnecting = false;
-        console.log('[Signaling] 🔌 Disconnected:', reason);
+        debugLog('[Signaling] 🔌 Disconnected:', reason);
 
         if (reason === 'io server disconnect') {
-          console.log(
-            '[Signaling] Server disconnected, attempting reconnect...'
-          );
+          debugLog('[Signaling] Server disconnected, attempting reconnect...');
           this.socket?.connect();
         }
       });
 
       this.socket.on('reconnect', attemptNumber => {
-        console.log(
-          `✅ [Signaling] Reconnected after ${attemptNumber} attempts`
-        );
+        debugLog(`✅ [Signaling] Reconnected after ${attemptNumber} attempts`);
         this.reconnectAttempts = 0;
       });
 
@@ -129,37 +137,37 @@ class SignalingService {
 
       // 이벤트 핸들러 등록
       this.socket.on('joined-room', data => {
-        console.log('📢 [Signaling] joined-room:', data);
+        debugLog('📢 [Signaling] joined-room:', data);
         this.emit('joined-room', data);
       });
 
       this.socket.on('room-users', users => {
-        console.log('📢 [Signaling] room-users:', users);
+        debugLog('📢 [Signaling] room-users:', users);
         this.emit('room-users', users);
       });
 
       this.socket.on('peer-joined', data => {
-        console.log('📢 [Signaling] peer-joined:', data);
+        debugLog('📢 [Signaling] peer-joined:', data);
         this.emit('peer-joined', data);
       });
 
       this.socket.on('user-left', data => {
-        console.log('📢 [Signaling] user-left:', data);
+        debugLog('📢 [Signaling] user-left:', data);
         this.emit('user-left', data);
       });
 
       this.socket.on('offer', data => {
-        console.log('📢 [Signaling] offer received from:', data.from);
+        debugLog('📢 [Signaling] offer received from:', data.from);
         this.emit('offer', data);
       });
 
       this.socket.on('answer', data => {
-        console.log('📢 [Signaling] answer received from:', data.from);
+        debugLog('📢 [Signaling] answer received from:', data.from);
         this.emit('answer', data);
       });
 
       this.socket.on('ice-candidate', data => {
-        console.log('📢 [Signaling] ice-candidate from:', data.from);
+        debugLog('📢 [Signaling] ice-candidate from:', data.from);
         this.emit('ice-candidate', data);
       });
 
@@ -174,11 +182,11 @@ class SignalingService {
 
   public async joinRoom(roomId: string): Promise<void> {
     if (!this.socket?.connected) {
-      console.log('[Signaling] Not connected, waiting...');
+      debugLog('[Signaling] Not connected, waiting...');
       await this.connect();
     }
 
-    console.log('[Signaling] 🚪 Joining room:', roomId);
+    debugLog('[Signaling] 🚪 Joining room:', roomId);
     this.socket!.emit('join-room', roomId);
   }
 
@@ -195,7 +203,7 @@ class SignalingService {
       return;
     }
 
-    console.log('[Signaling] 📤 Sending offer to:', target || roomId);
+    debugLog('[Signaling] 📤 Sending offer to:', target || roomId);
     this.socket.emit('offer', { roomId, offer, target });
   }
 
@@ -209,7 +217,7 @@ class SignalingService {
       return;
     }
 
-    console.log('[Signaling] 📤 Sending answer to:', target || roomId);
+    debugLog('[Signaling] 📤 Sending answer to:', target || roomId);
     this.socket.emit('answer', { roomId, answer, target });
   }
 
@@ -223,7 +231,7 @@ class SignalingService {
       return;
     }
 
-    console.log('[Signaling] 📤 Sending ICE candidate to:', target || roomId);
+    debugLog('[Signaling] 📤 Sending ICE candidate to:', target || roomId);
     this.socket.emit('ice-candidate', { roomId, candidate, target });
   }
 
@@ -237,7 +245,7 @@ class SignalingService {
     this.handlers[event] = this.handlers[event].filter(h => h !== handler);
   }
 
-  private emit(event: string, data: any) {
+  private emit(event: string, data: unknown) {
     this.handlers[event]?.forEach(h => h(data));
   }
 
@@ -254,14 +262,14 @@ class SignalingService {
       return;
     }
 
-    console.log('[Signaling] 🚪 Leaving room:', roomId);
+    debugLog('[Signaling] 🚪 Leaving room:', roomId);
     this.socket.emit('leave-room', roomId);
   }
 
   // 🚨 [핵심] 클린업 강화
   public disconnect() {
     if (this.socket) {
-      console.log('[Signaling] Disconnecting...');
+      debugLog('[Signaling] Disconnecting...');
       this.socket.removeAllListeners(); // 모든 리스너 제거 (메모리 누수 방지)
       this.socket.disconnect();
       this.socket = null;
@@ -286,7 +294,7 @@ class SignalingService {
         return;
       }
 
-      console.log('[Signaling] 🔄 Requesting TURN config for room:', roomId);
+      debugLog('[Signaling] 🔄 Requesting TURN config for room:', roomId);
 
       // 타임아웃 설정 (3초) - 네트워크가 느릴 경우를 대비
       const timeout = setTimeout(() => {
@@ -301,7 +309,7 @@ class SignalingService {
           clearTimeout(timeout); // 응답 오면 타임아웃 해제
 
           if (response.success && response.data) {
-            console.log('[Signaling] ✅ TURN config received:', {
+            debugLog('[Signaling] ✅ TURN config received:', {
               roomId,
               iceServerCount: response.data.iceServers.length,
               ttl: response.data.ttl,
@@ -336,17 +344,14 @@ class SignalingService {
         return;
       }
 
-      console.log(
-        '[Signaling] 🔄 Refreshing TURN credentials for room:',
-        roomId
-      );
+      debugLog('[Signaling] 🔄 Refreshing TURN credentials for room:', roomId);
 
       this.socket.emit(
         'refresh-turn-credentials',
         { roomId, currentUsername },
         (response: TurnConfigResponse) => {
           if (response.success) {
-            console.log('[Signaling] ✅ TURN credentials refreshed:', {
+            debugLog('[Signaling] ✅ TURN credentials refreshed:', {
               roomId,
               oldUsername: currentUsername,
               message: response.data?.message,
@@ -364,7 +369,7 @@ class SignalingService {
     });
   }
 
-  public async checkTurnServerStatus(): Promise<any> {
+  public async checkTurnServerStatus(): Promise<TurnServerStatusResponse> {
     return new Promise((resolve, reject) => {
       if (!this.socket?.connected) {
         reject({
@@ -375,27 +380,33 @@ class SignalingService {
         return;
       }
 
-      console.log('[Signaling] 🔄 Checking TURN server status');
+      debugLog('[Signaling] 🔄 Checking TURN server status');
 
-      this.socket.emit('check-turn-server-status', {}, (response: any) => {
-        if (response.success) {
-          console.log(
-            '[Signaling] ✅ TURN server status received:',
-            response.data
-          );
-          resolve(response);
-        } else {
-          console.error(
-            '[Signaling] ❌ TURN server status check failed:',
-            response
-          );
-          reject(response);
+      this.socket.emit(
+        'check-turn-server-status',
+        {},
+        (response: TurnServerStatusResponse) => {
+          if (response.success) {
+            debugLog(
+              '[Signaling] ✅ TURN server status received:',
+              response.data
+            );
+            resolve(response);
+          } else {
+            console.error(
+              '[Signaling] ❌ TURN server status check failed:',
+              response
+            );
+            reject(response);
+          }
         }
-      });
+      );
     });
   }
 
-  public async testTurnConnection(roomId = 'test-room'): Promise<any> {
+  public async testTurnConnection(
+    roomId = 'test-room'
+  ): Promise<TurnServerStatusResponse> {
     return new Promise((resolve, reject) => {
       if (!this.socket?.connected) {
         reject({
@@ -406,14 +417,14 @@ class SignalingService {
         return;
       }
 
-      console.log('[Signaling] 🧪 Testing TURN connection for room:', roomId);
+      debugLog('[Signaling] 🧪 Testing TURN connection for room:', roomId);
 
       this.socket.emit(
         'test-turn-connection',
         { testRoomId: roomId },
-        (response: any) => {
+        (response: TurnServerStatusResponse) => {
           if (response.success) {
-            console.log(
+            debugLog(
               '[Signaling] ✅ TURN connection test initiated:',
               response.data
             );
@@ -431,13 +442,16 @@ class SignalingService {
   }
 
   // TURN 연결 테스트 결과 전송
-  public sendTurnConnectionTestResult(roomId: string, result: any): void {
+  public sendTurnConnectionTestResult(
+    roomId: string,
+    result: TurnConnectionTestResult
+  ): void {
     if (!this.socket?.connected) {
       console.error('[Signaling] Cannot send TURN test result: Not connected');
       return;
     }
 
-    console.log('[Signaling] 📤 Sending TURN connection test result:', {
+    debugLog('[Signaling] 📤 Sending TURN connection test result:', {
       roomId,
       result,
     });
@@ -455,11 +469,11 @@ class SignalingService {
   }
 
   // TURN 관련 이벤트 리스너 등록
-  public onTurnServerStatusUpdate(callback: (data: any) => void): void {
+  public onTurnServerStatusUpdate(callback: SignalHandler): void {
     this.on('turn-server-status-update', callback);
   }
 
-  public onTurnTestResult(callback: (data: any) => void): void {
+  public onTurnTestResult(callback: SignalHandler): void {
     this.on('turn-test-result', callback);
   }
 
@@ -468,7 +482,7 @@ class SignalingService {
     roomId: string
   ): Promise<TurnConfigResponse> {
     try {
-      console.log(
+      debugLog(
         '[Signaling] 🔄 Requesting TURN config via HTTP for room:',
         roomId
       );
@@ -491,7 +505,7 @@ class SignalingService {
       const data: TurnConfigResponse = await response.json();
 
       if (data.success && data.data) {
-        console.log('[Signaling] ✅ TURN config received via HTTP:', {
+        debugLog('[Signaling] ✅ TURN config received via HTTP:', {
           roomId,
           iceServerCount: data.data.iceServers.length,
           ttl: data.data.ttl,
@@ -518,7 +532,7 @@ class SignalingService {
     currentUsername: string
   ): Promise<TurnConfigResponse> {
     try {
-      console.log(
+      debugLog(
         '[Signaling] 🔄 Refreshing TURN credentials via HTTP for room:',
         roomId
       );
@@ -543,7 +557,7 @@ class SignalingService {
       const data: TurnConfigResponse = await response.json();
 
       if (data.success) {
-        console.log('[Signaling] ✅ TURN credentials refreshed via HTTP:', {
+        debugLog('[Signaling] ✅ TURN credentials refreshed via HTTP:', {
           roomId,
           oldUsername: currentUsername,
           message: data.data?.message,

@@ -102,6 +102,8 @@ interface TransferState {
   resetForNewTransfer: () => void;
 }
 
+export type TransferStatus = TransferState['status'];
+
 // 초기 진행률 상태
 const initialProgress: ProgressData = {
   progress: 0,

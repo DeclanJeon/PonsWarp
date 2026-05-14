@@ -83,7 +83,9 @@ export const processInputFiles = (fileList: FileList): ScannedFile[] => {
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
     // webkitRelativePath가 있으면 사용, 없으면 파일명 (단일 파일 선택 시)
-    const path = (file as any).webkitRelativePath || file.name;
+    const path =
+      (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+      file.name;
     files.push({ file, path });
   }
 

@@ -1,12 +1,10 @@
 // 🚨 [DEBUG] 아키텍처 불일치 진단 로그 추가
-console.log('[SwarmManager] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
-console.log(
+debugLog('[SwarmManager] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
+debugLog(
   '[SwarmManager] ✅ [DEBUG] - Using SinglePeerConnection class (correct)'
 );
-console.log(
-  '[SwarmManager] ✅ [DEBUG] - SenderView uses SwarmManager (correct)'
-);
-console.log(
+debugLog('[SwarmManager] ✅ [DEBUG] - SenderView uses SwarmManager (correct)');
+debugLog(
   '[SwarmManager] ✅ [DEBUG] - Dedicated Sender-only implementation (correct)'
 );
 
@@ -21,7 +19,13 @@ import { getSignalingService } from './signaling-factory';
 const signalingService = getSignalingService();
 import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
-import { logInfo, logError, logDebug, logWarn } from '../utils/logger';
+import {
+  logInfo,
+  logError,
+  logDebug,
+  logWarn,
+  debugLog,
+} from '../utils/logger';
 import {
   HIGH_WATER_MARK,
   HEADER_SIZE,
@@ -56,7 +60,32 @@ export interface SwarmProgress {
   peers: PeerState[];
 }
 
-type EventHandler = (data: any) => void;
+type EventHandler = (data: unknown) => void;
+type PeerSignalData = Parameters<SinglePeerConnection['signal']>[0];
+type SignalingPeerMessage = {
+  from?: string;
+  socketId?: string;
+  offer?: PeerSignalData;
+  answer?: PeerSignalData;
+  candidate?: PeerSignalData;
+};
+type OutgoingSignalMessage = PeerSignalData & {
+  type?: 'offer' | 'answer';
+  candidate?: unknown;
+};
+type ControlMessage = {
+  type?: string;
+  action?: 'PAUSE' | 'RESUME';
+  offset?: unknown;
+  actualSize?: unknown;
+};
+type WorkerProgressData = Partial<SwarmProgress> & {
+  progress?: number;
+};
+type WorkerBatchPayload = {
+  chunks: ArrayBuffer[];
+  progressData?: WorkerProgressData;
+};
 
 export class SwarmManager {
   private peers: Map<string, SinglePeerConnection> = new Map();
@@ -78,7 +107,7 @@ export class SwarmManager {
     );
   }
 
-  private emit(event: string, data?: any): void {
+  private emit(event: string, data?: unknown): void {
     this.eventListeners[event]?.forEach(h => h(data));
   }
 
@@ -135,7 +164,7 @@ export class SwarmManager {
   };
 
   constructor() {
-    console.log('[SwarmManager] 🆕 Initializing new instance');
+    debugLog('[SwarmManager] 🆕 Initializing new instance');
     this.setupSignalingHandlers();
   }
 
@@ -336,11 +365,11 @@ export class SwarmManager {
   }
 
   private setupPeerEventHandlers(peer: SinglePeerConnection): void {
-    peer.on('signal', data => {
+    peer.on<OutgoingSignalMessage>('signal', data => {
       this.forwardSignal(peer.id, data);
     });
 
-    peer.on('connected', peerId => {
+    peer.on<string>('connected', peerId => {
       this.clearConnectionTimeout(peerId);
       logInfo('[SwarmManager]', `Peer connected: ${peerId}`);
       this.emit('peer-connected', peerId);
@@ -355,11 +384,11 @@ export class SwarmManager {
       this.startKeepAlive();
     });
 
-    peer.on('data', data => {
+    peer.on<ArrayBuffer | string>('data', data => {
       this.handlePeerData(peer.id, data);
     });
 
-    peer.on('drain', peerId => {
+    peer.on<string>('drain', peerId => {
       this.handleDrain(peerId);
     });
 
@@ -396,8 +425,8 @@ export class SwarmManager {
 
   // ======================= 시그널링 =======================
 
-  private handlePeerJoined(data: any): void {
-    console.log('[SwarmManager] 👤 handlePeerJoined called with:', data);
+  private handlePeerJoined(data: SignalingPeerMessage): void {
+    debugLog('[SwarmManager] 👤 handlePeerJoined called with:', data);
 
     // roomId가 설정되지 않았으면 무시 (아직 초기화되지 않음)
     if (!this.roomId) {
@@ -410,9 +439,7 @@ export class SwarmManager {
 
     // 자기 자신은 무시
     if (peerId === signalingService.getSocketId()) {
-      console.log(
-        '[SwarmManager] ℹ️ handlePeerJoined ignored: Self connection'
-      );
+      debugLog('[SwarmManager] ℹ️ handlePeerJoined ignored: Self connection');
       return;
     }
 
@@ -422,7 +449,7 @@ export class SwarmManager {
     this.addPeer(peerId, true);
   }
 
-  private handleOffer(data: any): void {
+  private handleOffer(data: SignalingPeerMessage): void {
     // roomId가 설정되지 않았으면 무시
     if (!this.roomId) return;
 
@@ -436,32 +463,32 @@ export class SwarmManager {
       if (!peer) return; // 슬롯 제한으로 거부됨
     }
 
-    peer.signal(data.offer);
+    if (data.offer) peer.signal(data.offer);
   }
 
-  private handleAnswer(data: any): void {
+  private handleAnswer(data: SignalingPeerMessage): void {
     // roomId가 설정되지 않았으면 무시
     if (!this.roomId) return;
 
     const peerId = data.from;
     const peer = this.peers.get(peerId);
-    if (peer) {
+    if (peer && data.answer) {
       peer.signal(data.answer);
     }
   }
 
-  private handleIceCandidate(data: any): void {
+  private handleIceCandidate(data: SignalingPeerMessage): void {
     // roomId가 설정되지 않았으면 무시
     if (!this.roomId) return;
 
     const peerId = data.from;
     const peer = this.peers.get(peerId);
-    if (peer) {
+    if (peer && data.candidate) {
       peer.signal(data.candidate);
     }
   }
 
-  private handleUserLeft(data: any): void {
+  private handleUserLeft(data: SignalingPeerMessage): void {
     // roomId가 설정되지 않았으면 무시
     if (!this.roomId) return;
 
@@ -475,7 +502,7 @@ export class SwarmManager {
    * 🚀 [Multi-Receiver] 시그널링 메시지를 특정 피어에게 전달
    * peerId를 target으로 지정하여 해당 피어에게만 메시지 전송
    */
-  private forwardSignal(peerId: string, data: any): void {
+  private forwardSignal(peerId: string, data: OutgoingSignalMessage): void {
     if (!this.roomId) return;
 
     // 🚀 [핵심] peerId를 target으로 지정하여 특정 피어에게만 전달
@@ -608,7 +635,7 @@ export class SwarmManager {
     return actualSize !== this.pendingManifest.totalSize;
   }
 
-  private handleResumeRequest(peerId: string, msg: any): void {
+  private handleResumeRequest(peerId: string, msg: ControlMessage): void {
     const offset = Number(msg.offset);
 
     if (!Number.isFinite(offset) || offset < 0) {
@@ -679,7 +706,7 @@ export class SwarmManager {
       try {
         const str =
           typeof data === 'string' ? data : new TextDecoder().decode(data);
-        const msg = JSON.parse(str);
+        const msg = JSON.parse(str) as ControlMessage;
         this.handleControlMessage(peerId, msg);
       } catch (e) {
         // JSON 파싱 실패 - 무시
@@ -694,7 +721,7 @@ export class SwarmManager {
   /**
    * 🚀 [핵심] 피어로부터 받은 제어 메시지 처리
    */
-  private handleControlMessage(peerId: string, msg: any): void {
+  private handleControlMessage(peerId: string, msg: ControlMessage): void {
     const peer = this.peers.get(peerId);
 
     switch (msg.type) {
@@ -843,7 +870,7 @@ export class SwarmManager {
         break;
 
       case 'DOWNLOAD_COMPLETE':
-        console.log(
+        debugLog(
           '[SwarmManager] 📥 Received DOWNLOAD_COMPLETE from peer:',
           peerId,
           msg
@@ -870,7 +897,7 @@ export class SwarmManager {
         // 이유: 첫 메시지 처리 시 타이밍 이슈로 완료 처리가 안 되었을 수 있음
         // 재전송 메커니즘(3회)이 있으므로 후속 메시지가 상태를 정상화할 기회를 줘야 함
         if (this.completedPeersInSession.has(peerId)) {
-          console.log(
+          debugLog(
             '[SwarmManager] ⚠️ Duplicate DOWNLOAD_COMPLETE from peer:',
             peerId,
             '- Re-checking completion status anyway'
@@ -880,7 +907,7 @@ export class SwarmManager {
           return;
         }
 
-        console.log('[SwarmManager] 📊 State before processing:', {
+        debugLog('[SwarmManager] 📊 State before processing:', {
           completedPeerCount: this.completedPeerCount,
           completedPeersInSession: [...this.completedPeersInSession],
           currentTransferPeers: [...this.currentTransferPeers],
@@ -897,7 +924,7 @@ export class SwarmManager {
           peer.ready = false;
         }
 
-        console.log('[SwarmManager] 📊 State after processing:', {
+        debugLog('[SwarmManager] 📊 State after processing:', {
           completedPeerCount: this.completedPeerCount,
           completedPeersInSession: [...this.completedPeersInSession],
           currentTransferPeers: [...this.currentTransferPeers],
@@ -909,7 +936,7 @@ export class SwarmManager {
           this.emitAllTransfersComplete();
           return;
         }
-        console.log('[SwarmManager] 🔄 Calling checkTransferComplete...');
+        debugLog('[SwarmManager] 🔄 Calling checkTransferComplete...');
         this.checkTransferComplete();
         break;
 
@@ -1094,8 +1121,8 @@ export class SwarmManager {
    * 3. 모든 피어가 완료되면 Transfer Success UI 표시
    */
   private checkTransferComplete(): void {
-    console.log('[SwarmManager] 🔍 checkTransferComplete called');
-    console.log('[SwarmManager] 📊 Current state:', {
+    debugLog('[SwarmManager] 🔍 checkTransferComplete called');
+    debugLog('[SwarmManager] 📊 Current state:', {
       currentTransferPeers: [...this.currentTransferPeers],
       currentTransferPeersSize: this.currentTransferPeers.size,
       isTransferring: this.isTransferring,
@@ -1113,7 +1140,7 @@ export class SwarmManager {
     // isTransferring이 false여도 currentTransferPeers가 비어있으면 완료 체크 진행
     if (this.currentTransferPeers.size > 0) {
       // 아직 전송 중인 피어가 있음
-      console.log('[SwarmManager] ⏳ Still waiting for peers:', [
+      debugLog('[SwarmManager] ⏳ Still waiting for peers:', [
         ...this.currentTransferPeers,
       ]);
       logInfo(
@@ -1125,16 +1152,16 @@ export class SwarmManager {
 
     // 완료된 피어가 없으면 무시
     if (this.completedPeersInSession.size === 0) {
-      console.log('[SwarmManager] ⚠️ No completed peers yet, skipping');
+      debugLog('[SwarmManager] ⚠️ No completed peers yet, skipping');
       return;
     }
 
-    console.log('[SwarmManager] ✅ Current transfer batch complete!');
+    debugLog('[SwarmManager] ✅ Current transfer batch complete!');
     logInfo('[SwarmManager]', 'Current transfer batch complete');
     this.isTransferring = false;
 
     // 1. 대기열에 피어가 있으면 즉시 다음 전송 시작
-    console.log(
+    debugLog(
       '[SwarmManager] 🔍 Step 1: Checking queue, size:',
       this.transferQueue.length
     );
@@ -1156,7 +1183,7 @@ export class SwarmManager {
     const waitingPeers = this.getConnectedPeers().filter(
       p => !p.ready && !this.completedPeersInSession.has(p.id)
     );
-    console.log(
+    debugLog(
       '[SwarmManager] 🔍 Step 2: Waiting peers (not ready):',
       waitingPeers.length
     );
@@ -1165,14 +1192,14 @@ export class SwarmManager {
     const readyButNotTransferred = this.getConnectedPeers().filter(
       p => p.ready && !this.completedPeersInSession.has(p.id)
     );
-    console.log(
+    debugLog(
       '[SwarmManager] 🔍 Step 3: Ready but not transferred:',
       readyButNotTransferred.length
     );
 
     if (readyButNotTransferred.length > 0) {
       // ready 상태인 피어가 있으면 즉시 전송 시작
-      console.log('[SwarmManager] 🚀 Starting transfer for ready peers');
+      debugLog('[SwarmManager] 🚀 Starting transfer for ready peers');
       logInfo(
         '[SwarmManager]',
         `${readyButNotTransferred.length} ready peers waiting. Starting transfer...`
@@ -1182,7 +1209,7 @@ export class SwarmManager {
     }
 
     if (waitingPeers.length > 0) {
-      console.log('[SwarmManager] ⏳ Emitting ready-for-next');
+      debugLog('[SwarmManager] ⏳ Emitting ready-for-next');
       logInfo(
         '[SwarmManager]',
         `${waitingPeers.length} peers still waiting (not ready yet). Ready for next transfer.`
@@ -1212,9 +1239,9 @@ export class SwarmManager {
 
     // 4. 모든 연결된 피어가 완료됨 - Transfer Success!
     const connectedPeers = this.getConnectedPeers();
-    console.log('[SwarmManager] 🔍 Step 4: Final check');
-    console.log('[SwarmManager] 📊 Connected peers:', connectedPeers.length);
-    console.log(
+    debugLog('[SwarmManager] 🔍 Step 4: Final check');
+    debugLog('[SwarmManager] 📊 Connected peers:', connectedPeers.length);
+    debugLog(
       '[SwarmManager] 📊 Completed peers:',
       this.completedPeersInSession.size
     );
@@ -1223,11 +1250,11 @@ export class SwarmManager {
       connectedPeers.length > 0 &&
       connectedPeers.every(p => this.completedPeersInSession.has(p.id));
 
-    console.log(
+    debugLog(
       '[SwarmManager] 📊 All connected completed?',
       allConnectedCompleted
     );
-    console.log(
+    debugLog(
       '[SwarmManager] 📊 No connected but has completed?',
       connectedPeers.length === 0 && this.completedPeersInSession.size > 0
     );
@@ -1238,7 +1265,7 @@ export class SwarmManager {
     ) {
       this.emitAllTransfersComplete();
     } else {
-      console.log('[SwarmManager] 📦 Emitting batch-complete');
+      debugLog('[SwarmManager] 📦 Emitting batch-complete');
       logInfo(
         '[SwarmManager]',
         'Transfer batch complete. Waiting for more receivers.'
@@ -1269,7 +1296,7 @@ export class SwarmManager {
     this.allTransfersCompleteEmitted = true;
     this.isTransferring = false;
 
-    console.log('[SwarmManager] 🎉 Emitting all-transfers-complete!');
+    debugLog('[SwarmManager] 🎉 Emitting all-transfers-complete!');
     logInfo(
       '[SwarmManager]',
       `🎉 All transfers complete! ${this.completedPeersInSession.size} receivers finished.`
@@ -1279,7 +1306,7 @@ export class SwarmManager {
     this.emit('complete');
 
     setTimeout(() => {
-      console.log(
+      debugLog(
         '[SwarmManager] ✅ Transfer session completed, ready for cleanup'
       );
     }, 1000);
@@ -1399,7 +1426,7 @@ export class SwarmManager {
 
       // 🔐 암호화 키 설정 (활성화된 경우)
       if (this.isEncryptionEnabled() && this.sessionKey && this.randomPrefix) {
-        console.log('[SwarmManager] 🔐 Setting encryption key on worker');
+        debugLog('[SwarmManager] 🔐 Setting encryption key on worker');
         this.worker.postMessage({
           type: 'set-encryption-key',
           payload: {
@@ -1420,7 +1447,7 @@ export class SwarmManager {
 
       switch (type) {
         case 'ready':
-          console.log(
+          debugLog(
             '[SwarmManager] ✅ [DEBUG] Worker ready, initializing with',
             files.length,
             'files'
@@ -1430,7 +1457,7 @@ export class SwarmManager {
           break;
 
         case 'encryption-ready':
-          console.log('[SwarmManager] 🔐 Worker encryption ready');
+          debugLog('[SwarmManager] 🔐 Worker encryption ready');
           break;
 
         case 'encryption-error':
@@ -1439,7 +1466,7 @@ export class SwarmManager {
           break;
 
         case 'init-complete':
-          console.log(
+          debugLog(
             '[SwarmManager] ✅ [DEBUG] Worker initialization complete. Is transferring:',
             this.isTransferring,
             'Pending start:',
@@ -1465,7 +1492,7 @@ export class SwarmManager {
           break;
 
         case 'chunk-batch':
-          console.log(
+          debugLog(
             '[SwarmManager] 📦 [DEBUG] Chunk batch received from worker:',
             {
               chunkCount: payload.chunks?.length || 0,
@@ -1488,14 +1515,14 @@ export class SwarmManager {
           break;
 
         case 'complete':
-          console.log(
+          debugLog(
             '[SwarmManager] ✅ [DEBUG] Worker reported transfer complete'
           );
           this.finishTransfer();
           break;
 
         default:
-          console.log(
+          debugLog(
             '[SwarmManager] ❓ [DEBUG] Unknown worker message type:',
             type
           );
@@ -1516,7 +1543,7 @@ export class SwarmManager {
     setTimeout(startWorkerInitialization, 0);
   }
 
-  private handleBatchFromWorker(payload: any): void {
+  private handleBatchFromWorker(payload: WorkerBatchPayload): void {
     const connectedPeers = this.getConnectedPeers();
     if (connectedPeers.length === 0) {
       logError(
@@ -1529,7 +1556,7 @@ export class SwarmManager {
     const { chunks, progressData } = payload;
     this.isProcessingBatch = false;
 
-    console.log('[SwarmManager] 📊 [DEBUG] Processing batch from worker:', {
+    debugLog('[SwarmManager] 📊 [DEBUG] Processing batch from worker:', {
       chunkCount: chunks.length,
       totalBatchSize: chunks.reduce(
         (sum: number, chunk: ArrayBuffer) => sum + chunk.byteLength,
@@ -1545,7 +1572,7 @@ export class SwarmManager {
       // 모든 피어에게 브로드캐스트
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
-        console.log(
+        debugLog(
           '[SwarmManager] 📤 [DEBUG] Broadcasting chunk',
           i + 1,
           '/',
@@ -1557,7 +1584,7 @@ export class SwarmManager {
         const result = this.broadcastChunk(chunk);
         this.totalBytesSent += chunk.byteLength;
 
-        console.log('[SwarmManager] 📊 [DEBUG] Chunk broadcast result:', {
+        debugLog('[SwarmManager] 📊 [DEBUG] Chunk broadcast result:', {
           successCount: result.successCount,
           failedPeers: result.failedPeers.length,
           totalBytesSent: this.totalBytesSent,
@@ -1565,7 +1592,7 @@ export class SwarmManager {
 
         // 실패한 피어 제거
         for (const failedPeerId of result.failedPeers) {
-          console.log(
+          debugLog(
             '[SwarmManager] ❌ [DEBUG] Removing failed peer:',
             failedPeerId
           );
@@ -1578,17 +1605,17 @@ export class SwarmManager {
 
       // Backpressure 체크 후 다음 배치 요청
       const canRequestMore = this.canRequestMoreChunks();
-      console.log('[SwarmManager] 🔄 [DEBUG] Backpressure check:', {
+      debugLog('[SwarmManager] 🔄 [DEBUG] Backpressure check:', {
         canRequestMore,
         highestBufferedAmount: this.getHighestBufferedAmount(),
         highWaterMark: HIGH_WATER_MARK,
       });
 
       if (canRequestMore) {
-        console.log('[SwarmManager] ➡️ [DEBUG] Requesting more chunks');
+        debugLog('[SwarmManager] ➡️ [DEBUG] Requesting more chunks');
         this.requestMoreChunks();
       } else {
-        console.log(
+        debugLog(
           '[SwarmManager] ⏸️ [DEBUG] Buffer full, pausing chunk requests'
         );
       }
@@ -1598,7 +1625,7 @@ export class SwarmManager {
         '❌ [DEBUG] Batch processing failed:',
         error
       );
-      console.log('[SwarmManager] 📊 [DEBUG] State at error:', {
+      debugLog('[SwarmManager] 📊 [DEBUG] State at error:', {
         connectedPeers: connectedPeers.length,
         currentTransferPeers: this.currentTransferPeers.size,
         isProcessingBatch: this.isProcessingBatch,
@@ -1669,7 +1696,7 @@ export class SwarmManager {
 
     // 🚨 [FIX] Worker 초기화 완료 체크 (Race Condition 방지)
     if (!this.workerInitialized) {
-      console.log(
+      debugLog(
         '[SwarmManager] ⏳ Worker not fully initialized yet, skipping request (will retry on init-complete)'
       );
       return;
@@ -1722,7 +1749,7 @@ export class SwarmManager {
     });
   }
 
-  private emitProgress(progressData: any): void {
+  private emitProgress(progressData: WorkerProgressData = {}): void {
     const elapsed = (performance.now() - this.transferStartTime) / 1000;
     const speed = elapsed > 0 ? this.totalBytesSent / elapsed : 0;
 
@@ -1762,9 +1789,7 @@ export class SwarmManager {
 
   private async fetchTurnConfig(roomId: string): Promise<void> {
     try {
-      const response = (await signalingService.requestTurnConfig(
-        roomId
-      )) as any;
+      const response = await signalingService.requestTurnConfig(roomId);
       if (response?.success && response?.data) {
         this.iceServers = response.data.iceServers;
       }

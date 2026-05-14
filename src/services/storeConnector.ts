@@ -9,7 +9,11 @@
  * - 배치 상태 업데이트
  */
 
-import { useTransferStore, ProgressData } from '../store/transferStore';
+import {
+  useTransferStore,
+  ProgressData,
+  TransferStatus,
+} from '../store/transferStore';
 
 // 스로틀링 설정
 const PROGRESS_THROTTLE_MS = 33; // ~30fps
@@ -30,8 +34,8 @@ export const updateProgress = (data: Partial<ProgressData>) => {
 /**
  * 상태 업데이트 (즉시 반영)
  */
-export const setStatus = (status: string) => {
-  useTransferStore.getState().setStatus(status as any);
+export const setStatus = (status: TransferStatus) => {
+  useTransferStore.getState().setStatus(status);
 };
 
 /**

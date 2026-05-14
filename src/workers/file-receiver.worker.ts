@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { debugLog } from '../utils/logger';
 declare const self: DedicatedWorkerGlobalScope;
 
 // ============================================================================
@@ -9,6 +10,8 @@ declare const self: DedicatedWorkerGlobalScope;
 // ============================================================================
 
 import init, { PacketDecoder, CryptoSession } from 'pons-core-wasm';
+import { TransferManifest } from '../types/types';
+import { getErrorMessage } from '../utils/errors';
 
 const HEADER_SIZE = 22;
 const ENCRYPTED_HEADER_SIZE = 38;
@@ -25,7 +28,7 @@ async function initWasm() {
   try {
     await init();
     wasmReady = true;
-    console.log('[Receiver Worker] WASM initialized');
+    debugLog('[Receiver Worker] WASM initialized');
   } catch (e) {
     console.error('[Receiver Worker] WASM init failed:', e);
     wasmReady = false;
@@ -54,7 +57,7 @@ function calculateCRC32Fallback(data: Uint8Array): number {
 class ReceiverWorker {
   private totalBytesReceived = 0;
   private totalSize = 0;
-  private manifest: any = null;
+  private manifest: TransferManifest | null = null;
   private lastReportTime = 0;
   private chunksProcessed = 0;
 
@@ -105,15 +108,18 @@ class ReceiverWorker {
         payload.randomPrefix
       );
       decryptionEnabled = true;
-      console.log('[Receiver Worker] 🔐 E2E decryption enabled');
+      debugLog('[Receiver Worker] 🔐 E2E decryption enabled');
       self.postMessage({ type: 'encryption-ready' });
-    } catch (e: any) {
+    } catch (e) {
       console.error('[Receiver Worker] Decryption setup failed:', e);
-      self.postMessage({ type: 'encryption-error', payload: e.message });
+      self.postMessage({
+        type: 'encryption-error',
+        payload: getErrorMessage(e, 'Decryption setup failed'),
+      });
     }
   }
 
-  private initTransfer(manifest: any) {
+  private initTransfer(manifest: TransferManifest) {
     this.manifest = manifest;
     this.totalSize = manifest.totalSize;
     this.totalBytesReceived = 0;
@@ -124,14 +130,14 @@ class ReceiverWorker {
     this.lastSpeedCalcTime = this.startTime;
     this.lastSpeedCalcBytes = 0;
 
-    console.log('[Receiver Worker] Ready for', manifest.totalFiles, 'files');
-    console.log(
+    debugLog('[Receiver Worker] Ready for', manifest.totalFiles, 'files');
+    debugLog(
       '[Receiver Worker] WASM:',
       wasmReady,
       ', Decryption:',
       decryptionEnabled
     );
-    console.log(
+    debugLog(
       '[Receiver Worker] Total size:',
       (manifest.totalSize / (1024 * 1024)).toFixed(2),
       'MB'
@@ -187,11 +193,11 @@ class ReceiverWorker {
       ]);
 
       this.reportProgress();
-    } catch (e: any) {
+    } catch (e) {
       console.error('[Receiver Worker] ❌ Decryption failed:', e);
       self.postMessage({
         type: 'error',
-        payload: 'Decryption failed: ' + e.message,
+        payload: 'Decryption failed: ' + getErrorMessage(e, 'unknown error'),
       });
     }
   }
@@ -312,7 +318,7 @@ class ReceiverWorker {
   }
 
   private finalize() {
-    console.log(
+    debugLog(
       '[Receiver Worker] Transfer complete. Total:',
       this.totalBytesReceived,
       'bytes'

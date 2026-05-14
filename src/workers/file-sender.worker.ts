@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { debugLog } from '../utils/logger';
 declare const self: DedicatedWorkerGlobalScope;
 
 // ============================================================================
@@ -16,6 +17,7 @@ import init, {
   Zip64Stream,
   ZeroCopyPacketPool,
 } from 'pons-core-wasm';
+import { TransferManifest } from '../types/types';
 
 const CHUNK_SIZE_MIN = 16 * 1024;
 const CHUNK_SIZE_MAX = 64 * 1024;
@@ -106,7 +108,7 @@ class DoubleBuffer {
 
 interface WorkerState {
   files: File[];
-  manifest: any;
+  manifest: TransferManifest | null;
   mode: 'single' | 'multi-raw' | 'zip';
   currentFileOffset: number;
   currentFileIndex: number;
@@ -180,7 +182,7 @@ async function initWasm() {
     packetEncoder = new PacketEncoder();
     wasmReady = true;
 
-    console.log('[Sender Worker] WASM initialized with Zero-Copy Pool');
+    debugLog('[Sender Worker] WASM initialized with Zero-Copy Pool');
   } catch (e) {
     console.error('[Sender Worker] WASM init failed:', e);
     wasmReady = false;
@@ -232,9 +234,9 @@ function setEncryptionKey(payload: {
     cryptoSession = new CryptoSession(payload.sessionKey, payload.randomPrefix);
     encryptionEnabled = true;
     pendingEncryptionKey = null;
-    console.log('[Sender Worker] 🔐 E2E encryption enabled');
+    debugLog('[Sender Worker] 🔐 E2E encryption enabled');
     self.postMessage({ type: 'encryption-ready' });
-  } catch (e: any) {
+  } catch (e) {
     console.error('[Sender Worker] Encryption setup failed:', e);
     self.postMessage({ type: 'encryption-error', payload: e.message });
   }
@@ -258,7 +260,10 @@ function updateAdaptiveConfig(config: Partial<AdaptiveConfig>) {
   }
 }
 
-async function initWorker(payload: { files: File[]; manifest: any }) {
+async function initWorker(payload: {
+  files: File[];
+  manifest: TransferManifest;
+}) {
   resetWorker();
 
   if (!wasmReady) {
@@ -286,7 +291,7 @@ async function initWorker(payload: { files: File[]; manifest: any }) {
   zipBuffer = null;
 
   const fileCount = state.files.length;
-  console.log(
+  debugLog(
     '[Sender Worker] Initializing for',
     fileCount,
     'files (WASM:',
@@ -365,6 +370,9 @@ async function resumeSingleFile(offset: number) {
 
 let zipSourceBytesRead = 0;
 
+// Reserved for the legacy ZIP streaming mode. Multi-file sends currently use
+// raw manifest chunks so offset resume can stay deterministic.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function initZipStream() {
   zipSourceBytesRead = 0;
   currentZipQueueSize = 0;

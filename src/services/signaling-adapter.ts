@@ -1,3 +1,4 @@
+import { debugLog } from '../utils/logger';
 /**
  * Rust 시그널링 서버 어댑터
  * Socket.io 이벤트를 JSON Frame으로 변환하여 기존 코드와 호환성 유지
@@ -24,7 +25,7 @@ class RustSignalingAdapter {
   async connect(url: string): Promise<void> {
     // [FIX] 이미 연결되어 있거나 연결 중이면 기존 연결 재사용 (중복 연결 방지)
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log('[RustSignaling] ✅ Already connected:', this.socketId);
+      debugLog('[RustSignaling] ✅ Already connected:', this.socketId);
       return Promise.resolve();
     }
     if (this.connectionPromise) {
@@ -48,20 +49,20 @@ class RustSignalingAdapter {
       }, 5000); // 10초에서 5초로 단축하여 더 빠른 실패 감지
 
       this.ws.onopen = () => {
-        console.log('[RustSignaling] WebSocket opened');
+        debugLog('[RustSignaling] WebSocket opened');
         this.reconnectAttempts = 0;
       };
 
       this.ws.onmessage = event => {
         try {
-          console.log('[RustSignaling] 📨 Raw message received:', event.data);
+          debugLog('[RustSignaling] 📨 Raw message received:', event.data);
           const message: RustMessage = JSON.parse(event.data);
 
           if (message.type === 'Connected') {
             clearTimeout(timeout);
             const payload = message.payload as { socket_id: string };
             this.socketId = payload.socket_id;
-            console.log('[RustSignaling] Connected:', this.socketId);
+            debugLog('[RustSignaling] Connected:', this.socketId);
             this.emit('connected', this.socketId);
             resolve();
             this.connectionPromise = null;
@@ -83,7 +84,7 @@ class RustSignalingAdapter {
       };
 
       this.ws.onclose = event => {
-        console.log('[RustSignaling] Disconnected:', event.code, event.reason);
+        debugLog('[RustSignaling] Disconnected:', event.code, event.reason);
         this.emit('disconnect', { reason: event.reason });
         this.socketId = null;
         this.connectionPromise = null;
@@ -112,7 +113,7 @@ class RustSignalingAdapter {
   }
 
   private handleMessage(message: RustMessage) {
-    console.log(
+    debugLog(
       '[RustSignaling] 🔍 Handling message:',
       message.type,
       message.payload
@@ -141,36 +142,30 @@ class RustSignalingAdapter {
     if (typeof payload === 'object' && payload !== null) {
       const payloadObj = payload as Record<string, unknown>;
       if (message.type === 'Offer') {
-        console.log(
+        debugLog(
           '[RustSignaling] 🔍 [DEBUG] Before mapping - payload:',
           payload
         );
-        console.log(
-          '[RustSignaling] 🔍 [DEBUG] sdp field value:',
-          payloadObj.sdp
-        );
+        debugLog('[RustSignaling] 🔍 [DEBUG] sdp field value:', payloadObj.sdp);
         payloadObj.offer = payloadObj.sdp;
-        console.log(
+        debugLog(
           '[RustSignaling] 🔍 [DEBUG] After mapping - payload.offer:',
           payloadObj.offer
         );
-        console.log('[RustSignaling] Mapped Offer SDP:', payloadObj);
+        debugLog('[RustSignaling] Mapped Offer SDP:', payloadObj);
       }
       if (message.type === 'Answer') {
-        console.log(
+        debugLog(
           '[RustSignaling] 🔍 [DEBUG] Before mapping - payload:',
           payload
         );
-        console.log(
-          '[RustSignaling] 🔍 [DEBUG] sdp field value:',
-          payloadObj.sdp
-        );
+        debugLog('[RustSignaling] 🔍 [DEBUG] sdp field value:', payloadObj.sdp);
         payloadObj.answer = payloadObj.sdp;
-        console.log(
+        debugLog(
           '[RustSignaling] 🔍 [DEBUG] After mapping - payload.answer:',
           payloadObj.answer
         );
-        console.log('[RustSignaling] Mapped Answer SDP:', payloadObj);
+        debugLog('[RustSignaling] Mapped Answer SDP:', payloadObj);
       }
     }
 
@@ -206,7 +201,7 @@ class RustSignalingAdapter {
       );
       // 연결이 끊어졌다면 자동으로 재연결 시도
       if (this.url && (!this.ws || this.ws.readyState === WebSocket.CLOSED)) {
-        console.log(
+        debugLog(
           '[RustSignaling] Attempting to reconnect for send operation...'
         );
         this.connect(this.url).catch(() => {});
@@ -225,7 +220,7 @@ class RustSignalingAdapter {
 
   // API Methods
   async joinRoom(roomId: string): Promise<void> {
-    console.log('[RustSignaling] Joining room:', roomId);
+    debugLog('[RustSignaling] Joining room:', roomId);
     this.send('JoinRoom', { roomId });
   }
 

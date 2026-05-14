@@ -1,3 +1,5 @@
+import { debugLog } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
 // 에러 핸들링 및 폴백 메커니즘
 export enum ErrorType {
   TURN_CONNECTION_FAILED = 'TURN_CONNECTION_FAILED',
@@ -22,11 +24,11 @@ export interface ErrorInfo {
   type: ErrorType;
   severity: ErrorSeverity;
   message: string;
-  originalError?: any;
+  originalError?: unknown;
   timestamp: number;
   retryCount: number;
   maxRetries: number;
-  context?: Record<string, any>;
+  context?: Record<string, unknown>;
 }
 
 export interface RetryConfig {
@@ -98,14 +100,18 @@ class ErrorHandler {
   }
 
   // 에러 분류 및 생성
-  public classifyError(error: any, context?: Record<string, any>): ErrorInfo {
+  public classifyError(
+    error: unknown,
+    context?: Record<string, unknown>
+  ): ErrorInfo {
     const timestamp = Date.now();
     let errorType: ErrorType;
     let severity: ErrorSeverity;
+    const originalMessage = getErrorMessage(error, 'Unknown error');
 
     // 에러 타입 분류
-    if (error.message) {
-      const message = error.message.toLowerCase();
+    if (originalMessage) {
+      const message = originalMessage.toLowerCase();
 
       if (message.includes('turn') || message.includes('relay')) {
         if (
@@ -169,7 +175,7 @@ class ErrorHandler {
     const errorInfo: ErrorInfo = {
       type: errorType,
       severity,
-      message: error.message || 'Unknown error occurred',
+      message: originalMessage,
       originalError: error,
       timestamp,
       retryCount: 0,
@@ -210,7 +216,7 @@ class ErrorHandler {
   public async retryWithError<T>(
     errorInfo: ErrorInfo,
     retryFunction: () => Promise<T>,
-    context?: Record<string, any>
+    context?: Record<string, unknown>
   ): Promise<{ success: boolean; result?: T; error?: ErrorInfo }> {
     if (!this.canRetry(errorInfo)) {
       return { success: false, error: errorInfo };
@@ -220,7 +226,7 @@ class ErrorHandler {
     errorInfo.context = { ...errorInfo.context, ...context };
 
     const delay = this.calculateRetryDelay(errorInfo);
-    console.log(
+    debugLog(
       `[ErrorHandler] Retrying ${errorInfo.type} (attempt ${errorInfo.retryCount}/${errorInfo.maxRetries}) after ${delay}ms`
     );
 
@@ -228,7 +234,7 @@ class ErrorHandler {
 
     try {
       const result = await retryFunction();
-      console.log(`[ErrorHandler] Retry successful for ${errorInfo.type}`);
+      debugLog(`[ErrorHandler] Retry successful for ${errorInfo.type}`);
       return { success: true, result };
     } catch (error) {
       const newErrorInfo = this.classifyError(error, context);
@@ -240,7 +246,7 @@ class ErrorHandler {
   public async executeWithRetry<T>(
     operation: () => Promise<T>,
     errorType: ErrorType,
-    context?: Record<string, any>
+    context?: Record<string, unknown>
   ): Promise<{ success: boolean; result?: T; error?: ErrorInfo }> {
     try {
       const result = await operation();
@@ -313,10 +319,13 @@ class ErrorHandler {
       : '';
     const retryStr = ` | Retry: ${errorInfo.retryCount}/${errorInfo.maxRetries}`;
 
-    console.log(`${logMessage}${contextStr}${retryStr}`);
+    debugLog(`${logMessage}${contextStr}${retryStr}`);
 
-    if (errorInfo.originalError && errorInfo.originalError.stack) {
-      console.log('Stack trace:', errorInfo.originalError.stack);
+    if (
+      errorInfo.originalError instanceof Error &&
+      errorInfo.originalError.stack
+    ) {
+      debugLog('Stack trace:', errorInfo.originalError.stack);
     }
   }
 
@@ -342,8 +351,12 @@ class ErrorHandler {
     errorsBySeverity: Record<ErrorSeverity, number>;
     recentErrors: ErrorInfo[];
   } {
-    const errorsByType: Record<ErrorType, number> = {} as any;
-    const errorsBySeverity: Record<ErrorSeverity, number> = {} as any;
+    const errorsByType = Object.fromEntries(
+      Object.values(ErrorType).map(type => [type, 0])
+    ) as Record<ErrorType, number>;
+    const errorsBySeverity = Object.fromEntries(
+      Object.values(ErrorSeverity).map(severity => [severity, 0])
+    ) as Record<ErrorSeverity, number>;
 
     this.errors.forEach(error => {
       errorsByType[error.type] = (errorsByType[error.type] || 0) + 1;
@@ -364,9 +377,7 @@ class ErrorHandler {
     // 기본 1시간
     const cutoffTime = Date.now() - olderThanMs;
     this.errors = this.errors.filter(error => error.timestamp > cutoffTime);
-    console.log(
-      `[ErrorHandler] Cleared ${this.errors.length} old error records`
-    );
+    debugLog(`[ErrorHandler] Cleared ${this.errors.length} old error records`);
   }
 
   // 네트워크 상태 확인

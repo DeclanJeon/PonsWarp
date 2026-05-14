@@ -1,3 +1,4 @@
+import { debugLog } from '../utils/logger';
 /**
  * E2E 암호화 서비스
  *
@@ -136,7 +137,7 @@ export class CryptoService {
     );
 
     this.sessionKey = new Uint8Array(sessionKeyBits);
-    console.log('[CryptoService] Session key derived successfully');
+    debugLog('[CryptoService] Session key derived successfully');
   }
 
   /**
@@ -284,7 +285,7 @@ export class CryptoService {
       this.sessionKey = null;
     }
 
-    console.log('[CryptoService] Cleaned up');
+    debugLog('[CryptoService] Cleaned up');
   }
 
   // ============ Utility Methods ============

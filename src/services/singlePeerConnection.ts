@@ -8,7 +8,7 @@ import SimplePeer from 'simple-peer/simplepeer.min.js';
 import { LOW_WATER_MARK } from '../utils/constants';
 import { logInfo, logError } from '../utils/logger';
 
-type EventHandler = (data: any) => void;
+type EventHandler = (data: unknown) => void;
 type SimplePeerWithChannel = SimplePeer.Instance & {
   _channel?: RTCDataChannel;
 };
@@ -40,19 +40,19 @@ export class SinglePeerConnection {
     this.initializePeer(initiator, config);
   }
 
-  public on(event: string, handler: EventHandler): void {
+  public on<T = unknown>(event: string, handler: (data: T) => void): void {
     if (!this.eventListeners[event]) this.eventListeners[event] = [];
-    this.eventListeners[event].push(handler);
+    this.eventListeners[event].push(handler as EventHandler);
   }
 
-  public off(event: string, handler: EventHandler): void {
+  public off<T = unknown>(event: string, handler: (data: T) => void): void {
     if (!this.eventListeners[event]) return;
     this.eventListeners[event] = this.eventListeners[event].filter(
       h => h !== handler
     );
   }
 
-  private emit(event: string, data?: any): void {
+  private emit(event: string, data?: unknown): void {
     this.eventListeners[event]?.forEach(h => h(data));
   }
 
@@ -62,7 +62,7 @@ export class SinglePeerConnection {
 
   private initializePeer(initiator: boolean, config: PeerConfig): void {
     try {
-      this.pc = new SimplePeer({
+      const options: SimplePeer.Options = {
         initiator,
         trickle: true,
         config: { iceServers: config.iceServers },
@@ -71,7 +71,8 @@ export class SinglePeerConnection {
           bufferedAmountLowThreshold: LOW_WATER_MARK,
           ...config.channelConfig,
         },
-      } as any);
+      };
+      this.pc = new SimplePeer(options);
 
       this.setupEventHandlers();
       logInfo(`[Peer ${this.id}]`, `Created (initiator: ${initiator})`);
@@ -105,7 +106,7 @@ export class SinglePeerConnection {
       this.setupChannelEvents();
     });
 
-    this.pc.on('data', (data: any) => {
+    this.pc.on('data', (data: unknown) => {
       if (data instanceof Blob) {
         data
           .arrayBuffer()

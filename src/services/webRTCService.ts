@@ -1,28 +1,49 @@
-console.log('[webRTCService] ✅ [DEBUG] ARCHITECTURE FIXED:');
-console.log(
+debugLog('[webRTCService] ✅ [DEBUG] ARCHITECTURE FIXED:');
+debugLog(
   '[webRTCService] ✅ [DEBUG] - Now uses SinglePeerConnection (unified)'
 );
-console.log(
+debugLog(
   '[webRTCService] ✅ [DEBUG] - Receiver-only service (Sender logic removed)'
 );
-console.log(
-  '[webRTCService] ✅ [DEBUG] - Architecture unified with SwarmManager'
-);
+debugLog('[webRTCService] ✅ [DEBUG] - Architecture unified with SwarmManager');
 
 import { TurnConfigResponse } from './signaling';
 import { getSignalingService } from './signaling-factory';
 
 // 팩토리를 통해 시그널링 서비스 가져오기
 const signalingService = getSignalingService();
-import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
+import {
+  logInfo,
+  logError,
+  logWarn,
+  logDebug,
+  debugLog,
+} from '../utils/logger';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
 import { base64ToBytes, CryptoService } from './cryptoService';
+import { TransferManifest } from '../types/types';
+import { getErrorMessage } from '../utils/errors';
 
-type EventHandler = (data: any) => void;
+type EventHandler = (data: unknown) => void;
+type PeerSignalData = Parameters<SinglePeerConnection['signal']>[0];
+type ReceiverSignalMessage = {
+  from: string;
+  offer?: PeerSignalData;
+  candidate?: PeerSignalData;
+  sdp?: unknown;
+};
+type ReceiverProgressPayload =
+  | number
+  | {
+      progress: number;
+      speed: number;
+      bytesTransferred: number;
+      totalBytes: number;
+    };
 
 // Writer 인터페이스 정의
 interface IFileWriter {
-  initStorage(manifest: any): Promise<void>;
+  initStorage(manifest: TransferManifest): Promise<void>;
   writeChunk(packet: ArrayBuffer): Promise<void>;
   cleanup(): Promise<void>;
   onProgress(
@@ -53,7 +74,7 @@ class ReceiverService {
 
   // 파일 쓰기
   private writer: IFileWriter | null = null;
-  private currentManifest: any = null;
+  private currentManifest: TransferManifest | null = null;
   private isTransferActive = false;
   private isReconnecting = false;
   private reconnectAttempts = 0;
@@ -141,11 +162,11 @@ class ReceiverService {
 
   public async initReceiver(roomId: string) {
     if (this.roomId === roomId && this.isConnected()) {
-      console.log('[Receiver] Already connected to room:', roomId);
+      debugLog('[Receiver] Already connected to room:', roomId);
       return;
     }
 
-    console.log('[Receiver] Initializing connection for room:', roomId);
+    debugLog('[Receiver] Initializing connection for room:', roomId);
 
     // 기존 연결 정리 (Adapter의 연결은 끊지 않고 피어 상태만 정리)
     this.resetState();
@@ -170,9 +191,9 @@ class ReceiverService {
 
       // UI 상태 변경
       this.emit('status', 'CONNECTING');
-    } catch (error: any) {
+    } catch (error) {
       logError('[Receiver] Initialization failed:', error);
-      this.emit('error', error.message || 'Initialization failed');
+      this.emit('error', getErrorMessage(error, 'Initialization failed'));
     }
   }
 
@@ -187,7 +208,7 @@ class ReceiverService {
     }
 
     // Writer 이벤트 연결
-    this.writer.onProgress((progressData: any) => {
+    this.writer.onProgress((progressData: ReceiverProgressPayload) => {
       // 객체 형태면 그대로, 숫자면 변환
       if (typeof progressData === 'object') {
         this.emit('progress', progressData);
@@ -249,18 +270,18 @@ class ReceiverService {
   /**
    * 저장소 준비 완료 후 수신 시작
    */
-  public async startReceiving(manifest: any) {
+  public async startReceiving(manifest: TransferManifest) {
     if (!this.writer) {
       this.emit('error', 'Storage writer not initialized');
       return;
     }
 
     try {
-      console.log('[Receiver] Initializing storage writer...');
+      debugLog('[Receiver] Initializing storage writer...');
       this.currentManifest = manifest;
       await this.writer.initStorage(manifest);
 
-      console.log('[Receiver] ✅ Storage ready. Sending TRANSFER_READY...');
+      debugLog('[Receiver] ✅ Storage ready. Sending TRANSFER_READY...');
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
       this.isTransferActive = true;
@@ -279,9 +300,12 @@ class ReceiverService {
       } else {
         throw new Error('Peer disconnected during storage init');
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Receiver] Storage init failed:', error);
-      this.emit('error', error.message || 'Failed to initialize storage');
+      this.emit(
+        'error',
+        getErrorMessage(error, 'Failed to initialize storage')
+      );
     }
   }
 
@@ -350,9 +374,9 @@ class ReceiverService {
   /**
    * Sender로부터 Offer 수신 시 처리
    */
-  private handleOffer = async (d: any) => {
+  private handleOffer = async (d: ReceiverSignalMessage) => {
     // 🔍 [DEBUG] SDP 매핑 확인
-    console.log('[Receiver] 🚨 [DEBUG] Offer data received:', {
+    debugLog('[Receiver] 🚨 [DEBUG] Offer data received:', {
       from: d.from,
       hasOffer: !!d.offer,
       hasSdp: !!d.sdp,
@@ -376,9 +400,7 @@ class ReceiverService {
 
     // 🚨 [추가] TURN 설정이 아직 로딩 중이라면 확실하게 기다립니다.
     if (this.turnConfigPromise) {
-      console.log(
-        '[Receiver] Waiting for TURN config before accepting offer...'
-      );
+      debugLog('[Receiver] Waiting for TURN config before accepting offer...');
       try {
         await this.turnConfigPromise;
       } catch (e) {
@@ -400,18 +422,18 @@ class ReceiverService {
     this.setupPeerEvents(this.peer);
 
     // 시그널링 처리
-    this.peer.signal(d.offer);
+    if (d.offer) this.peer.signal(d.offer);
   };
 
-  private handleIceCandidate = (d: any) => {
+  private handleIceCandidate = (d: ReceiverSignalMessage) => {
     if (this.connectedPeerId && d.from !== this.connectedPeerId) return;
     if (!this.peer || this.peer.isDestroyed()) return;
 
-    this.peer.signal(d.candidate);
+    if (d.candidate) this.peer.signal(d.candidate);
   };
 
   private setupPeerEvents(peer: SinglePeerConnection) {
-    peer.on('signal', data => {
+    peer.on<PeerSignalData>('signal', data => {
       // Receiver는 Answer와 Candidate를 Sender에게 보냄
       if (data.type === 'answer') {
         signalingService.sendAnswer(this.roomId!, data, peer.id);
@@ -441,9 +463,9 @@ class ReceiverService {
 
     peer.on('data', this.handleData.bind(this));
 
-    peer.on('error', err => {
+    peer.on<Error>('error', err => {
       logError('[Receiver]', 'Peer error:', err);
-      this.emit('error', err.message);
+      this.emit('error', getErrorMessage(err, 'Peer error'));
     });
 
     peer.on('close', () => {
@@ -525,7 +547,7 @@ class ReceiverService {
             );
           }
         }, 5000);
-      } catch (error: any) {
+      } catch (error) {
         logError('[Receiver]', 'Reconnect attempt failed:', error);
 
         if (this.shouldAttemptReconnect()) {
@@ -652,7 +674,7 @@ class ReceiverService {
     );
   }
 
-  private emit(event: string, data: any) {
+  private emit(event: string, data: unknown) {
     this.eventListeners[event]?.forEach(h => h(data));
   }
 }

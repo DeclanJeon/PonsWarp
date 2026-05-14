@@ -63,10 +63,10 @@ export interface WorkerMessage {
     | 'MANIFEST'
     | 'UPDATE_NETWORK'
     | 'NETWORK_UPDATE';
-  payload?: any;
+  payload?: unknown;
 }
 
 export interface WorkerCommand {
   command: 'START_READ' | 'NEXT_CHUNK' | 'INIT_WRITE' | 'WRITE_CHUNK';
-  payload?: any;
+  payload?: unknown;
 }

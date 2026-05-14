@@ -1,12 +1,11 @@
+import { debugLog } from '../utils/logger';
 /* 🪲 [DEBUG] SenderView UI/UX 개선 시작 */
-console.log('[SenderView] 🪲 [DEBUG] UI/UX Enhancement Started:');
-console.log('[SenderView] 🪲 [DEBUG] - Applying focal point principles');
-console.log(
-  '[SenderView] 🪲 [DEBUG] - Implementing gestalt proximity grouping'
-);
-console.log('[SenderView] 🪲 [DEBUG] - Adding responsive layout improvements');
+debugLog('[SenderView] 🪲 [DEBUG] UI/UX Enhancement Started:');
+debugLog('[SenderView] 🪲 [DEBUG] - Applying focal point principles');
+debugLog('[SenderView] 🪲 [DEBUG] - Implementing gestalt proximity grouping');
+debugLog('[SenderView] 🪲 [DEBUG] - Adding responsive layout improvements');
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Upload,
@@ -21,13 +20,33 @@ import {
 } from 'lucide-react';
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { createManifest, formatBytes } from '../utils/fileUtils';
-import { scanFiles, processInputFiles } from '../utils/fileScanner';
+import {
+  scanFiles,
+  processInputFiles,
+  ScannedFile,
+} from '../utils/fileScanner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
+import { TransferManifest } from '../types/types';
+import { getErrorMessage } from '../utils/errors';
 
 interface SenderViewProps {
   onComplete?: () => void;
 }
+
+type DirectoryInputProps = React.InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory: string;
+};
+
+type SenderProgressPayload = {
+  progress?: number;
+  speed?: number;
+  totalBytesSent?: number;
+  bytesTransferred?: number;
+  totalBytes?: number;
+};
+
+const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
 
 const SenderView: React.FC<SenderViewProps> = () => {
   type SenderStatus =
@@ -39,19 +58,20 @@ const SenderView: React.FC<SenderViewProps> = () => {
     | 'REMOTE_PROCESSING'
     | 'READY_FOR_NEXT'
     | 'DONE';
-  const [manifest, setManifest] = useState<any>(null);
+  const [manifest, setManifest] = useState<TransferManifest | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<SenderStatus>('IDLE');
-  const setTransferStatus = (
-    next: SenderStatus | ((prev: SenderStatus) => SenderStatus)
-  ) => {
-    setStatus(prev => {
-      if (prev === 'DONE') return prev;
-      return typeof next === 'function' ? next(prev) : next;
-    });
-  };
+  const setTransferStatus = useCallback(
+    (next: SenderStatus | ((prev: SenderStatus) => SenderStatus)) => {
+      setStatus(prev => {
+        if (prev === 'DONE') return prev;
+        return typeof next === 'function' ? next(prev) : next;
+      });
+    },
+    []
+  );
   const [progressData, setProgressData] = useState({
     progress: 0,
     speed: 0,
@@ -86,7 +106,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
     }, 500);
 
     // 이벤트 핸들러 등록
-    swarmManager.on('status', (s: any) => {
+    swarmManager.on('status', (s: string) => {
       setTransferStatus(prev => {
         if (prev === 'DONE') return prev;
         if (s === 'WAITING_FOR_PEER') {
@@ -219,7 +239,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
     });
 
     // 🚀 [Multi-Receiver] 진행률 리셋 (새 전송 시작 시)
-    swarmManager.on('progress', (data: any) => {
+    swarmManager.on('progress', (data: SenderProgressPayload) => {
       // 진행률이 0으로 리셋되면 새 전송 시작
       if (data.progress === 0 && data.totalBytesSent === 0) {
         setProgressData({
@@ -243,14 +263,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
     });
 
     swarmManager.on('all-transfers-complete', () => {
-      console.log(
+      debugLog(
         '[SenderView] 🎉 Received all-transfers-complete event, setting status to DONE'
       );
       setTransferStatus('DONE');
     });
 
     swarmManager.on('complete', () => {
-      console.log(
+      debugLog(
         '[SenderView] 🎉 Received complete event, setting status to DONE'
       );
       setTransferStatus('DONE');
@@ -261,7 +281,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       swarmManager.cleanup();
       swarmManager.removeAllListeners();
     };
-  }, []);
+  }, [setTransferStatus]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -299,14 +319,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
     }
   };
 
-  const processScannedFiles = async (scannedFiles: any[]) => {
+  const processScannedFiles = async (scannedFiles: ScannedFile[]) => {
     if (scannedFiles.length === 0) return;
 
     // Manifest 생성
     const { manifest, files } = createManifest(scannedFiles);
     setManifest(manifest);
 
-    console.log('[SenderView] 📊 [DEBUG] Manifest created:', {
+    debugLog('[SenderView] 📊 [DEBUG] Manifest created:', {
       isFolder: manifest.isFolder,
       totalFiles: manifest.totalFiles,
       totalSize: manifest.totalSize,
@@ -324,24 +344,22 @@ const SenderView: React.FC<SenderViewProps> = () => {
     setRoomId(id);
     setShareLink(`${window.location.origin}/receive/${id}`);
 
-    console.log('[SenderView] 🏠 [DEBUG] Room created:', id);
+    debugLog('[SenderView] 🏠 [DEBUG] Room created:', id);
 
     try {
-      console.log('[SenderView] 🚀 [DEBUG] Initializing SwarmManager...');
+      debugLog('[SenderView] 🚀 [DEBUG] Initializing SwarmManager...');
       await swarmManagerRef.current?.initSender(manifest, files, id);
-      console.log(
-        '[SenderView] ✅ [DEBUG] SwarmManager initialized successfully'
-      );
+      debugLog('[SenderView] ✅ [DEBUG] SwarmManager initialized successfully');
 
       // 초기화 완료 후에도 이미 전송/완료 이벤트가 들어왔다면 상태를 되돌리지 않는다.
       setTransferStatus(prev =>
         prev === 'IDLE' || prev === 'PREPARING' ? 'WAITING' : prev
       );
-    } catch (error: any) {
+    } catch (error) {
       console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
 
       alert(
-        `Failed to initialize transfer: ${error?.message || 'Unknown error'}\n\nPlease try again with different files.`
+        `Failed to initialize transfer: ${getErrorMessage(error, 'Unknown error')}\n\nPlease try again with different files.`
       );
       setTransferStatus('IDLE');
     }
@@ -392,7 +410,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 ref={folderInputRef}
                 onChange={handleFileSelect}
                 multiple
-                {...({ webkitdirectory: '' } as any)}
+                {...directoryInputProps}
               />
 
               <div className="w-16 h-16 md:w-20 md:h-20 bg-cyan-900/20 rounded-full flex items-center justify-center mb-6 md:mb-8 shadow-[0_0_30px_rgba(6,182,212,0.2)] group-hover:scale-110 transition-transform duration-300">

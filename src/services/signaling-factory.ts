@@ -1,9 +1,11 @@
+import { debugLog } from '../utils/logger';
 /**
  * 시그널링 서비스 팩토리
  * 환경 변수에 따라 Node.js(Socket.io) 또는 Rust(WebSocket) 서버 선택
  */
 
 import { signalingService } from './signaling';
+import { TurnConfigResponse } from './signaling';
 import { rustSignalingAdapter } from './signaling-adapter';
 import {
   USE_RUST_SIGNALING,
@@ -30,7 +32,7 @@ export interface ISignalingService {
     candidate: RTCIceCandidate,
     target?: string
   ): void;
-  requestTurnConfig(roomId: string): Promise<unknown>;
+  requestTurnConfig(roomId: string): Promise<TurnConfigResponse>;
   on(event: string, handler: (data: unknown) => void): void;
   off(event: string, handler: (data: unknown) => void): void;
   getSocketId(): string | null | undefined;
@@ -45,10 +47,10 @@ class SignalingFactory {
   getService(): ISignalingService {
     if (!this.service) {
       if (USE_RUST_SIGNALING) {
-        console.log('[SignalingFactory] Using Rust signaling server');
+        debugLog('[SignalingFactory] Using Rust signaling server');
         this.service = rustSignalingAdapter as unknown as ISignalingService;
       } else {
-        console.log('[SignalingFactory] Using Node.js signaling server');
+        debugLog('[SignalingFactory] Using Node.js signaling server');
         this.service = signalingService as unknown as ISignalingService;
       }
     }
