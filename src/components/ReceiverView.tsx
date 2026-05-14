@@ -25,6 +25,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage, getErrorName } from '../utils/errors';
+import {
+  estimateRemainingSeconds,
+  formatDuration,
+} from '../utils/transferEstimate';
 
 type ReceiverProgressPayload = {
   progress?: number;
@@ -520,6 +524,11 @@ const ReceiverView: React.FC = () => {
   const safeProgress =
     isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
   const strokeDashoffset = 283 - (283 * safeProgress) / 100; // 2 * PI * 45 ≈ 283
+  const estimatedSecondsRemaining = estimateRemainingSeconds(
+    progressData.bytesTransferred,
+    progressData.totalBytes,
+    progressData.speed
+  );
 
   // Common Styles
   const glassPanelClass =
@@ -758,7 +767,7 @@ const ReceiverView: React.FC = () => {
             </div>
 
             {/* 하단 정보 패널 (투명) */}
-            <div className="grid grid-cols-2 gap-4 bg-black/20 backdrop-blur-md rounded-2xl p-6 border border-white/5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-black/20 backdrop-blur-md rounded-2xl p-6 border border-white/5">
               <div className="text-left">
                 <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
                   Download Speed
@@ -773,6 +782,14 @@ const ReceiverView: React.FC = () => {
                 </p>
                 <p className="font-mono text-xl text-white">
                   {formatBytes(progressData.bytesTransferred)}
+                </p>
+              </div>
+              <div className="text-left sm:text-right">
+                <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                  Time Left
+                </p>
+                <p className="font-mono text-xl text-white">
+                  {formatDuration(estimatedSecondsRemaining)}
                 </p>
               </div>
             </div>

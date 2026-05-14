@@ -4,13 +4,13 @@ const GB = 1024 * 1024 * 1024;
 
 const cloudPlansFixture = {
   directP2p: {
-    label: 'Direct P2P',
+    label: 'Free Direct Send',
     unlimited: true,
     priceKrw: 0,
   },
   free: {
     sku: 'free_cloud_10gb_24h',
-    label: 'Free Cloud Drop',
+    label: 'PonsWarp Free',
     priceKrw: 0,
     maxTotalBytes: 10 * GB,
     maxFileBytes: 10 * GB,
@@ -86,10 +86,8 @@ test('pricing route renders plans without a live billing provider', async ({
   await page.goto('/pricing');
 
   await expect(page.getByText('CLOUD DROP PRICING')).toBeVisible();
-  await expect(page.getByText('Direct P2P')).toBeVisible();
-  await expect(
-    page.getByText('Free Cloud Drop', { exact: true })
-  ).toBeVisible();
+  await expect(page.getByText('Free Direct Send')).toBeVisible();
+  await expect(page.getByText('PonsWarp Free', { exact: true })).toBeVisible();
   await expect(page.getByText('100GB Drop Pass')).toBeVisible();
 });
 

@@ -44,7 +44,7 @@ const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
   },
   free: {
     sku: 'free_cloud_10gb_24h',
-    label: 'Free Cloud Drop',
+    label: 'PonsWarp Free',
     priceKrw: 0,
     maxTotalBytes: 10 * GB,
     maxFileBytes: 10 * GB,
@@ -101,6 +101,9 @@ const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
 
 const formatKrw = (value: number) =>
   `${new Intl.NumberFormat('ko-KR').format(value)}원`;
+
+const formatPlanPrice = (value: number) =>
+  value === 0 ? 'FREE' : formatKrw(value);
 
 const formatRetention = (seconds: number) => {
   const days = Math.round(seconds / 86400);
@@ -382,14 +385,20 @@ const PricingView: React.FC<PricingViewProps> = ({
                   </p>
                 </div>
               </div>
+              <p className="text-4xl font-black text-emerald-300 mb-1">
+                {formatPlanPrice(plans.free.priceKrw)}
+              </p>
+              <p className="text-xs text-gray-500 font-mono mb-4">
+                0원 · no card required
+              </p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <Metric
-                  label="share limit"
+                  label="cloud link"
                   value={formatBytes(plans.free.maxTotalBytes)}
                 />
                 <Metric
-                  label="file limit"
-                  value={formatBytes(plans.free.maxFileBytes)}
+                  label="direct send"
+                  value={plans.directP2p.unlimited ? 'unlimited' : 'metered'}
                 />
                 <Metric
                   label="retention"

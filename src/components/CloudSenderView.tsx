@@ -33,6 +33,10 @@ import {
 } from '../utils/fileScanner';
 import { getErrorMessage } from '../utils/errors';
 import { createManifest, formatBytes } from '../utils/fileUtils';
+import {
+  estimateRemainingSeconds,
+  formatDuration,
+} from '../utils/transferEstimate';
 import { TransferManifest } from '../types/types';
 
 type CloudUploadStatus =
@@ -56,13 +60,13 @@ const ENTITLEMENT_STORAGE_KEY = 'ponswarpCloudEntitlementToken';
 
 const FALLBACK_CLOUD_PLANS: CloudPlansResponse = {
   directP2p: {
-    label: 'Direct P2P',
+    label: 'Free Direct Send',
     unlimited: true,
     priceKrw: 0,
   },
   free: {
     sku: 'free_cloud_10gb_24h',
-    label: 'Free Cloud Drop',
+    label: 'PonsWarp Free',
     priceKrw: 0,
     maxTotalBytes: 10 * GB,
     maxFileBytes: 10 * GB,
@@ -156,6 +160,7 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
     useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
   const [dropPassword, setDropPassword] = useState('');
   const [downloadLimit, setDownloadLimit] = useState('');
+  const uploadStartedAtRef = useRef<number | null>(null);
 
   const uploadedBytes = useMemo(
     () =>
@@ -165,6 +170,17 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
   const totalBytes = manifest?.totalSize || 0;
   const progress =
     totalBytes > 0 ? Math.min(100, (uploadedBytes / totalBytes) * 100) : 0;
+  const uploadElapsedSeconds =
+    uploadStartedAtRef.current && uploadedBytes > 0
+      ? (Date.now() - uploadStartedAtRef.current) / 1000
+      : 0;
+  const uploadSpeed =
+    uploadElapsedSeconds > 0 ? uploadedBytes / uploadElapsedSeconds : 0;
+  const estimatedUploadSecondsRemaining = estimateRemainingSeconds(
+    uploadedBytes,
+    totalBytes,
+    uploadSpeed
+  );
   const freePlan = cloudPlans.free;
 
   useEffect(() => {
@@ -333,6 +349,7 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
       let nextIndex = 0;
 
       setStatus('UPLOADING');
+      uploadStartedAtRef.current = Date.now();
 
       const uploadWorker = async () => {
         while (nextIndex < created.files.length) {
@@ -374,6 +391,8 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
     } catch (uploadError) {
       setStatus('ERROR');
       setError(getErrorMessage(uploadError, 'Cloud upload failed'));
+    } finally {
+      uploadStartedAtRef.current = null;
     }
   };
 
@@ -555,13 +574,29 @@ const CloudSenderView: React.FC<CloudSenderViewProps> = ({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3 md:gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+              <div className="bg-black/30 backdrop-blur-md p-4 rounded-2xl border border-white/5 text-center">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
+                  Speed
+                </p>
+                <p className="font-mono text-emerald-300 text-base md:text-lg">
+                  {formatBytes(uploadSpeed)}/s
+                </p>
+              </div>
               <div className="bg-black/30 backdrop-blur-md p-4 rounded-2xl border border-white/5 text-center">
                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
                   Uploaded
                 </p>
                 <p className="font-mono text-white text-base md:text-lg">
                   {formatBytes(uploadedBytes)}
+                </p>
+              </div>
+              <div className="bg-black/30 backdrop-blur-md p-4 rounded-2xl border border-white/5 text-center">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
+                  Time Left
+                </p>
+                <p className="font-mono text-white text-base md:text-lg">
+                  {formatDuration(estimatedUploadSecondsRemaining)}
                 </p>
               </div>
               <div className="bg-black/30 backdrop-blur-md p-4 rounded-2xl border border-white/5 text-center">

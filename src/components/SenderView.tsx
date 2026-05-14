@@ -29,6 +29,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
+import {
+  estimateRemainingSeconds,
+  formatDuration,
+} from '../utils/transferEstimate';
 
 interface SenderViewProps {
   onComplete?: () => void;
@@ -78,6 +82,11 @@ const SenderView: React.FC<SenderViewProps> = () => {
     bytesTransferred: 0,
     totalBytes: 0,
   });
+  const estimatedSecondsRemaining = estimateRemainingSeconds(
+    progressData.bytesTransferred,
+    progressData.totalBytes,
+    progressData.speed
+  );
 
   // 🚀 [Multi-Receiver] 피어 상태 추적
   const [connectedPeers, setConnectedPeers] = useState<string[]>([]);
@@ -642,7 +651,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-3 gap-3 md:gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
                   Speed
@@ -657,6 +666,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 </p>
                 <p className="font-mono text-white text-base md:text-lg">
                   {formatBytes(progressData.bytesTransferred)}
+                </p>
+              </div>
+              <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
+                  Time Left
+                </p>
+                <p className="font-mono text-white text-base md:text-lg">
+                  {formatDuration(estimatedSecondsRemaining)}
                 </p>
               </div>
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
