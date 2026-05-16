@@ -45,6 +45,7 @@ import {
   isPrematureTransferComplete,
   shouldRequestMoreChunks,
 } from '../utils/transferFlowControl';
+import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -158,6 +159,7 @@ export class SwarmManager {
   private pendingAckPeers: Set<string> = new Set();
   private partitionAckWaiters: Map<number, Set<string>> = new Map();
   private sendWindowWaiters: Set<() => void> = new Set();
+  private awaitingReceiverReconnect = false;
 
   // 🚀 [대기열 시스템]
   private transferQueue: string[] = []; // ready 대기열
@@ -352,6 +354,21 @@ export class SwarmManager {
 
     // 모든 피어가 연결 해제되면 전송 실패
     if (this.isTransferring && this.peers.size === 0) {
+      if (this.canResumeSingleFileTransfer()) {
+        this.awaitingReceiverReconnect = true;
+        this.isTransferring = false;
+        this.isProcessingBatch = false;
+        this.pendingAckPeers.clear();
+        this.partitionAckWaiters.clear();
+        this.notifySendWindowWaiters();
+        this.emit('status', 'WAITING_FOR_RECONNECT');
+        logWarn(
+          '[SwarmManager]',
+          'All receivers disconnected during transfer; keeping sender session alive for mobile resume'
+        );
+        return;
+      }
+
       this.emit('transfer-failed', 'All peers disconnected');
       this.cleanup();
     }
@@ -693,15 +710,15 @@ export class SwarmManager {
     this.currentTransferPeers = new Set([peerId]);
     this.completedPeersInSession.delete(peerId);
     this.pausedPeers.delete(peerId);
-    this.isTransferring = true;
+    this.pendingAckPeers.clear();
+    this.partitionAckWaiters.clear();
+    this.awaitingReceiverReconnect = false;
+    this.isTransferring = false;
     this.isProcessingBatch = false;
     this.totalBytesSent = offset;
     this.transferStartTime = performance.now();
 
-    this.worker?.postMessage({
-      type: 'resume-single-file',
-      payload: { offset },
-    });
+    void this.runPartitionedTransfer(offset);
   }
 
   private canResumeSingleFileTransfer(): boolean {
@@ -1836,15 +1853,16 @@ export class SwarmManager {
 
   private startTransfer(): void {
     if (this.isTransferring) return;
-    void this.runPartitionedTransfer();
+    void this.runPartitionedTransfer(0);
   }
 
-  private async runPartitionedTransfer(): Promise<void> {
+  private async runPartitionedTransfer(startOffset = 0): Promise<void> {
     if (!this.pendingManifest) return;
 
     this.isTransferring = true;
+    this.awaitingReceiverReconnect = false;
     this.isProcessingBatch = false;
-    this.totalBytesSent = 0;
+    this.totalBytesSent = startOffset;
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
     this.transferStartTime = performance.now();
@@ -1888,9 +1906,16 @@ export class SwarmManager {
     this.emit('status', 'TRANSFERRING');
 
     try {
-      await this.sendFilesPartitioned(manifest);
+      await this.sendFilesPartitioned(manifest, startOffset);
       await this.finishTransfer();
     } catch (error) {
+      if (this.awaitingReceiverReconnect) {
+        logWarn(
+          '[SwarmManager]',
+          'Partitioned transfer paused while waiting for receiver reconnect'
+        );
+        return;
+      }
       logError('[SwarmManager]', 'Partitioned transfer failed:', error);
       this.isTransferring = false;
       this.emit(
@@ -1900,14 +1925,25 @@ export class SwarmManager {
     }
   }
 
-  private async sendFilesPartitioned(manifest: TransferManifest): Promise<void> {
+  private async sendFilesPartitioned(
+    manifest: TransferManifest,
+    startOffset = 0
+  ): Promise<void> {
     const partitionSize = TRANSFER_PARTITION_SIZE;
-    let sequence = 0;
-    let globalOffset = 0;
-    let partitionEnd = Math.min(partitionSize, manifest.totalSize || partitionSize);
+    const cursor = getPartitionedResumeCursor({
+      fileSizes: this.files.map(file => file.size),
+      startOffset,
+      chunkSize: CHUNK_SIZE_INITIAL,
+      partitionSize,
+      totalSize: manifest.totalSize,
+    });
+    let sequence = cursor.sequence;
+    let globalOffset = cursor.globalOffset;
+    let partitionEnd = cursor.nextPartitionEnd;
 
-    for (const file of this.files) {
-      let fileOffset = 0;
+    for (let fileIndex = cursor.fileIndex; fileIndex < this.files.length; fileIndex++) {
+      const file = this.files[fileIndex];
+      let fileOffset = fileIndex === cursor.fileIndex ? cursor.fileOffset : 0;
       while (fileOffset < file.size) {
         if (!this.isTransferring) {
           throw new Error('Transfer stopped');

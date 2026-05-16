@@ -23,6 +23,7 @@ import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
 import { base64ToBytes, CryptoService } from './cryptoService';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
+import { shouldKeepReceiverReconnectAlive } from '../utils/mobileResumePolicy';
 
 type EventHandler = (data: unknown) => void;
 type PeerSignalData = Parameters<SinglePeerConnection['signal']>[0];
@@ -80,6 +81,7 @@ class ReceiverService {
   private isReconnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastPartitionOffsetNeedingAck: number | null = null;
 
   // 상태 관리
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -106,6 +108,71 @@ class ReceiverService {
 
   constructor() {
     this.setupSignalingHandlers();
+    this.setupPageLifecycleHandlers();
+  }
+
+  private readonly handlePageBecameActive = (_event?: Event) => {
+    if (!this.roomId || !this.isTransferActive) return;
+
+    if (this.peer && this.peer.connected) {
+      this.sendResumeHints('page became active');
+      return;
+    }
+
+    if (!this.reconnectTimer) {
+      this.scheduleReconnect({ immediate: true });
+    }
+  };
+
+  private setupPageLifecycleHandlers(): void {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        this.handlePageBecameActive();
+      }
+    });
+    window.addEventListener('pageshow', this.handlePageBecameActive);
+    window.addEventListener('focus', this.handlePageBecameActive);
+  }
+
+  private isPageHidden(): boolean {
+    return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  }
+
+  private getCurrentFileCount(): number {
+    return (
+      this.currentManifest?.totalFiles ?? this.currentManifest?.files?.length ?? 0
+    );
+  }
+
+  private shouldKeepResumableSessionAlive(): boolean {
+    return shouldKeepReceiverReconnectAlive({
+      isTransferActive: this.isTransferActive,
+      hasRoom: !!this.roomId,
+      hasWriter: !!this.writer,
+      fileCount: this.getCurrentFileCount(),
+      reconnectAttempts: this.reconnectAttempts,
+      maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
+      pageHidden: this.isPageHidden(),
+    });
+  }
+
+  private sendResumeHints(reason: string): void {
+    if (!this.peer || !this.peer.connected) return;
+
+    this.peer.send(JSON.stringify({ type: 'CONTROL', action: 'RESUME' }));
+
+    if (this.lastPartitionOffsetNeedingAck !== null) {
+      this.peer.send(
+        JSON.stringify({
+          type: 'PARTITION_ACK',
+          offset: this.lastPartitionOffsetNeedingAck,
+        })
+      );
+    }
+
+    this.writer?.requestResumeFromCurrentOffset?.(reason);
   }
 
   /**
@@ -456,9 +523,7 @@ class ReceiverService {
         }
         this.emit('status', 'RECEIVING');
         this.emit('reconnected', true);
-        this.writer?.requestResumeFromCurrentOffset?.(
-          'connection restored after data channel close'
-        );
+        this.sendResumeHints('connection restored after data channel close');
       }
     });
 
@@ -489,23 +554,27 @@ class ReceiverService {
       (this.currentManifest.totalFiles ??
         this.currentManifest.files?.length ??
         0) > 0 &&
-      this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS
+      this.shouldKeepResumableSessionAlive()
     );
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(options: { immediate?: boolean } = {}): void {
     if (!this.roomId || this.reconnectTimer) {
       return;
     }
 
     this.isReconnecting = true;
-    this.reconnectAttempts++;
+    if (!this.isPageHidden() || this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      this.reconnectAttempts++;
+    }
     this.connectedPeerId = null;
 
-    const delay = Math.min(
-      RECONNECT_BASE_DELAY_MS * this.reconnectAttempts,
-      5000
-    );
+    const delay = options.immediate
+      ? 0
+      : Math.min(
+          RECONNECT_BASE_DELAY_MS * Math.max(1, this.reconnectAttempts),
+          5000
+        );
 
     logWarn(
       '[Receiver]',
@@ -539,6 +608,14 @@ class ReceiverService {
             return;
           }
 
+          if (this.isReconnecting && this.isPageHidden()) {
+            logWarn(
+              '[Receiver]',
+              'Reconnect window expired while page is hidden; keeping resumable session alive until foreground'
+            );
+            return;
+          }
+
           if (this.isReconnecting) {
             this.isReconnecting = false;
             this.isTransferActive = false;
@@ -553,6 +630,14 @@ class ReceiverService {
 
         if (this.shouldAttemptReconnect()) {
           this.scheduleReconnect();
+          return;
+        }
+
+        if (this.isPageHidden()) {
+          logWarn(
+            '[Receiver]',
+            'Reconnect failed while page is hidden; keeping resumable session alive until foreground'
+          );
           return;
         }
 
@@ -646,11 +731,13 @@ class ReceiverService {
           // 무시
           break;
         case 'PARTITION':
+          this.lastPartitionOffsetNeedingAck = Number(msg.offset);
           await this.writer?.waitForIdle?.();
           if (this.peer && this.peer.connected) {
             this.peer.send(
               JSON.stringify({ type: 'PARTITION_ACK', offset: msg.offset })
             );
+            this.lastPartitionOffsetNeedingAck = null;
           }
           break;
       }

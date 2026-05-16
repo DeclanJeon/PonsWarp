@@ -1,3 +1,12 @@
+# [0.7.3](https://github.com/DeclanJeon/PonsWarp/compare/v0.7.2...v0.7.3) (2026-05-17)
+
+
+### Bug Fixes
+
+* 모바일 수신 브라우저 백그라운드/foreground 복귀 시 P2P 전송 재개 처리 추가
+* receiver lifecycle 복귀 시 RESUME/PARTITION_ACK 재전송 및 sender offset 기반 재전송 보강
+
+
 # [0.7.0](https://github.com/DeclanJeon/PonsWarp/compare/v0.6.0...v0.7.0) (2025-12-04)
 
 
