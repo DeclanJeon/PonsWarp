@@ -4,7 +4,8 @@ import { debugLog } from '../utils/logger';
  * Socket.io 이벤트를 JSON Frame으로 변환하여 기존 코드와 호환성 유지
  */
 
-import { TurnConfigResponse } from './signaling';
+import type { TurnConfigResponse } from './signaling';
+import { RUST_SIGNALING_URL } from '../utils/constants';
 
 type MessageHandler = (data: unknown) => void;
 
@@ -22,7 +23,7 @@ class RustSignalingAdapter {
   private url: string = '';
   private connectionPromise: Promise<void> | null = null;
 
-  async connect(url: string): Promise<void> {
+  async connect(url: string = RUST_SIGNALING_URL): Promise<void> {
     // [FIX] 이미 연결되어 있거나 연결 중이면 기존 연결 재사용 (중복 연결 방지)
     if (this.ws?.readyState === WebSocket.OPEN) {
       debugLog('[RustSignaling] ✅ Already connected:', this.socketId);
@@ -254,8 +255,18 @@ class RustSignalingAdapter {
   }
 
   async requestTurnConfig(roomId: string): Promise<TurnConfigResponse> {
-    return new Promise(resolve => {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      await this.connect(this.url || RUST_SIGNALING_URL);
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.off('turn-config', handler);
+        reject(new Error('TURN config request timed out'));
+      }, 3000);
+
       const handler = (data: unknown) => {
+        clearTimeout(timeout);
         this.off('turn-config', handler);
         resolve(data as TurnConfigResponse);
       };

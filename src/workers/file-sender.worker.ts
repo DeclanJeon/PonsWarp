@@ -313,7 +313,6 @@ async function initWorker(payload: {
     state.mode = 'multi-raw';
   }
 
-  triggerPrefetch();
   self.postMessage({ type: 'init-complete' });
 }
 
@@ -345,13 +344,9 @@ async function resumeSingleFile(offset: number) {
   isTransferActive = true;
 
   if (state.files.length === 1) {
-    const file = state.files[0];
     state.mode = 'single';
     state.currentFileIndex = 0;
-    singleFileReader =
-      safeOffset < file.size
-        ? file.slice(safeOffset).stream().getReader()
-        : null;
+    singleFileReader = null;
   } else {
     state.mode = 'multi-raw';
     seekMultiFileOffset(safeOffset);
@@ -370,7 +365,6 @@ async function resumeSingleFile(offset: number) {
   fallbackTotalBytes = safeOffset;
   fallbackSequence = Math.floor(safeOffset / CHUNK_SIZE_INITIAL);
 
-  triggerPrefetch();
   self.postMessage({ type: 'resume-ready', payload: { offset: safeOffset } });
 }
 
@@ -617,78 +611,30 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   if (state.files.length === 0) return null;
   const file = state.files[0];
 
-  if (!singleFileReader && state.currentFileOffset === 0) {
-    singleFileReader = file.stream().getReader();
-  }
-
   if (state.currentFileOffset >= file.size) {
     state.isCompleted = true;
-    try {
-      await singleFileReader?.cancel();
-    } catch {
-      // Ignore reader cancellation after completion.
-    }
     singleFileReader = null;
+    singleFileBuffer = null;
     return null;
   }
 
   const currentChunkSize = adaptiveConfig.enableAdaptive
     ? adaptiveConfig.chunkSize
     : CHUNK_SIZE_INITIAL;
+  const endOffset = Math.min(state.currentFileOffset + currentChunkSize, file.size);
 
   try {
-    for (;;) {
-      const bufferSize = singleFileBuffer?.length ?? 0;
-
-      if (
-        bufferSize >= currentChunkSize ||
-        state.currentFileOffset + bufferSize >= file.size
-      ) {
-        const dataToSend = singleFileBuffer!.slice(0, currentChunkSize);
-        const remaining = singleFileBuffer!.slice(currentChunkSize);
-        singleFileBuffer = remaining.length > 0 ? remaining : null;
-        state.currentFileOffset += dataToSend.length;
-        return createPacket(dataToSend);
-      }
-
-      if (!singleFileReader) {
-        state.isCompleted = true;
-        return null;
-      }
-
-      const { done, value } = await singleFileReader.read();
-
-      if (done) {
-        if (singleFileBuffer && singleFileBuffer.length > 0) {
-          const dataToSend = singleFileBuffer;
-          singleFileBuffer = null;
-          state.currentFileOffset += dataToSend.length;
-          singleFileReader = null;
-          return createPacket(dataToSend);
-        }
-        state.isCompleted = true;
-        singleFileReader = null;
-        return null;
-      }
-
-      if (singleFileBuffer) {
-        const newBuffer = new Uint8Array(
-          singleFileBuffer.length + value.length
-        );
-        newBuffer.set(singleFileBuffer);
-        newBuffer.set(value, singleFileBuffer.length);
-        singleFileBuffer = newBuffer;
-      } else {
-        singleFileBuffer = value;
-      }
+    const chunkData = new Uint8Array(
+      await file.slice(state.currentFileOffset, endOffset).arrayBuffer()
+    );
+    state.currentFileOffset = endOffset;
+    if (state.currentFileOffset >= file.size) {
+      state.isCompleted = true;
     }
+    return createPacket(chunkData);
   } catch (e) {
-    console.error('[Sender Worker] Single chunk error:', e);
-    try {
-      await singleFileReader?.cancel();
-    } catch {
-      // Ignore reader cancellation after a read error.
-    }
+    console.error('[Sender Worker] Single chunk slice error:', e);
+    state.isCompleted = true;
     singleFileReader = null;
     singleFileBuffer = null;
     return null;
@@ -1030,13 +976,12 @@ async function processBatch(requestedCount: number) {
 
   if (state.startTime === 0) state.startTime = Date.now();
 
-  if (doubleBuffer.getActiveSize() === 0 && prefetchPromise) {
-    await prefetchPromise;
+  const chunks: ArrayBuffer[] = [];
+  for (let i = 0; i < requestedCount && !state.isCompleted; i++) {
+    const chunk = await createNextChunk();
+    if (chunk && chunk.byteLength > 0) chunks.push(chunk);
+    else break;
   }
-
-  if (doubleBuffer.getActiveSize() === 0) doubleBuffer.swap();
-
-  const chunks = doubleBuffer.takeFromActive(requestedCount);
 
   const totalBytesSent = Number(getTotalBytesSent());
 
@@ -1072,19 +1017,8 @@ async function processBatch(requestedCount: number) {
     );
   }
 
-  if (
-    state.isCompleted &&
-    doubleBuffer.isEmpty() &&
-    (!zipBuffer || zipBuffer.length === 0)
-  ) {
+  if (state.isCompleted) {
     self.postMessage({ type: 'complete' });
-    return;
-  }
-
-  triggerPrefetch();
-
-  if (chunks.length === 0 && !state.isCompleted) {
-    createAndSendImmediate(requestedCount);
   }
 }
 

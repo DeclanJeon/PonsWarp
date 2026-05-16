@@ -8,29 +8,36 @@ export const USE_RUST_SIGNALING =
 export const RUST_SIGNALING_URL =
   import.meta.env.VITE_RUST_SIGNALING_URL || 'ws://localhost:5502/ws';
 
-// 🚀 청크 사이징 (128KB 브라우저 제한)
+// 안정성 우선 청크 사이징.
+// 같은 브라우저/같은 탭에서도 64KB x 다중 배치가 실제 DataChannel drain보다
+// 빠르게 쌓이면 40% 부근에서 receiver close/finalize가 멈출 수 있다.
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
-export const CHUNK_SIZE_INITIAL = 64 * 1024; // 64KB
-export const CHUNK_SIZE_MAX = 128 * 1024; // 128KB (브라우저 한계)
+export const CHUNK_SIZE_INITIAL = 64 * 1024; // 64KB, OSS-style WebRTC transfer chunk
+export const CHUNK_SIZE_MAX = 64 * 1024; // fixed until adaptive sender is re-enabled
 
-// 🚀 [성능 최적화] WebRTC 버퍼 설정 - 공격적 파이프라이닝 적용
-// 60Mbps 환경에서 끊김 없는 전송을 위해 마진을 크게 확보
-export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024; // 16MB (기존 8MB -> 2배 증대)
-export const LOW_WATER_MARK = 4 * 1024 * 1024; // 4MB (이하로 떨어지면 즉시 리필)
-export const HIGH_WATER_MARK = 12 * 1024 * 1024; // 12MB (여기까지 꽉 채움)
+// 🚀 [안정성 우선] WebRTC 버퍼 설정
+// DataChannel bufferedAmount는 sender 로컬 큐일 뿐 receiver 저장 완료를 의미하지 않는다.
+// 과도한 8~16MB 파이프라인은 실제 브라우저에서 메모리/GC 압박과 진행 정지를 만든다.
+export const MAX_BUFFERED_AMOUNT = 2 * 1024 * 1024; // 2MB bounded DataChannel queue
+export const LOW_WATER_MARK = 512 * 1024; // 512KB 이하에서 재개
+export const HIGH_WATER_MARK = 2 * 1024 * 1024; // 2MB까지만 큐잉
+
+// PairDrop/Snapdrop 계열처럼 일정량을 보낸 뒤 receiver writer queue가 idle될 때까지
+// 기다린다. 1MB는 안정적이지만 RTT가 많은 환경에서 너무 느려 8MB까지 확장한다.
+export const TRANSFER_PARTITION_SIZE = 8 * 1024 * 1024;
 
 export const HEADER_SIZE = 22; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4) + Checksum(4)
 export const CONNECTION_TIMEOUT_MS = 15000;
 
-// 🚀 [성능 최적화] 배치 설정 - IPC 오버헤드 감소
-export const BATCH_SIZE_MIN = 32; // 최소 32개 (약 4MB) - 기존 16에서 상향
-export const BATCH_SIZE_MAX = 128; // 최대 128개 (약 16MB) - 기존 32에서 상향
-export const BATCH_SIZE_INITIAL = 64; // 초기 64개 (약 8MB) -> Start-up 가속
-export const BATCH_REQUEST_SIZE = 64; // 레거시 호환
+// 단일-flight 배치: 성능보다 drain/receiver 안정성을 우선한다.
+export const BATCH_SIZE_MIN = 1;
+export const BATCH_SIZE_MAX = 1;
+export const BATCH_SIZE_INITIAL = 1;
+export const BATCH_REQUEST_SIZE = 1; // 레거시 호환
 
 // 🚀 프리페치 버퍼 설정
-export const PREFETCH_BUFFER_SIZE = 32 * 1024 * 1024; // 32MB
-export const PREFETCH_LOW_THRESHOLD = 8 * 1024 * 1024; // 8MB
+export const PREFETCH_BUFFER_SIZE = 0;
+export const PREFETCH_LOW_THRESHOLD = 0;
 
 // 🚀 [Phase 3] 네트워크 적응형 제어 설정
 export const BBR_STARTUP_GAIN = 2.89; // BBR Startup 모드 gain

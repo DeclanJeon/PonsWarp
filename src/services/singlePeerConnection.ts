@@ -33,6 +33,7 @@ export class SinglePeerConnection {
   public pc: SimplePeer.Instance | null = null;
   private destroyed: boolean = false;
   private drainEmitted: boolean = false;
+  private drainPollInterval: ReturnType<typeof setInterval> | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
 
   constructor(peerId: string, initiator: boolean, config: PeerConfig) {
@@ -143,16 +144,30 @@ export class SinglePeerConnection {
     const channel = (this.pc as SimplePeerWithChannel | null)?._channel;
     if (!channel) return;
 
+    channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
+
     channel.onbufferedamountlow = () => {
-      if (!this.drainEmitted && this.connected) {
-        this.drainEmitted = true;
-        this.emit('drain', this.id);
-        // 다음 drain 이벤트를 위해 리셋
-        setTimeout(() => {
-          this.drainEmitted = false;
-        }, 0);
-      }
+      this.emitDrainOnce();
     };
+
+    if (this.drainPollInterval) clearInterval(this.drainPollInterval);
+    this.drainPollInterval = setInterval(() => {
+      if (!this.connected || this.destroyed || channel.readyState !== 'open') return;
+      if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
+        this.emitDrainOnce();
+      }
+    }, 200);
+  }
+
+  private emitDrainOnce(): void {
+    if (!this.drainEmitted && this.connected) {
+      this.drainEmitted = true;
+      this.emit('drain', this.id);
+      // 다음 drain 이벤트를 위해 리셋
+      setTimeout(() => {
+        this.drainEmitted = false;
+      }, 0);
+    }
   }
 
   /**
@@ -217,6 +232,11 @@ export class SinglePeerConnection {
     if (this.pc) {
       this.pc.destroy();
       this.pc = null;
+    }
+
+    if (this.drainPollInterval) {
+      clearInterval(this.drainPollInterval);
+      this.drainPollInterval = null;
     }
 
     this.removeAllListeners();

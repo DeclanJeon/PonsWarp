@@ -25,6 +25,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage, getErrorName } from '../utils/errors';
+import { isCompleteRoomCode, normalizeRoomCodeInput } from '../utils/roomCode';
 import {
   estimateRemainingSeconds,
   formatRemainingTime,
@@ -234,7 +235,12 @@ const ReceiverView: React.FC = () => {
 
   const handleJoin = useCallback(
     async (id: string) => {
-      if (!id || id.length < 6) return;
+      const normalizedRoomId = normalizeRoomCodeInput(id);
+      if (!normalizedRoomId || normalizedRoomId.length < 6) return;
+
+      if (normalizedRoomId !== id) {
+        setRoomId(normalizedRoomId);
+      }
 
       setStatus('CONNECTING');
       setErrorMsg('');
@@ -273,7 +279,7 @@ const ReceiverView: React.FC = () => {
       }, CONNECTION_TIMEOUT_MS);
 
       try {
-        await transferService.initReceiver(id.toUpperCase());
+        await transferService.initReceiver(normalizedRoomId);
       } catch (e) {
         if (connectionTimeoutRef.current)
           clearTimeout(connectionTimeoutRef.current);
@@ -415,9 +421,9 @@ const ReceiverView: React.FC = () => {
 
   // 🚀 [핵심 수정] 방 참여 Effect (roomId가 있을 때 한 번만 실행)
   useEffect(() => {
-    if (roomId && !isInitializedRef.current) {
+    if (isCompleteRoomCode(roomId || '') && !isInitializedRef.current) {
       isInitializedRef.current = true;
-      handleJoin(roomId);
+      handleJoin(roomId!);
     }
   }, [roomId, handleJoin]);
 
@@ -564,10 +570,10 @@ const ReceiverView: React.FC = () => {
               <div className="relative group mb-6">
                 <input
                   value={roomId || ''}
-                  onChange={e => setRoomId(e.target.value.toUpperCase())}
-                  placeholder="000000"
-                  maxLength={6}
-                  className="w-full bg-black/60 border-2 border-gray-700 rounded-2xl py-4 md:py-6 px-4 text-center text-3xl md:text-5xl font-mono text-cyan-400 tracking-[0.3em] md:tracking-[0.5em] outline-none focus:border-cyan-500 focus:shadow-[0_0_30px_rgba(6,182,212,0.3)] transition-all placeholder-white/10"
+                  onChange={e => setRoomId(normalizeRoomCodeInput(e.target.value))}
+                  placeholder="CODE OR LINK"
+                  maxLength={160}
+                  className="w-full bg-black/30 border border-gray-600 rounded-2xl p-6 text-center text-3xl font-mono tracking-[0.5em] focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 outline-none text-white placeholder-gray-700 transition-all uppercase"
                 />
                 <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-cyan-500/50 rounded-tl-lg -translate-x-2 -translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
                 <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-purple-500/50 rounded-br-lg translate-x-2 translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
@@ -575,7 +581,7 @@ const ReceiverView: React.FC = () => {
 
               <button
                 onClick={() => handleJoin(roomId!)}
-                disabled={!roomId || roomId.length < 6}
+                disabled={!isCompleteRoomCode(roomId || '')}
                 className="w-full bg-white text-black py-4 rounded-xl font-bold text-base md:text-lg tracking-[0.2em] hover:bg-cyan-300 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
               >
                 ESTABLISH LINK

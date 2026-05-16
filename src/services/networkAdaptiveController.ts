@@ -38,7 +38,7 @@ export interface TransferMetrics {
 export class NetworkAdaptiveController {
   // 상태 변수
   private congestionState: CongestionState = {
-    cwnd: 1024 * 1024, // 초기 시작: 1MB (Slow Start)
+    cwnd: 128 * 1024, // conservative start: one small DataChannel queue
     estimatedBw: 0,
     estimatedRtt: 50,
     rttVar: 0,
@@ -57,8 +57,8 @@ export class NetworkAdaptiveController {
   private lastBytesSent = 0;
 
   // 상수 설정
-  private readonly MIN_CWND = 256 * 1024; // 최소 256KB
-  private readonly MAX_CWND = MAX_BUFFERED_AMOUNT; // 16MB
+  private readonly MIN_CWND = 128 * 1024;
+  private readonly MAX_CWND = MAX_BUFFERED_AMOUNT;
   private readonly RTT_WINDOW = 20; // 최근 20개 샘플만 유지
 
   constructor() {
@@ -133,7 +133,7 @@ export class NetworkAdaptiveController {
       // 여유가 있으면 윈도우 크기 증가
       this.congestionState.cwnd = Math.min(
         this.MAX_CWND,
-        this.congestionState.cwnd + 64 * 1024 // 64KB씩 증가
+        this.congestionState.cwnd + 16 * 1024
       );
     }
 
@@ -187,7 +187,7 @@ export class NetworkAdaptiveController {
 
   public reset(): void {
     this.congestionState = {
-      cwnd: 1024 * 1024, // 1MB Start
+      cwnd: 128 * 1024,
       estimatedBw: 0,
       estimatedRtt: 50,
       rttVar: 0,

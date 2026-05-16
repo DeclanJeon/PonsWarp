@@ -30,9 +30,19 @@ import {
   HIGH_WATER_MARK,
   HEADER_SIZE,
   BATCH_SIZE_INITIAL,
+  CHUNK_SIZE_INITIAL,
+  TRANSFER_PARTITION_SIZE,
 } from '../utils/constants';
+import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
 import { networkController, AdaptiveParams } from './networkAdaptiveController';
+import { calculateProgressPercent } from '../utils/transferProgress';
+import {
+  calculateSafeBatchRequestSize,
+  getPacketPayloadSize,
+  isPrematureTransferComplete,
+  shouldRequestMoreChunks,
+} from '../utils/transferFlowControl';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -51,6 +61,7 @@ export interface SwarmState {
 export interface BroadcastResult {
   successCount: number;
   failedPeers: string[];
+  sentPeers: string[];
 }
 
 export interface SwarmProgress {
@@ -76,7 +87,7 @@ type OutgoingSignalMessage = PeerSignalData & {
 };
 type ControlMessage = {
   type?: string;
-  action?: 'PAUSE' | 'RESUME';
+  action?: 'PAUSE' | 'RESUME' | 'ACK';
   offset?: unknown;
   actualSize?: unknown;
 };
@@ -134,12 +145,16 @@ export class SwarmManager {
   private totalBytes = 0;
   private transferStartTime = 0;
 
-  // Keep-alive 타이머
+  // Keep-alive/flow-control 타이머
   private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
   private adaptiveStatsInterval: ReturnType<typeof setInterval> | null = null;
+  private transferPumpInterval: ReturnType<typeof setInterval> | null = null;
+  private workerBatchTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // 🚀 [Flow Control] 원격 피어의 일시정지 상태 추적
   private pausedPeers: Set<string> = new Set();
+  private pendingAckPeers: Set<string> = new Set();
+  private partitionAckWaiters: Map<number, Set<string>> = new Map();
 
   // 🚀 [대기열 시스템]
   private transferQueue: string[] = []; // ready 대기열
@@ -525,6 +540,7 @@ export class SwarmManager {
    */
   public broadcastChunk(chunk: ArrayBuffer): BroadcastResult {
     const failedPeers: string[] = [];
+    const sentPeers: string[] = [];
     let successCount = 0;
 
     // 현재 전송 대상 피어에게만 전송
@@ -538,6 +554,7 @@ export class SwarmManager {
       try {
         if (peer.send(chunk)) {
           successCount++;
+          sentPeers.push(peerId);
         } else {
           failedPeers.push(peerId);
         }
@@ -547,7 +564,7 @@ export class SwarmManager {
       }
     }
 
-    return { successCount, failedPeers };
+    return { successCount, failedPeers, sentPeers };
   }
 
   /**
@@ -611,19 +628,21 @@ export class SwarmManager {
    * 변경: WebRTC 버퍼 + Receiver들의 PAUSE 상태 확인
    */
   public canRequestMoreChunks(): boolean {
-    // 1. WebRTC 버퍼 체크
-    const bufferOkay = this.getHighestBufferedAmount() < HIGH_WATER_MARK;
-
-    // 2. Receiver 상태 체크 (현재 전송 중인 피어들 중 하나라도 PAUSE 상태면 중단)
-    let receiversReady = true;
+    let pausedPeerCount = 0;
     for (const peerId of this.currentTransferPeers) {
-      if (this.pausedPeers.has(peerId)) {
-        receiversReady = false;
-        break;
-      }
+      if (this.pausedPeers.has(peerId)) pausedPeerCount++;
     }
 
-    return bufferOkay && receiversReady;
+    return shouldRequestMoreChunks({
+      isProcessingBatch: this.isProcessingBatch,
+      isTransferring: this.isTransferring,
+      workerReady: this.workerInitialized,
+      activePeerCount: this.currentTransferPeers.size,
+      highestBufferedAmount: this.getHighestBufferedAmount(),
+      highWaterMark: HIGH_WATER_MARK,
+      pausedPeerCount,
+      pendingAckCount: this.pendingAckPeers.size,
+    });
   }
 
   private isIncompleteDownloadSize(actualSize: number): boolean {
@@ -785,6 +804,43 @@ export class SwarmManager {
     this.currentBatchSize = BATCH_SIZE_INITIAL;
   }
 
+  private startTransferPumpWatchdog(): void {
+    this.stopTransferPumpWatchdog();
+    this.transferPumpInterval = setInterval(() => {
+      if (this.canRequestMoreChunks()) {
+        this.requestMoreChunks();
+      }
+    }, 250);
+  }
+
+  private stopTransferPumpWatchdog(): void {
+    if (this.transferPumpInterval) {
+      clearInterval(this.transferPumpInterval);
+      this.transferPumpInterval = null;
+    }
+  }
+
+  private clearWorkerBatchTimeout(): void {
+    if (this.workerBatchTimeout) {
+      clearTimeout(this.workerBatchTimeout);
+      this.workerBatchTimeout = null;
+    }
+  }
+
+  private armWorkerBatchTimeout(): void {
+    this.clearWorkerBatchTimeout();
+    this.workerBatchTimeout = setTimeout(() => {
+      this.workerBatchTimeout = null;
+      this.isProcessingBatch = false;
+      logError(
+        '[SwarmManager]',
+        'Worker did not respond to process-batch within timeout'
+      );
+      this.emit('transfer-failed', 'File reader stalled before the transfer completed');
+      this.cleanup();
+    }, 20000);
+  }
+
   // ======================= 데이터 처리 =======================
 
   private handlePeerData(peerId: string, data: ArrayBuffer | string): void {
@@ -819,6 +875,18 @@ export class SwarmManager {
         // Keep-alive 메시지는 무시 (연결 유지 목적)
         return;
 
+      case 'PARTITION_ACK': {
+        const offset = typeof msg.offset === 'number' ? msg.offset : Number(msg.offset);
+        const pending = this.partitionAckWaiters.get(offset);
+        if (pending) {
+          pending.delete(peerId);
+          if (pending.size === 0) {
+            this.partitionAckWaiters.delete(offset);
+          }
+        }
+        return;
+      }
+
       // 🚀 [Flow Control] PAUSE/RESUME 처리
       case 'CONTROL':
         if (msg.action === 'PAUSE') {
@@ -837,6 +905,11 @@ export class SwarmManager {
               '[SwarmManager]',
               'Resuming transfer loop via explicit request'
             );
+            this.requestMoreChunks();
+          }
+        } else if (msg.action === 'ACK') {
+          this.pendingAckPeers.delete(peerId);
+          if (this.isTransferring && this.canRequestMoreChunks()) {
             this.requestMoreChunks();
           }
         }
@@ -1564,6 +1637,17 @@ export class SwarmManager {
           );
           this.workerInitialized = true;
 
+          if (this.pendingWorkerResumeOffset !== null) {
+            const offset = this.pendingWorkerResumeOffset;
+            this.pendingWorkerResumeOffset = null;
+            this.awaitingWorkerResume = true;
+            this.worker.postMessage({
+              type: 'resume-single-file',
+              payload: { offset },
+            });
+            return;
+          }
+
           // 🚀 [핵심 수정] 전송 대기 중이면 즉시 첫 배치 요청
           if (this.pendingTransferStart && this.isTransferring) {
             this.pendingTransferStart = false;
@@ -1576,6 +1660,7 @@ export class SwarmManager {
           break;
 
         case 'error':
+          this.clearWorkerBatchTimeout();
           console.error('[SwarmManager] ❌ [DEBUG] Worker error:', payload);
           this.emit('error', payload.message || 'Worker error occurred');
           this.cleanup();
@@ -1595,16 +1680,19 @@ export class SwarmManager {
           break;
 
         case 'resume-ready':
+          this.clearWorkerBatchTimeout();
           logInfo(
             '[SwarmManager]',
             `Worker resume ready from offset ${payload?.offset ?? 0}`
           );
+          this.awaitingWorkerResume = false;
           this.workerInitialized = true;
           this.isProcessingBatch = false;
           this.requestMoreChunks();
           break;
 
         case 'complete':
+          this.clearWorkerBatchTimeout();
           debugLog(
             '[SwarmManager] ✅ [DEBUG] Worker reported transfer complete'
           );
@@ -1620,6 +1708,7 @@ export class SwarmManager {
     };
 
     this.worker.onerror = error => {
+      this.clearWorkerBatchTimeout();
       console.error('[SwarmManager] ❌ [DEBUG] Worker fatal error:', error);
       this.emit(
         'error',
@@ -1644,6 +1733,7 @@ export class SwarmManager {
     }
 
     const { chunks, progressData } = payload;
+    this.clearWorkerBatchTimeout();
     this.isProcessingBatch = false;
 
     debugLog('[SwarmManager] 📊 [DEBUG] Processing batch from worker:', {
@@ -1672,8 +1762,11 @@ export class SwarmManager {
         );
 
         const result = this.broadcastChunk(chunk);
+        if (result.successCount > 0) {
+          this.pendingAckPeers = new Set(result.sentPeers);
+        }
         networkController.recordSend(chunk.byteLength);
-        this.totalBytesSent += chunk.byteLength;
+        this.totalBytesSent += getPacketPayloadSize(chunk);
 
         debugLog('[SwarmManager] 📊 [DEBUG] Chunk broadcast result:', {
           successCount: result.successCount,
@@ -1730,48 +1823,53 @@ export class SwarmManager {
   // Worker 초기화 완료 대기용 플래그
   private workerInitialized = false;
   private pendingTransferStart = false;
+  private awaitingWorkerResume = false;
+  private pendingWorkerResumeOffset: number | null = null;
 
   private startTransfer(): void {
     if (this.isTransferring) return;
+    void this.runPartitionedTransfer();
+  }
+
+  private async runPartitionedTransfer(): Promise<void> {
+    if (!this.pendingManifest) return;
 
     this.isTransferring = true;
     this.isProcessingBatch = false;
     this.totalBytesSent = 0;
+    this.pendingAckPeers.clear();
+    this.partitionAckWaiters.clear();
     this.transferStartTime = performance.now();
     this.workerInitialized = false;
-    this.pendingTransferStart = true;
-    this.startAdaptiveControl();
+    this.awaitingWorkerResume = false;
+    this.pendingWorkerResumeOffset = null;
+    this.pendingTransferStart = false;
+    this.stopTransferPumpWatchdog();
+    this.stopAdaptiveControl();
 
-    // 🚀 [대기열] Worker 재초기화 (새 전송 시작)
     if (this.worker) {
       this.worker.terminate();
+      this.worker = null;
     }
-    this.worker = getSenderWorkerV1();
-    this.setupWorkerHandlers(this.files, this.pendingManifest!);
 
-    // 🚀 [핵심] 현재 전송 대상 피어에게 Manifest 재전송 + 전송 시작 알림
-    for (const peerId of this.currentTransferPeers) {
+    const manifest = this.pendingManifest;
+
+    // PairDrop/Snapdrop-style pull window: ordered binary chunks, then one
+    // partition marker, then wait until receivers ACK that partition before
+    // sending more. This replaces the worker push pump that could outrun real
+    // browser receiver/write queues and stall at a stable progress percentage.
+    for (const peerId of Array.from(this.currentTransferPeers)) {
       const peer = this.peers.get(peerId);
       if (peer && peer.connected) {
         try {
-          this.sendCryptoSessionToPeer(peer);
-          // 대기열에서 온 피어에게는 Manifest도 다시 전송 (이미 받았을 수 있지만 확실히)
-          if (this.pendingManifest) {
-            peer.send(
-              JSON.stringify({
-                type: 'MANIFEST',
-                manifest: this.pendingManifest,
-              })
-            );
-          }
+          peer.send(JSON.stringify({ type: 'MANIFEST', manifest }));
           peer.send(JSON.stringify({ type: 'TRANSFER_STARTED' }));
         } catch (e) {
-          /* ignore */
+          this.removePeer(peerId, 'transfer-start-send-failed');
         }
       }
     }
 
-    // 🚀 [핵심] 진행률 초기화 이벤트 발생
     this.emit('progress', {
       progress: 0,
       totalBytesSent: 0,
@@ -1779,9 +1877,150 @@ export class SwarmManager {
       speed: 0,
       peers: this.getPeerStates(),
     });
-
     this.emit('status', 'TRANSFERRING');
-    // Worker ready 이벤트 후 requestMoreChunks가 호출됨
+
+    try {
+      await this.sendFilesPartitioned(manifest);
+      await this.finishTransfer();
+    } catch (error) {
+      logError('[SwarmManager]', 'Partitioned transfer failed:', error);
+      this.isTransferring = false;
+      this.emit(
+        'transfer-failed',
+        error instanceof Error ? error.message : 'Transfer failed'
+      );
+    }
+  }
+
+  private async sendFilesPartitioned(manifest: TransferManifest): Promise<void> {
+    const partitionSize = TRANSFER_PARTITION_SIZE;
+    let sequence = 0;
+    let globalOffset = 0;
+    let partitionEnd = Math.min(partitionSize, manifest.totalSize || partitionSize);
+
+    for (const file of this.files) {
+      let fileOffset = 0;
+      while (fileOffset < file.size) {
+        if (!this.isTransferring) {
+          throw new Error('Transfer stopped');
+        }
+
+        await this.waitUntilSendWindowOpen();
+
+        const chunkEnd = Math.min(fileOffset + CHUNK_SIZE_INITIAL, file.size);
+        const payload = await file.slice(fileOffset, chunkEnd).arrayBuffer();
+        const packet = createPlainDataPacket({
+          payload,
+          sequence: sequence++,
+          offset: globalOffset,
+        });
+
+        const result = this.broadcastChunk(packet);
+        for (const failedPeerId of result.failedPeers) {
+          this.removePeer(failedPeerId, 'partitioned-send-failed');
+        }
+        if (result.successCount === 0) {
+          throw new Error('No connected receivers available');
+        }
+
+        const payloadBytes = payload.byteLength;
+        fileOffset += payloadBytes;
+        globalOffset += payloadBytes;
+        this.totalBytesSent = globalOffset;
+        networkController.recordSend(packet.byteLength);
+        this.emitProgress();
+
+        if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
+          await this.sendPartitionMarkerAndWait(globalOffset);
+          partitionEnd = Math.min(partitionEnd + partitionSize, manifest.totalSize);
+        }
+      }
+    }
+
+    if (globalOffset !== manifest.totalSize) {
+      throw new Error(
+        `Transfer size mismatch: sent ${globalOffset}, expected ${manifest.totalSize}`
+      );
+    }
+
+    await this.sendPartitionMarkerAndWait(globalOffset);
+  }
+
+  private async waitUntilSendWindowOpen(): Promise<void> {
+    const started = performance.now();
+    while (this.isTransferring) {
+      const activePeerIds = this.getActiveTransferPeerIds();
+      if (activePeerIds.length === 0) {
+        throw new Error('No active receivers');
+      }
+
+      const hasPausedPeer = activePeerIds.some(peerId =>
+        this.pausedPeers.has(peerId)
+      );
+      if (!hasPausedPeer && this.getHighestBufferedAmount() < HIGH_WATER_MARK) {
+        return;
+      }
+
+      if (performance.now() - started > 120_000) {
+        throw new Error('Timed out waiting for receiver/backpressure window');
+      }
+      await this.sleep(25);
+    }
+    throw new Error('Transfer stopped');
+  }
+
+  private async sendPartitionMarkerAndWait(offset: number): Promise<void> {
+    const peerIds = this.getActiveTransferPeerIds();
+    if (peerIds.length === 0) {
+      throw new Error('No active receivers for partition ACK');
+    }
+
+    this.partitionAckWaiters.set(offset, new Set(peerIds));
+    const msg = JSON.stringify({ type: 'PARTITION', offset });
+    for (const peerId of peerIds) {
+      const peer = this.peers.get(peerId);
+      if (peer && peer.connected) {
+        peer.send(msg);
+      }
+    }
+
+    const started = performance.now();
+    while (this.isTransferring) {
+      const pending = this.partitionAckWaiters.get(offset);
+      if (!pending || pending.size === 0) {
+        this.partitionAckWaiters.delete(offset);
+        return;
+      }
+
+      for (const peerId of Array.from(pending)) {
+        const peer = this.peers.get(peerId);
+        if (!peer || !peer.connected || !this.currentTransferPeers.has(peerId)) {
+          pending.delete(peerId);
+        }
+      }
+
+      if (pending.size === 0) {
+        this.partitionAckWaiters.delete(offset);
+        return;
+      }
+
+      if (performance.now() - started > 120_000) {
+        throw new Error(`Timed out waiting for partition ACK at ${offset}`);
+      }
+      await this.sleep(50);
+    }
+    throw new Error('Transfer stopped');
+  }
+
+  private getActiveTransferPeerIds(): string[] {
+    return Array.from(this.currentTransferPeers).filter(peerId => {
+      const peer = this.peers.get(peerId);
+      return !!peer && peer.connected;
+    });
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private requestMoreChunks(): void {
@@ -1797,14 +2036,57 @@ export class SwarmManager {
 
     this.isProcessingBatch = true;
     this.updateAdaptiveTransferConfig();
+    const safeBatchSize = calculateSafeBatchRequestSize({
+      desiredBatchSize: this.currentBatchSize,
+      highestBufferedAmount: this.getHighestBufferedAmount(),
+      highWaterMark: HIGH_WATER_MARK,
+      chunkPayloadSize: this.lastAdaptiveConfig?.chunkSize ?? 64 * 1024,
+      packetOverheadBytes: HEADER_SIZE + 48,
+      minBatchSize: 1,
+    });
+
+    if (safeBatchSize <= 0) {
+      this.isProcessingBatch = false;
+      return;
+    }
+
+    this.armWorkerBatchTimeout();
     this.worker.postMessage({
       type: 'process-batch',
-      payload: { count: this.currentBatchSize },
+      payload: { count: safeBatchSize },
     });
   }
 
   private async finishTransfer(): Promise<void> {
+    if (this.awaitingWorkerResume) {
+      logInfo('[SwarmManager]', 'Ignoring worker complete while resume is pending');
+      return;
+    }
+
+    this.clearWorkerBatchTimeout();
+    if (
+      isPrematureTransferComplete({
+        sentBytes: this.totalBytesSent,
+        expectedBytes: this.totalBytes,
+        packetOverheadAllowance: this.currentBatchSize * (HEADER_SIZE + 16),
+      })
+    ) {
+      logError('[SwarmManager]', 'Worker completed before all payload bytes were queued', {
+        totalBytesSent: this.totalBytesSent,
+        totalBytes: this.totalBytes,
+      });
+      this.awaitingWorkerResume = true;
+      this.pendingWorkerResumeOffset = this.totalBytesSent;
+      this.isProcessingBatch = false;
+      this.workerInitialized = false;
+      this.worker?.terminate();
+      this.worker = getSenderWorkerV1();
+      this.setupWorkerHandlers(this.files, this.pendingManifest!);
+      return;
+    }
+
     this.isTransferring = false;
+    this.stopTransferPumpWatchdog();
     this.stopAdaptiveControl();
 
     // 버퍼가 비워질 때까지 대기
@@ -1812,9 +2094,7 @@ export class SwarmManager {
     await new Promise(resolve => setTimeout(resolve, 500));
 
     // EOS 패킷 브로드캐스트
-    const eosPacket = new ArrayBuffer(HEADER_SIZE);
-    const view = new DataView(eosPacket);
-    view.setUint16(0, 0xffff, true);
+    const eosPacket = createEosPacket();
 
     const result = this.broadcastChunk(eosPacket);
     for (const failedPeerId of result.failedPeers) {
@@ -1847,9 +2127,16 @@ export class SwarmManager {
   private emitProgress(progressData: WorkerProgressData = {}): void {
     const elapsed = (performance.now() - this.transferStartTime) / 1000;
     const speed = elapsed > 0 ? this.totalBytesSent / elapsed : 0;
+    const transportProgress = calculateProgressPercent(
+      this.totalBytesSent,
+      this.totalBytes
+    );
 
     this.emit('progress', {
       ...progressData,
+      progress: transportProgress,
+      overallProgress: transportProgress,
+      bytesTransferred: Math.min(this.totalBytesSent, this.totalBytes),
       totalBytesSent: this.totalBytesSent,
       totalBytes: this.totalBytes,
       speed,
@@ -1949,7 +2236,11 @@ export class SwarmManager {
 
     this.isTransferring = false;
     this.isProcessingBatch = false;
+    this.awaitingWorkerResume = false;
+    this.pendingWorkerResumeOffset = null;
     this.roomId = null;
+    this.clearWorkerBatchTimeout();
+    this.stopTransferPumpWatchdog();
     this.stopAdaptiveControl();
 
     // Keep-alive 정리
@@ -1985,6 +2276,7 @@ export class SwarmManager {
     this.completedPeersInSession.clear();
     this.currentTransferPeers.clear();
     this.pausedPeers.clear();
+    this.pendingAckPeers.clear();
     this.cryptoSessionAnnouncedPeers.clear();
     if (this.sessionKey) {
       this.sessionKey.fill(0);

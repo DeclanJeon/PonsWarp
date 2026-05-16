@@ -27,6 +27,8 @@ import initPonsCore, { CryptoSession, Zip64Stream } from 'pons-core-wasm';
 import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
+import { calculateReceiverBufferedProgress } from '../utils/transferProgress';
+import { shouldUseBlobFallbackBeforeStreaming } from '../utils/downloadStrategy';
 
 // StreamSaver MITM 설정 (필수)
 if (typeof window !== 'undefined') {
@@ -285,7 +287,7 @@ export class DirectFileWriter {
       }
 
       // 2. Blob 다운로드 폴백 시도 (Firefox - 500MB 이하만)
-      const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
+      const isSmallFile = shouldUseBlobFallbackBeforeStreaming(fileSize);
       if (isSmallFile) {
         try {
           logInfo(
@@ -375,7 +377,32 @@ export class DirectFileWriter {
       }
     }
 
-    const isSmallFile = fileSize < 500 * 1024 * 1024; // 500MB 이하
+    const isSmallFile = shouldUseBlobFallbackBeforeStreaming(fileSize);
+
+    // Chromium/Edge 계열은 사용자가 MATERIALIZE를 클릭한 제스처 안에서
+    // File System Access API를 열 수 있다. 50MB+ 파일을 Blob에 끝까지 모으면
+    // 마지막 Blob 생성/다운로드 단계에서 UI가 멈춘 것처럼 보이고 메모리 압박이 커진다.
+    // 따라서 FSA가 있으면 실제 디스크 스트리밍 writer를 우선 사용한다.
+    if (hasFileSystemAccess) {
+      try {
+        await this.initFileSystemAccess(fileName);
+        logInfo(
+          '[DirectFileWriter]',
+          '✅ File System Access API initialization successful'
+        );
+        return;
+      } catch (fsaError: unknown) {
+        logWarn(
+          '[DirectFileWriter]',
+          'File System Access API failed before streaming fallback:',
+          fsaError
+        );
+        if (fsaError instanceof Error && fsaError.name === 'AbortError') {
+          throw fsaError;
+        }
+      }
+    }
+
     if (isSmallFile) {
       try {
         logInfo(
@@ -958,6 +985,10 @@ export class DirectFileWriter {
     return this.writeQueue;
   }
 
+  public waitForIdle(): Promise<void> {
+    return this.writeQueue;
+  }
+
   /**
    * 🚀 [신규] 실제 쓰기 로직을 분리 (내부용)
    */
@@ -1051,6 +1082,10 @@ export class DirectFileWriter {
 
     // 🚀 [Flow Control] High Water Mark 체크
     this.checkBackpressure();
+
+    // Small transfers can stay below BATCH_THRESHOLD until EOS. Report buffered
+    // bytes too so the receiver UI does not sit at 0% while data is arriving.
+    this.reportProgress();
 
     // 3. 임계값(8MB) 넘으면 디스크에 쓰기 (Flushing)
     if (this.currentBatchSize >= this.BATCH_THRESHOLD) {
@@ -1237,17 +1272,17 @@ export class DirectFileWriter {
     if (now - this.lastProgressTime < 100) return;
 
     const elapsed = (now - this.startTime) / 1000;
-    const speed = elapsed > 0 ? this.totalBytesWritten / elapsed : 0;
-
-    // 🚀 [핵심 수정] 진행률을 100%로 제한 (ZIP 오버헤드로 인해 초과할 수 있음)
-    const rawProgress =
-      this.totalSize > 0 ? (this.totalBytesWritten / this.totalSize) * 100 : 0;
-    const progress = Math.min(100, rawProgress);
+    const visibleProgress = calculateReceiverBufferedProgress({
+      bytesWritten: this.totalBytesWritten,
+      pendingBytes: this.pendingBytesInBuffer,
+      totalBytes: this.totalSize,
+    });
+    const speed = elapsed > 0 ? visibleProgress.bytesTransferred / elapsed : 0;
 
     this.onProgressCallback?.({
-      progress,
+      progress: visibleProgress.progress,
       speed,
-      bytesTransferred: this.totalBytesWritten,
+      bytesTransferred: visibleProgress.bytesTransferred,
       totalBytes: this.totalSize,
     });
 
@@ -1404,7 +1439,12 @@ export class DirectFileWriter {
           // ZIP 사이즈 불일치 문제 해결을 위한 Truncate
           // locked 속성 체크
           if (!(fsWriter as unknown as { locked: boolean }).locked) {
-            await fsWriter.truncate(this.outputBytesWritten);
+            const maybeTruncate = (fsWriter as unknown as {
+              truncate?: (size: number) => Promise<void>;
+            }).truncate;
+            if (typeof maybeTruncate === 'function') {
+              await maybeTruncate.call(fsWriter, this.outputBytesWritten);
+            }
             await fsWriter.close();
           }
         } else {

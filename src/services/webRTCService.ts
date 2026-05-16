@@ -60,6 +60,7 @@ interface IFileWriter {
   onFlowControl?(cb: (action: 'PAUSE' | 'RESUME') => void): void;
   onResumeRequest?(cb: (offset: number, reason: string) => void): void;
   requestResumeFromCurrentOffset?(reason: string): boolean;
+  waitForIdle?(): Promise<void>;
   // 🔐 [E2E] 암호화 키 설정
   setEncryptionKey?(sessionKey: Uint8Array, randomPrefix: Uint8Array): void;
 }
@@ -579,14 +580,20 @@ class ReceiverService {
 
     // 2. 파일 데이터 (Binary) -> Writer로 전달
     if (this.writer) {
-      // Fire-and-forget 방식으로 쓰기 (블로킹 방지)
-      this.writer.writeChunk(data).catch(err => {
-        console.error('[Receiver] Write error:', err);
-        this.emit(
-          'error',
-          err instanceof Error ? err.message : 'Disk write failed'
-        );
-      });
+      this.writer
+        .writeChunk(data)
+        .then(() => {
+          if (this.peer && this.peer.connected) {
+            this.peer.send(JSON.stringify({ type: 'CONTROL', action: 'ACK' }));
+          }
+        })
+        .catch(err => {
+          console.error('[Receiver] Write error:', err);
+          this.emit(
+            'error',
+            err instanceof Error ? err.message : 'Disk write failed'
+          );
+        });
     }
   }
 
@@ -600,7 +607,7 @@ class ReceiverService {
     return false;
   }
 
-  private handleControlMessage(data: ArrayBuffer) {
+  private async handleControlMessage(data: ArrayBuffer) {
     try {
       const str = new TextDecoder().decode(data);
       const msg = JSON.parse(str);
@@ -637,6 +644,14 @@ class ReceiverService {
           break;
         case 'KEEP_ALIVE':
           // 무시
+          break;
+        case 'PARTITION':
+          await this.writer?.waitForIdle?.();
+          if (this.peer && this.peer.connected) {
+            this.peer.send(
+              JSON.stringify({ type: 'PARTITION_ACK', offset: msg.offset })
+            );
+          }
           break;
       }
     } catch (e) {

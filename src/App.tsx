@@ -28,6 +28,7 @@ import { ToastContainer } from './components/ui/ToastContainer';
 import { StatusOverlay } from './components/ui/StatusOverlay';
 import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
+import { normalizeRoomCodeInput } from './utils/roomCode';
 
 const SpaceField = lazy(() => import('./components/SpaceField'));
 
@@ -40,14 +41,14 @@ const App: React.FC = () => {
   useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname;
-      const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/);
+      const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/i);
       const cloudMatch = path.match(/^\/cloud\/([A-Za-z0-9-]{8,80})$/);
 
       if (cloudMatch) {
         setCloudShareId(cloudMatch[1]);
         setMode(AppMode.CLOUD_RECEIVER);
       } else if (receiveMatch) {
-        const roomId = receiveMatch[1];
+        const roomId = normalizeRoomCodeInput(receiveMatch[1]);
         setRoomId(roomId);
         setMode(AppMode.RECEIVER);
       } else {
