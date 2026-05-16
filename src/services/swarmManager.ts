@@ -31,6 +31,8 @@ import {
   HEADER_SIZE,
   BATCH_SIZE_INITIAL,
   CHUNK_SIZE_INITIAL,
+  PARTITION_ACK_POLL_INTERVAL_MS,
+  SEND_WINDOW_POLL_INTERVAL_MS,
   TRANSFER_PARTITION_SIZE,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
@@ -155,6 +157,7 @@ export class SwarmManager {
   private pausedPeers: Set<string> = new Set();
   private pendingAckPeers: Set<string> = new Set();
   private partitionAckWaiters: Map<number, Set<string>> = new Map();
+  private sendWindowWaiters: Set<() => void> = new Set();
 
   // 🚀 [대기열 시스템]
   private transferQueue: string[] = []; // ready 대기열
@@ -711,6 +714,8 @@ export class SwarmManager {
   }
 
   private handleDrain(_peerId: string): void {
+    this.notifySendWindowWaiters();
+
     // 글로벌 backpressure 재평가
     if (this.isTransferring && this.canRequestMoreChunks()) {
       this.updateAdaptiveTransferConfig();
@@ -876,7 +881,8 @@ export class SwarmManager {
         return;
 
       case 'PARTITION_ACK': {
-        const offset = typeof msg.offset === 'number' ? msg.offset : Number(msg.offset);
+        const offset =
+          typeof msg.offset === 'number' ? msg.offset : Number(msg.offset);
         const pending = this.partitionAckWaiters.get(offset);
         if (pending) {
           pending.delete(peerId);
@@ -884,6 +890,7 @@ export class SwarmManager {
             this.partitionAckWaiters.delete(offset);
           }
         }
+        this.notifySendWindowWaiters();
         return;
       }
 
@@ -898,6 +905,7 @@ export class SwarmManager {
         } else if (msg.action === 'RESUME') {
           logInfo('[SwarmManager]', `Peer ${peerId} requested RESUME`);
           this.pausedPeers.delete(peerId);
+          this.notifySendWindowWaiters();
 
           // 모든 피어가 준비되었으면(혹은 내가 보내는 중인 피어들이 풀렸으면) 다시 요청
           if (this.isTransferring && this.canRequestMoreChunks()) {
@@ -1964,7 +1972,7 @@ export class SwarmManager {
       if (performance.now() - started > 120_000) {
         throw new Error('Timed out waiting for receiver/backpressure window');
       }
-      await this.sleep(25);
+      await this.waitForSendWindowSignal(SEND_WINDOW_POLL_INTERVAL_MS);
     }
     throw new Error('Transfer stopped');
   }
@@ -2007,7 +2015,7 @@ export class SwarmManager {
       if (performance.now() - started > 120_000) {
         throw new Error(`Timed out waiting for partition ACK at ${offset}`);
       }
-      await this.sleep(50);
+      await this.waitForSendWindowSignal(PARTITION_ACK_POLL_INTERVAL_MS);
     }
     throw new Error('Transfer stopped');
   }
@@ -2019,8 +2027,23 @@ export class SwarmManager {
     });
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  private waitForSendWindowSignal(timeoutMs: number): Promise<void> {
+    return new Promise(resolve => {
+      const done = () => {
+        clearTimeout(timeout);
+        this.sendWindowWaiters.delete(done);
+        resolve();
+      };
+
+      const timeout = setTimeout(done, timeoutMs);
+      this.sendWindowWaiters.add(done);
+    });
+  }
+
+  private notifySendWindowWaiters(): void {
+    const waiters = Array.from(this.sendWindowWaiters);
+    this.sendWindowWaiters.clear();
+    for (const waiter of waiters) waiter();
   }
 
   private requestMoreChunks(): void {
@@ -2277,6 +2300,8 @@ export class SwarmManager {
     this.currentTransferPeers.clear();
     this.pausedPeers.clear();
     this.pendingAckPeers.clear();
+    this.partitionAckWaiters.clear();
+    this.notifySendWindowWaiters();
     this.cryptoSessionAnnouncedPeers.clear();
     if (this.sessionKey) {
       this.sessionKey.fill(0);
