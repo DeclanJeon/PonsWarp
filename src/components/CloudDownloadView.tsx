@@ -18,12 +18,14 @@ import {
 import { getErrorMessage } from '../utils/errors';
 import { formatBytes } from '../utils/fileUtils';
 import { formatRemainingTime } from '../utils/transferEstimate';
+import { zipSync } from 'fflate';
 
 interface CloudDownloadViewProps {
   shareId: string;
 }
 
 type LoadStatus = 'LOADING' | 'READY' | 'ERROR' | 'PASSWORD_REQUIRED';
+type DownloadAllStatus = 'IDLE' | 'DOWNLOADING' | 'ERROR';
 const DOWNLOAD_SESSION_PREFIX = 'ponswarpCloudDownloadSession:';
 
 const formatDropWindow = (secondsUntilExpiry: number) => {
@@ -40,6 +42,10 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
   const [downloadSessionToken, setDownloadSessionToken] = useState<
     string | null
   >(null);
+  const [downloadAllStatus, setDownloadAllStatus] =
+    useState<DownloadAllStatus>('IDLE');
+  const [downloadAllError, setDownloadAllError] = useState<string | null>(null);
+  const [downloadAllBytes, setDownloadAllBytes] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,8 +117,75 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     }
   };
 
+  const downloadAll = async () => {
+    if (!share || !share.completed) return;
+    if (share.files.length === 0) return;
+
+    setDownloadAllStatus('DOWNLOADING');
+    setDownloadAllError(null);
+    setDownloadAllBytes(0);
+
+    try {
+      const zipEntries: Record<string, Uint8Array> = {};
+      const failures: Array<{ name: string; error: string }> = [];
+
+      await Promise.allSettled(
+        share.files.map(async (file) => {
+          const url = getCloudDownloadUrl(
+        share.shareId,
+        file.id,
+        downloadSessionToken || share.downloadSessionToken
+      );
+          const response = await fetch(url);
+          if (!response.ok) {
+            failures.push({
+              name: file.path || file.name,
+              error: `HTTP ${response.status}`,
+            });
+            return;
+          }
+
+          const blob = await response.blob();
+          const arrayBuffer = await blob.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
+          const path = (file.path || file.name).replace(/^\/+/, '');
+          zipEntries[path] = bytes;
+          setDownloadAllBytes((prev) => prev + bytes.length);
+        })
+      );
+
+      if (Object.keys(zipEntries).length === 0) {
+        const reason =
+          failures.map((item) => `${item.name}: ${item.error}`).join(', ') ||
+          'No files were downloaded';
+        throw new Error(reason);
+      }
+
+      const zipped = zipSync(zipEntries, { level: 0 });
+      const sliced = zipped.slice();
+      const blob = new Blob([sliced.buffer], { type: 'application/zip' });
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = `${share.rootName || share.shareId}.zip`;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(objectUrl);
+      setDownloadAllStatus('IDLE');
+      setDownloadAllBytes(0);
+    } catch (downloadError) {
+      const message = getErrorMessage(downloadError, 'Bulk download failed');
+      setDownloadAllError(message);
+      setDownloadAllStatus('ERROR');
+    }
+  };
+
   const glassPanelClass =
     'bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
+  const disableDownloadAll =
+    downloadAllStatus === 'DOWNLOADING' || !share?.completed;
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
@@ -170,7 +243,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
             <input
               type="password"
               value={password}
-              onChange={event => setPassword(event.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               className="w-full bg-gray-950/70 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-4 py-3 text-white mb-3"
               autoComplete="current-password"
               autoFocus
@@ -229,8 +302,31 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
               </div>
             )}
 
+            <div className="flex items-center gap-3 mb-4">
+              <button
+                onClick={downloadAll}
+                disabled={disableDownloadAll}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 px-4 py-2 text-sm font-bold text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4" />
+                {downloadAllStatus === 'DOWNLOADING'
+                  ? 'Preparing ZIP…'
+                  : 'DOWNLOAD ALL'}
+              </button>
+              {downloadAllStatus === 'DOWNLOADING' && (
+                <span className="text-xs font-mono text-gray-400">
+                  {formatBytes(downloadAllBytes)} buffered
+                </span>
+              )}
+              {downloadAllStatus === 'ERROR' && (
+                <span className="text-xs text-red-300">
+                  {downloadAllError || 'Bulk download failed'}
+                </span>
+              )}
+            </div>
+
             <div className="space-y-3 max-h-[45vh] overflow-y-auto pr-1">
-              {share.files.map(file => (
+              {share.files.map((file) => (
                 <div
                   key={file.id}
                   className="flex items-center gap-4 bg-gray-900/50 border border-gray-700/50 rounded-2xl p-4"
