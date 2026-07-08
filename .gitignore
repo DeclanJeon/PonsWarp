@@ -93,7 +93,5 @@ jspm_packages/
 deploy.*
 ecosystem.config.*
 
-docs
 nginx.conf
 nginx.conf.*
-pnpm-lock.yaml
