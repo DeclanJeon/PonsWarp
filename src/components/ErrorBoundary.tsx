@@ -27,25 +27,25 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-dvh w-full bg-[#071016] text-white flex flex-col items-center justify-center p-8">
-          <div className="bg-slate-950/70 border border-red-400/25 p-8 rounded-3xl max-w-lg text-center backdrop-blur-lg shadow-[0_28px_90px_rgba(2,12,18,0.48)]">
-            <AlertOctagon className="w-16 h-16 text-red-300 mx-auto mb-6" />
+        <div className="w-screen h-screen bg-black text-white flex flex-col items-center justify-center p-8">
+          <div className="bg-red-900/20 border border-red-500/30 p-8 rounded-3xl max-w-lg text-center backdrop-blur-lg">
+            <AlertOctagon className="w-16 h-16 text-red-500 mx-auto mb-6" />
             <h1 className="text-3xl font-bold mb-4 brand-font">
-              Something went wrong
+              SYSTEM FAILURE
             </h1>
-            <p className="text-slate-300 mb-6">
-              We could not keep the transfer interface running.
+            <p className="text-gray-400 mb-6">
+              An unexpected error occurred in the warp field.
               <br />
-              <span className="text-xs text-red-200 mt-2 block font-mono bg-black/30 p-2 rounded">
+              <span className="text-xs text-red-400 mt-2 block font-mono bg-black/30 p-2 rounded">
                 {this.state.error?.message}
               </span>
             </p>
             <button
               onClick={() => window.location.reload()}
-              className="bg-white text-slate-950 px-8 py-3 rounded-2xl font-semibold hover:bg-cyan-100 transition-colors flex items-center gap-2 mx-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200"
+              className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-red-50 transition-colors flex items-center gap-2 mx-auto"
             >
               <RefreshCw size={18} />
-              Reload
+              REBOOT SYSTEM
             </button>
           </div>
         </div>

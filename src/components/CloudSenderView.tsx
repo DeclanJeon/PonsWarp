@@ -393,7 +393,7 @@ const CloudSenderView: React.FC = () => {
               <h2 className="text-2xl md:text-3xl font-bold mb-3 md:mb-4 brand-font text-white">
                 CLOUD DROP
               </h2>
-              <p className="text-emerald-100/60 text-sm md:text-lg mb-6 md:mb-8 tracking-wide">
+              <p className="text-emerald-100/60 text-sm md:text-lg mb-6 md:mb-8 font-rajdhani tracking-wide">
                 Upload once. Share a 24-hour download link.
               </p>
               <p className="text-gray-500 text-xs md:text-sm mb-4 max-w-md leading-relaxed">

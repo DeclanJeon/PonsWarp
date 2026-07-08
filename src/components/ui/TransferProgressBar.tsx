@@ -50,7 +50,7 @@ export const TransferProgressBar: React.FC = () => {
       <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
         <div
           ref={progressRef}
-          className="h-full bg-gradient-to-r from-cyan-300 via-cyan-200 to-white transition-all duration-100 ease-linear shadow-[0_0_10px_rgba(56,184,200,0.65)]"
+          className="h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-600 transition-all duration-100 ease-linear shadow-[0_0_10px_rgba(6,182,212,0.8)]"
           style={{ width: '0%' }}
         />
       </div>

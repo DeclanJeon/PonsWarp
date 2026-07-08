@@ -11,10 +11,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        orbitron: ['Outfit', 'sans-serif'],
-        rajdhani: ['Outfit', 'sans-serif'],
-        outfit: ['Outfit', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        orbitron: ['Orbitron', 'sans-serif'],
+        rajdhani: ['Rajdhani', 'sans-serif'],
       },
       animation: {
         'shine': 'shine 1s',

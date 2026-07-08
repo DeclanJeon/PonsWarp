@@ -1,4 +1,9 @@
 import { debugLog } from '../utils/logger';
+/* 🪲 [DEBUG] ReceiverView UI/UX 개선 시작 */
+debugLog('[ReceiverView] 🪲 [DEBUG] UI/UX Enhancement Started:');
+debugLog('[ReceiverView] 🪲 [DEBUG] - Applying HUD-style circular progress');
+debugLog('[ReceiverView] 🪲 [DEBUG] - Implementing mobile-optimized input');
+debugLog('[ReceiverView] 🪲 [DEBUG] - Adding focal point principles');
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -554,12 +559,12 @@ const ReceiverView: React.FC = () => {
             className={glassPanelClass}
           >
             <div className="text-center relative z-10 p-6 md:p-8">
-              <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-6 bg-cyan-300/10 rounded-3xl flex items-center justify-center border border-cyan-100/15 shadow-[0_24px_70px_rgba(20,105,125,0.24)]">
+              <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-6 bg-gradient-to-br from-cyan-500/20 to-purple-500/20 rounded-3xl flex items-center justify-center border border-white/10 shadow-[0_0_30px_rgba(168,85,247,0.2)]">
                 <Scan className="w-8 h-8 md:w-10 md:h-10 text-white drop-shadow-lg" />
               </div>
 
-              <h2 className="text-2xl md:text-3xl font-bold mb-6 brand-font tracking-tight text-white">
-                Enter <span className="text-cyan-200">warp key</span>
+              <h2 className="text-2xl md:text-3xl font-bold mb-6 brand-font tracking-widest text-white">
+                ENTER <span className="text-cyan-400">WARP KEY</span>
               </h2>
 
               <div className="relative group mb-6">
@@ -568,18 +573,18 @@ const ReceiverView: React.FC = () => {
                   onChange={e => setRoomId(normalizeRoomCodeInput(e.target.value))}
                   placeholder="CODE OR LINK"
                   maxLength={160}
-                  className="w-full bg-slate-950/45 border border-white/10 rounded-2xl p-6 text-center text-3xl font-mono tracking-[0.5em] focus:border-cyan-200 focus:ring-2 focus:ring-cyan-200/30 outline-none text-white placeholder-slate-600 transition-all uppercase"
+                  className="w-full bg-black/30 border border-gray-600 rounded-2xl p-6 text-center text-3xl font-mono tracking-[0.5em] focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 outline-none text-white placeholder-gray-700 transition-all uppercase"
                 />
                 <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-cyan-500/50 rounded-tl-lg -translate-x-2 -translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
-                <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-cyan-200/50 rounded-br-lg translate-x-2 translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
+                <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-purple-500/50 rounded-br-lg translate-x-2 translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
               </div>
 
               <button
                 onClick={() => handleJoin(roomId!)}
                 disabled={!isCompleteRoomCode(roomId || '')}
-                className="w-full bg-white text-slate-950 py-4 rounded-2xl font-semibold text-base md:text-lg tracking-wide hover:bg-cyan-100 hover:scale-[1.01] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+                className="w-full bg-white text-black py-4 rounded-xl font-bold text-base md:text-lg tracking-[0.2em] hover:bg-cyan-300 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
               >
-                Establish link
+                ESTABLISH LINK
               </button>
             </div>
           </motion.div>
@@ -595,7 +600,7 @@ const ReceiverView: React.FC = () => {
             className="text-center"
           >
             <div className="relative w-32 h-32 mx-auto mb-8">
-              <div className="absolute inset-0 border-4 border-t-cyan-300 border-r-transparent border-b-cyan-100/35 border-l-transparent rounded-full animate-spin" />
+              <div className="absolute inset-0 border-4 border-t-cyan-500 border-r-transparent border-b-purple-500 border-l-transparent rounded-full animate-spin" />
               <div className="absolute inset-4 border-4 border-t-transparent border-r-white/30 border-b-transparent border-l-white/30 rounded-full animate-spin-reverse" />
               <Radio
                 className="absolute inset-0 m-auto text-cyan-400 animate-pulse"
@@ -757,13 +762,13 @@ const ReceiverView: React.FC = () => {
                     y2="0%"
                   >
                     <stop offset="0%" stopColor="#22d3ee" />
-                    <stop offset="100%" stopColor="#9fdbe3" />
+                    <stop offset="100%" stopColor="#a855f7" />
                   </linearGradient>
                 </defs>
               </svg>
               {/* 중앙 정보 */}
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-5xl font-black font-mono text-white drop-shadow-lg">
+                <span className="text-5xl font-black font-rajdhani text-white drop-shadow-lg">
                   {Math.round(safeProgress)}
                   <span className="text-2xl text-cyan-400">%</span>
                 </span>
