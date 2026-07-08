@@ -365,7 +365,13 @@ const App: React.FC = () => {
                 exit={{ opacity: 0 }}
                 className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
               >
-                <ReceiverView />
+                <ReceiverView
+                  onOpenCloudShare={shareId => {
+                    setCloudShareId(shareId);
+                    setMode(AppMode.CLOUD_RECEIVER);
+                    window.history.pushState({}, '', `/cloud/${shareId}`);
+                  }}
+                />
 
                 <button
                   onClick={() => {

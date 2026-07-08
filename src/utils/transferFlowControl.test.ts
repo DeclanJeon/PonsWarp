@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FLOW_CONTROL_PROFILE,
+  DIRECT_HOST_TRANSFER_TUNING_PROFILE,
+  DIRECT_SRFLX_TRANSFER_TUNING_PROFILE,
+  RELAY_TRANSFER_TUNING_PROFILE,
+  UNKNOWN_TRANSFER_TUNING_PROFILE,
+  calculateSendBudget,
   calculateSafeBatchRequestSize,
   clampDataChannelChunkSize,
   getPacketPayloadSize,
   isPrematureTransferComplete,
+  selectPartitionSize,
+  selectInFlightTargetBytes,
+  selectTransferTuningProfile,
   shouldRequestMoreChunks,
 } from './transferFlowControl';
 
@@ -16,6 +24,135 @@ describe('transferFlowControl', () => {
     expect(DEFAULT_FLOW_CONTROL_PROFILE.batchSize).toBe(1);
     expect(DEFAULT_FLOW_CONTROL_PROFILE.lowWaterMark).toBeLessThan(
       DEFAULT_FLOW_CONTROL_PROFILE.highWaterMark
+    );
+  });
+
+  it('selects direct profiles with bounded sender targets below receiver PAUSE', () => {
+    const receiverPauseHighBytes = 32 * 1024 * 1024;
+
+    expect(selectTransferTuningProfile({ candidatePathKind: 'host' })).toBe(
+      DIRECT_HOST_TRANSFER_TUNING_PROFILE
+    );
+    expect(selectTransferTuningProfile({ candidatePathKind: 'srflx' })).toBe(
+      DIRECT_SRFLX_TRANSFER_TUNING_PROFILE
+    );
+    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
+      4 * 1024 * 1024
+    );
+    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
+      4 * 1024 * 1024
+    );
+    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16).toBeLessThan(
+      256 * 1024
+    );
+    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16).toBeLessThan(
+      256 * 1024
+    );
+    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThan(
+      receiverPauseHighBytes
+    );
+    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThan(
+      receiverPauseHighBytes
+    );
+    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThanOrEqual(
+      8 * 1024 * 1024
+    );
+    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThanOrEqual(
+      8 * 1024 * 1024
+    );
+  });
+
+  it('keeps relay and unknown profiles conservative', () => {
+    expect(selectTransferTuningProfile({ candidatePathKind: 'relay' })).toBe(
+      RELAY_TRANSFER_TUNING_PROFILE
+    );
+    expect(selectTransferTuningProfile({ candidatePathKind: 'unknown' })).toBe(
+      UNKNOWN_TRANSFER_TUNING_PROFILE
+    );
+    expect(selectTransferTuningProfile()).toBe(UNKNOWN_TRANSFER_TUNING_PROFILE);
+    expect(selectTransferTuningProfile(null)).toBe(
+      UNKNOWN_TRANSFER_TUNING_PROFILE
+    );
+    expect(
+      RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes
+    ).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(
+      UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes
+    ).toBeLessThanOrEqual(4 * 1024 * 1024);
+  });
+
+  it('selects direct in-flight targets up to the profile maximum when bitrate stats are absent', () => {
+    expect(
+      selectInFlightTargetBytes(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE, {
+        candidatePathKind: 'srflx',
+      })
+    ).toBe(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes);
+    expect(
+      selectInFlightTargetBytes(RELAY_TRANSFER_TUNING_PROFILE, {
+        candidatePathKind: 'relay',
+      })
+    ).toBe(RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes);
+  });
+
+  it('uses available bitrate and RTT to clamp in-flight targets within profile bounds', () => {
+    expect(
+      selectInFlightTargetBytes(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE, {
+        candidatePathKind: 'srflx',
+        availableOutgoingBitrateBps: 200_000_000,
+        rttMs: 100,
+      })
+    ).toBeGreaterThan(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.minInFlightBytes);
+
+    expect(
+      selectInFlightTargetBytes(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE, {
+        candidatePathKind: 'srflx',
+        availableOutgoingBitrateBps: 5_000_000_000,
+        rttMs: 250,
+      })
+    ).toBe(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes);
+
+    expect(
+      selectInFlightTargetBytes(RELAY_TRANSFER_TUNING_PROFILE, {
+        candidatePathKind: 'relay',
+        availableOutgoingBitrateBps: 64_000,
+        rttMs: 50,
+      })
+    ).toBe(RELAY_TRANSFER_TUNING_PROFILE.minInFlightBytes);
+  });
+
+  it('calculates send budget without going negative and honors receiver pause', () => {
+    expect(
+      calculateSendBudget({
+        targetInFlightBytes: 8 * 1024 * 1024,
+        bufferedAmountBytes: 3 * 1024 * 1024,
+        paused: false,
+      })
+    ).toBe(5 * 1024 * 1024);
+    expect(
+      calculateSendBudget({
+        targetInFlightBytes: 4 * 1024 * 1024,
+        bufferedAmountBytes: 6 * 1024 * 1024,
+        paused: false,
+      })
+    ).toBe(0);
+    expect(
+      calculateSendBudget({
+        targetInFlightBytes: 8 * 1024 * 1024,
+        bufferedAmountBytes: 0,
+        paused: true,
+      })
+    ).toBe(0);
+  });
+
+  it('selects partition size from the active profile', () => {
+    expect(selectPartitionSize(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE)).toBe(
+      64 * 1024 * 1024
+    );
+    expect(selectPartitionSize(RELAY_TRANSFER_TUNING_PROFILE)).toBe(
+      32 * 1024 * 1024
+    );
+    expect(selectPartitionSize(UNKNOWN_TRANSFER_TUNING_PROFILE)).toBe(
+      16 * 1024 * 1024
     );
   });
 
@@ -37,10 +174,18 @@ describe('transferFlowControl', () => {
     };
 
     expect(shouldRequestMoreChunks(ready)).toBe(true);
-    expect(shouldRequestMoreChunks({ ...ready, isProcessingBatch: true })).toBe(false);
-    expect(shouldRequestMoreChunks({ ...ready, activePeerCount: 0 })).toBe(false);
-    expect(shouldRequestMoreChunks({ ...ready, pausedPeerCount: 1 })).toBe(false);
-    expect(shouldRequestMoreChunks({ ...ready, pendingAckCount: 1 })).toBe(false);
+    expect(shouldRequestMoreChunks({ ...ready, isProcessingBatch: true })).toBe(
+      false
+    );
+    expect(shouldRequestMoreChunks({ ...ready, activePeerCount: 0 })).toBe(
+      false
+    );
+    expect(shouldRequestMoreChunks({ ...ready, pausedPeerCount: 1 })).toBe(
+      false
+    );
+    expect(shouldRequestMoreChunks({ ...ready, pendingAckCount: 1 })).toBe(
+      false
+    );
     expect(
       shouldRequestMoreChunks({ ...ready, highestBufferedAmount: 128 * 1024 })
     ).toBe(false);
@@ -110,9 +255,20 @@ describe('transferFlowControl', () => {
     const encryptedPacket = new ArrayBuffer(38 + 64 * 1024 + 16);
     const encryptedBytes = new Uint8Array(encryptedPacket);
     encryptedBytes[0] = 0x02;
+    encryptedBytes[1] = 0x01;
     new DataView(encryptedPacket).setUint32(16, 64 * 1024, true);
 
     expect(getPacketPayloadSize(plainPacket)).toBe(64 * 1024);
     expect(getPacketPayloadSize(encryptedPacket)).toBe(64 * 1024);
+  });
+  it('treats plain file id 2 packets as plain packets, not encrypted packets', () => {
+    const packet = new ArrayBuffer(22 + 3);
+    const view = new DataView(packet);
+    const bytes = new Uint8Array(packet);
+    view.setUint16(0, 2, true);
+    view.setUint32(14, 3, true);
+    bytes.set([1, 2, 3], 22);
+
+    expect(getPacketPayloadSize(packet)).toBe(3);
   });
 });

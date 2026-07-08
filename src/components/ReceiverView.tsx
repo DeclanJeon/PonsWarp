@@ -26,11 +26,17 @@ import { useTransferStore } from '../store/transferStore';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage, getErrorName } from '../utils/errors';
 import { isCompleteRoomCode, normalizeRoomCodeInput } from '../utils/roomCode';
+import { normalizeCloudShareCodeInput } from '../utils/cloudShareCode';
 import {
   estimateRemainingSeconds,
   formatRemainingTime,
   getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
+
+
+interface ReceiverViewProps {
+  onOpenCloudShare?: (shareId: string) => void;
+}
 
 type ReceiverProgressPayload = {
   progress?: number;
@@ -43,7 +49,7 @@ type ReceiverCompletePayload = {
   actualSize?: number;
 };
 
-const ReceiverView: React.FC = () => {
+const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
   // 전역 상태 사용
   const {
     roomId,
@@ -56,6 +62,7 @@ const ReceiverView: React.FC = () => {
     updateProgress,
   } = useTransferStore();
 
+  const [receiveInput, setReceiveInput] = useState(roomId || '');
   const [errorMsg, setErrorMsg] = useState('');
   const [actualSize, setActualSize] = useState<number>(0);
   const [progressData, setProgressData] = useState({
@@ -242,6 +249,8 @@ const ReceiverView: React.FC = () => {
         setRoomId(normalizedRoomId);
       }
 
+      setReceiveInput(normalizedRoomId);
+
       setStatus('CONNECTING');
       setErrorMsg('');
 
@@ -288,8 +297,21 @@ const ReceiverView: React.FC = () => {
         setStatus('ERROR');
       }
     },
-    [setStatus]
+    [setRoomId, setStatus]
   );
+
+  const handleSubmitReceiveInput = useCallback(() => {
+    const cloudShareCode = normalizeCloudShareCodeInput(receiveInput);
+    if (cloudShareCode && onOpenCloudShare) {
+      onOpenCloudShare(cloudShareCode.toLowerCase());
+      return;
+    }
+
+    const normalizedRoomId = normalizeRoomCodeInput(receiveInput);
+    if (!isCompleteRoomCode(normalizedRoomId)) return;
+    setRoomId(normalizedRoomId);
+    handleJoin(normalizedRoomId);
+  }, [handleJoin, onOpenCloudShare, receiveInput, setRoomId]);
 
   // 🚨 [핵심 수정] 중복 초기화 방지를 위한 Ref
   const isInitializedRef = useRef(false);
@@ -536,6 +558,10 @@ const ReceiverView: React.FC = () => {
     progressData.totalBytes,
     progressData.speed
   );
+  const cloudShareCode = normalizeCloudShareCodeInput(receiveInput);
+  const canSubmitReceiveInput =
+    Boolean(cloudShareCode && onOpenCloudShare) ||
+    isCompleteRoomCode(receiveInput);
   const transferFeedbackLabel = getTransferFeedbackLabel(
     progressData.bytesTransferred,
     progressData.totalBytes,
@@ -569,8 +595,8 @@ const ReceiverView: React.FC = () => {
 
               <div className="relative group mb-6">
                 <input
-                  value={roomId || ''}
-                  onChange={e => setRoomId(normalizeRoomCodeInput(e.target.value))}
+                  value={receiveInput}
+                  onChange={e => setReceiveInput(e.target.value)}
                   placeholder="CODE OR LINK"
                   maxLength={160}
                   className="w-full bg-black/30 border border-gray-600 rounded-2xl p-6 text-center text-3xl font-mono tracking-[0.5em] focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 outline-none text-white placeholder-gray-700 transition-all uppercase"
@@ -580,8 +606,8 @@ const ReceiverView: React.FC = () => {
               </div>
 
               <button
-                onClick={() => handleJoin(roomId!)}
-                disabled={!isCompleteRoomCode(roomId || '')}
+                onClick={handleSubmitReceiveInput}
+                disabled={!canSubmitReceiveInput}
                 className="w-full bg-white text-black py-4 rounded-xl font-bold text-base md:text-lg tracking-[0.2em] hover:bg-cyan-300 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
               >
                 ESTABLISH LINK

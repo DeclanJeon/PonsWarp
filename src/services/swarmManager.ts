@@ -17,7 +17,6 @@ import { getSignalingService } from './signaling-factory';
 
 // 팩토리를 통해 시그널링 서비스 가져오기
 const signalingService = getSignalingService();
-import { getSenderWorkerV1 } from './workerFactory';
 import { TransferManifest } from '../types/types';
 import {
   logInfo,
@@ -27,13 +26,10 @@ import {
   debugLog,
 } from '../utils/logger';
 import {
-  HIGH_WATER_MARK,
   HEADER_SIZE,
   BATCH_SIZE_INITIAL,
-  CHUNK_SIZE_INITIAL,
   PARTITION_ACK_POLL_INTERVAL_MS,
   SEND_WINDOW_POLL_INTERVAL_MS,
-  TRANSFER_PARTITION_SIZE,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
@@ -41,9 +37,16 @@ import { networkController, AdaptiveParams } from './networkAdaptiveController';
 import { calculateProgressPercent } from '../utils/transferProgress';
 import {
   calculateSafeBatchRequestSize,
+  calculateSendBudget,
   getPacketPayloadSize,
   isPrematureTransferComplete,
+  selectPartitionSize,
+  selectInFlightTargetBytes,
+  selectTransferTuningProfile,
   shouldRequestMoreChunks,
+  UNKNOWN_TRANSFER_TUNING_PROFILE,
+  TransferDiagnostics,
+  TransferTuningProfile,
 } from '../utils/transferFlowControl';
 import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
 
@@ -93,6 +96,11 @@ type ControlMessage = {
   action?: 'PAUSE' | 'RESUME' | 'ACK';
   offset?: unknown;
   actualSize?: unknown;
+  runId?: unknown;
+};
+type PartitionAckWaiter = {
+  runId: number;
+  peers: Set<string>;
 };
 type WorkerProgressData = Partial<SwarmProgress> & {
   progress?: number;
@@ -157,7 +165,7 @@ export class SwarmManager {
   // 🚀 [Flow Control] 원격 피어의 일시정지 상태 추적
   private pausedPeers: Set<string> = new Set();
   private pendingAckPeers: Set<string> = new Set();
-  private partitionAckWaiters: Map<number, Set<string>> = new Map();
+  private partitionAckWaiters: Map<number, PartitionAckWaiter> = new Map();
   private sendWindowWaiters: Set<() => void> = new Set();
   private awaitingReceiverReconnect = false;
 
@@ -175,6 +183,23 @@ export class SwarmManager {
   private randomPrefix: Uint8Array | null = null;
   private cryptoSessionAnnouncedPeers: Set<string> = new Set();
   private lastAdaptiveConfig: AdaptiveParams | null = null;
+  private currentTransferDiagnostics: TransferDiagnostics = {
+    candidatePathKind: 'unknown',
+    protocol: null,
+    relayProtocol: null,
+    rttMs: null,
+    availableOutgoingBitrateBps: null,
+    bufferedAmountBytes: null,
+  };
+  private currentTransferTuningProfile: TransferTuningProfile =
+    UNKNOWN_TRANSFER_TUNING_PROFILE;
+  private currentInFlightTargetBytes =
+    UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes;
+  private partitionCryptoKey: CryptoKey | null = null;
+  private partitionNonceCounter = 0;
+  private transferPauseCount = 0;
+  private partitionAckCount = 0;
+  private transferRunId = 0;
 
   // Bound Handlers to allow removal
   private boundHandlePeerJoined = this.handlePeerJoined.bind(this);
@@ -659,10 +684,59 @@ export class SwarmManager {
       workerReady: this.workerInitialized,
       activePeerCount: this.currentTransferPeers.size,
       highestBufferedAmount: this.getHighestBufferedAmount(),
-      highWaterMark: HIGH_WATER_MARK,
+      highWaterMark: this.getCurrentInFlightTargetBytes(),
       pausedPeerCount,
       pendingAckCount: this.pendingAckPeers.size,
     });
+  }
+  private getCurrentInFlightTargetBytes(): number {
+    return this.currentInFlightTargetBytes;
+  }
+
+  private resetTransferTuning(): void {
+    this.currentTransferDiagnostics = {
+      candidatePathKind: 'unknown',
+      protocol: null,
+      relayProtocol: null,
+      rttMs: null,
+      availableOutgoingBitrateBps: null,
+      bufferedAmountBytes: this.getHighestBufferedAmount(),
+    };
+    this.currentTransferTuningProfile = UNKNOWN_TRANSFER_TUNING_PROFILE;
+    this.currentInFlightTargetBytes =
+      UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes;
+  }
+
+  private applyTransferDiagnostics(diagnostics: TransferDiagnostics[]): void {
+    if (diagnostics.length === 0) {
+      this.resetTransferTuning();
+      return;
+    }
+
+    const selected = this.selectConservativeDiagnostics(diagnostics);
+    this.currentTransferDiagnostics = selected;
+    this.currentTransferTuningProfile = selectTransferTuningProfile(selected);
+    this.currentInFlightTargetBytes = selectInFlightTargetBytes(
+      this.currentTransferTuningProfile,
+      selected
+    );
+  }
+
+  private selectConservativeDiagnostics(
+    diagnostics: TransferDiagnostics[]
+  ): TransferDiagnostics {
+    const unknown = diagnostics.find(
+      item => item.candidatePathKind === 'unknown'
+    );
+    if (unknown) return unknown;
+
+    const relay = diagnostics.find(item => item.candidatePathKind === 'relay');
+    if (relay) return relay;
+
+    const srflx = diagnostics.find(item => item.candidatePathKind === 'srflx');
+    if (srflx) return srflx;
+
+    return diagnostics[0];
   }
 
   private isIncompleteDownloadSize(actualSize: number): boolean {
@@ -678,10 +752,29 @@ export class SwarmManager {
   }
 
   private handleResumeRequest(peerId: string, msg: ControlMessage): void {
-    const offset = Number(msg.offset);
-
-    if (!Number.isFinite(offset) || offset < 0) {
+    if (
+      typeof msg.offset !== 'number' ||
+      !Number.isFinite(msg.offset) ||
+      msg.offset < 0 ||
+      !Number.isInteger(msg.offset)
+    ) {
       logError('[SwarmManager]', `Invalid resume offset from ${peerId}:`, msg);
+      this.emit(
+        'transfer-failed',
+        `Receiver requested an invalid resume offset (${String(msg.offset)})`
+      );
+      return;
+    }
+
+    if (this.pendingManifest && msg.offset > this.pendingManifest.totalSize) {
+      logError(
+        '[SwarmManager]',
+        `Invalid resume offset from ${peerId}: ${msg.offset}/${this.pendingManifest.totalSize}`
+      );
+      this.emit(
+        'transfer-failed',
+        `Receiver requested an invalid resume offset (${msg.offset})`
+      );
       return;
     }
 
@@ -701,10 +794,15 @@ export class SwarmManager {
       );
       return;
     }
+    for (const existingPeerId of Array.from(this.currentTransferPeers)) {
+      if (existingPeerId !== peerId) {
+        this.removePeer(existingPeerId, 'superseded-by-resume');
+      }
+    }
 
     logInfo(
       '[SwarmManager]',
-      `Resuming transfer for ${peerId} from offset ${offset}`
+      `Resuming transfer for ${peerId} from offset ${msg.offset}`
     );
 
     this.currentTransferPeers = new Set([peerId]);
@@ -715,15 +813,14 @@ export class SwarmManager {
     this.awaitingReceiverReconnect = false;
     this.isTransferring = false;
     this.isProcessingBatch = false;
-    this.totalBytesSent = offset;
+    this.totalBytesSent = msg.offset;
     this.transferStartTime = performance.now();
 
-    void this.runPartitionedTransfer(offset);
+    void this.runPartitionedTransfer(msg.offset);
   }
 
   private canResumeSingleFileTransfer(): boolean {
     return (
-      !!this.worker &&
       !!this.pendingManifest &&
       this.pendingManifest.totalFiles === this.files.length &&
       this.files.length > 0
@@ -787,16 +884,32 @@ export class SwarmManager {
       .map(peerId => this.peers.get(peerId))
       .filter((peer): peer is SinglePeerConnection => !!peer && peer.connected);
 
-    const statsRequests = activePeers
-      .map(peer => this.getPeerStats(peer))
-      .filter((request): request is Promise<RTCStatsReport> => !!request);
+    const statsRequests = activePeers.map(peer => {
+      const request = this.getPeerStats(peer);
+      return request
+        ? request.then(stats => ({ peer, stats }))
+        : peer
+            .getTransferDiagnostics()
+            .then(diagnostics => ({ peer, diagnostics, stats: null }));
+    });
 
     const statsResults = await Promise.allSettled(statsRequests);
+    const diagnostics: TransferDiagnostics[] = [];
     for (const result of statsResults) {
       if (result.status === 'fulfilled') {
-        networkController.updateFromWebRTCStats(result.value);
+        if (result.value.stats) {
+          networkController.updateFromWebRTCStats(result.value.stats);
+          diagnostics.push(
+            result.value.peer.getTransferDiagnosticsFromStats(
+              result.value.stats
+            )
+          );
+        } else if ('diagnostics' in result.value) {
+          diagnostics.push(result.value.diagnostics);
+        }
       }
     }
+    this.applyTransferDiagnostics(diagnostics);
 
     this.updateAdaptiveTransferConfig();
   }
@@ -808,6 +921,7 @@ export class SwarmManager {
     this.lastAdaptiveConfig = null;
     this.currentBatchSize = networkController.getAdaptiveParams().batchSize;
     this.updateAdaptiveTransferConfig();
+    this.resetTransferTuning();
 
     this.adaptiveStatsInterval = setInterval(() => {
       this.sampleAdaptiveStats().catch(error => {
@@ -824,6 +938,7 @@ export class SwarmManager {
     this.lastAdaptiveConfig = null;
     networkController.reset();
     this.currentBatchSize = BATCH_SIZE_INITIAL;
+    this.resetTransferTuning();
   }
 
   private startTransferPumpWatchdog(): void {
@@ -858,7 +973,10 @@ export class SwarmManager {
         '[SwarmManager]',
         'Worker did not respond to process-batch within timeout'
       );
-      this.emit('transfer-failed', 'File reader stalled before the transfer completed');
+      this.emit(
+        'transfer-failed',
+        'File reader stalled before the transfer completed'
+      );
       this.cleanup();
     }, 20000);
   }
@@ -898,13 +1016,30 @@ export class SwarmManager {
         return;
 
       case 'PARTITION_ACK': {
-        const offset =
-          typeof msg.offset === 'number' ? msg.offset : Number(msg.offset);
-        const pending = this.partitionAckWaiters.get(offset);
-        if (pending) {
-          pending.delete(peerId);
-          if (pending.size === 0) {
-            this.partitionAckWaiters.delete(offset);
+        if (
+          typeof msg.offset !== 'number' ||
+          !Number.isFinite(msg.offset) ||
+          !Number.isInteger(msg.offset) ||
+          msg.offset < 0 ||
+          typeof msg.runId !== 'number' ||
+          !Number.isInteger(msg.runId)
+        ) {
+          return;
+        }
+
+        const pending = this.partitionAckWaiters.get(msg.offset);
+        if (
+          pending &&
+          pending.runId === this.transferRunId &&
+          pending.runId === msg.runId
+        ) {
+          pending.peers.delete(peerId);
+          this.partitionAckCount++;
+          if (
+            pending.peers.size === 0 &&
+            this.partitionAckWaiters.get(msg.offset) === pending
+          ) {
+            this.partitionAckWaiters.delete(msg.offset);
           }
         }
         this.notifySendWindowWaiters();
@@ -919,6 +1054,7 @@ export class SwarmManager {
             `Peer ${peerId} requested PAUSE (Disk busy)`
           );
           this.pausedPeers.add(peerId);
+          this.transferPauseCount++;
         } else if (msg.action === 'RESUME') {
           logInfo('[SwarmManager]', `Peer ${peerId} requested RESUME`);
           this.pausedPeers.delete(peerId);
@@ -1033,11 +1169,16 @@ export class SwarmManager {
                 waitTime: READY_WAIT_TIME_1N,
               });
 
+              const readyTimeoutRoomId = this.roomId;
+              const readyTimeoutPeerIds = new Set(pendingPeers.map(p => p.id));
               this.readyTimeout = setTimeout(() => {
                 this.readyTimeout = null;
-                if (!this.isTransferring) {
+                if (!this.isTransferring && this.roomId === readyTimeoutRoomId) {
                   const currentReadyPeers = this.getConnectedPeers().filter(
-                    p => p.ready && !this.completedPeersInSession.has(p.id)
+                    p =>
+                      p.ready &&
+                      readyTimeoutPeerIds.has(p.id) &&
+                      !this.completedPeersInSession.has(p.id)
                   );
                   if (currentReadyPeers.length > 0) {
                     logInfo(
@@ -1065,18 +1206,31 @@ export class SwarmManager {
         );
 
         if (
-          this.pendingManifest &&
-          typeof msg.actualSize === 'number' &&
-          this.isIncompleteDownloadSize(msg.actualSize)
+          typeof msg.actualSize !== 'number' ||
+          !Number.isFinite(msg.actualSize)
         ) {
           logError(
             '[SwarmManager]',
-            `Peer ${peerId} reported incomplete download: ${msg.actualSize}/${this.pendingManifest.totalSize}`
+            `Peer ${peerId} reported invalid download size: ${String(msg.actualSize)}`
+          );
+          this.removePeer(peerId, 'invalid-download-size');
+          this.emit(
+            'transfer-failed',
+            'Receiver did not report a valid saved file size'
+          );
+          return;
+        }
+
+        const actualSize = msg.actualSize;
+        if (this.pendingManifest && this.isIncompleteDownloadSize(actualSize)) {
+          logError(
+            '[SwarmManager]',
+            `Peer ${peerId} reported incomplete download: ${actualSize}/${this.pendingManifest.totalSize}`
           );
           this.removePeer(peerId, 'incomplete-download');
           this.emit(
             'transfer-failed',
-            `Receiver saved only ${msg.actualSize} of ${this.pendingManifest.totalSize} bytes`
+            `Receiver saved only ${actualSize} of ${this.pendingManifest.totalSize} bytes`
           );
           return;
         }
@@ -1260,6 +1414,14 @@ export class SwarmManager {
       );
       return;
     }
+    if (this.awaitingReceiverReconnect) {
+      logInfo(
+        '[SwarmManager]',
+        'Waiting for receiver resume request, skipping normal transfer start'
+      );
+      return;
+    }
+
 
     const connectedPeers = this.getConnectedPeers();
     const readyPeers = connectedPeers.filter(
@@ -1509,6 +1671,13 @@ export class SwarmManager {
       logInfo(
         '[SwarmManager]',
         `processQueue skipped: queue=${this.transferQueue.length}, transferring=${this.isTransferring}`
+      );
+      return;
+    }
+    if (this.awaitingReceiverReconnect) {
+      logInfo(
+        '[SwarmManager]',
+        'Waiting for receiver resume request, skipping queued transfer start'
       );
       return;
     }
@@ -1818,7 +1987,7 @@ export class SwarmManager {
       debugLog('[SwarmManager] 🔄 [DEBUG] Backpressure check:', {
         canRequestMore,
         highestBufferedAmount: this.getHighestBufferedAmount(),
-        highWaterMark: HIGH_WATER_MARK,
+        highWaterMark: this.getCurrentInFlightTargetBytes(),
       });
 
       if (canRequestMore) {
@@ -1858,6 +2027,7 @@ export class SwarmManager {
 
   private async runPartitionedTransfer(startOffset = 0): Promise<void> {
     if (!this.pendingManifest) return;
+    const runId = ++this.transferRunId;
 
     this.isTransferring = true;
     this.awaitingReceiverReconnect = false;
@@ -1865,6 +2035,17 @@ export class SwarmManager {
     this.totalBytesSent = startOffset;
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
+    this.transferPauseCount = 0;
+    this.partitionAckCount = 0;
+    this.resetTransferTuning();
+    if (startOffset === 0) {
+      this.partitionCryptoKey = null;
+      this.partitionNonceCounter = 0;
+    } else if (this.isEncryptionEnabled() && !this.partitionCryptoKey) {
+      throw new Error(
+        'Cannot resume encrypted transfer without an active crypto key'
+      );
+    }
     this.transferStartTime = performance.now();
     this.workerInitialized = false;
     this.awaitingWorkerResume = false;
@@ -1902,13 +2083,22 @@ export class SwarmManager {
       totalBytes: this.totalBytes,
       speed: 0,
       peers: this.getPeerStates(),
+      ...this.getProgressDiagnosticsFields(),
     });
     this.emit('status', 'TRANSFERRING');
+    this.startAdaptiveControl();
+    await this.sampleAdaptiveStats();
 
     try {
-      await this.sendFilesPartitioned(manifest, startOffset);
+      await this.sendFilesPartitioned(manifest, startOffset, runId);
+      if (runId !== this.transferRunId) {
+        return;
+      }
       await this.finishTransfer();
     } catch (error) {
+      if (runId !== this.transferRunId) {
+        return;
+      }
       if (this.awaitingReceiverReconnect) {
         logWarn(
           '[SwarmManager]',
@@ -1918,6 +2108,7 @@ export class SwarmManager {
       }
       logError('[SwarmManager]', 'Partitioned transfer failed:', error);
       this.isTransferring = false;
+      this.stopAdaptiveControl();
       this.emit(
         'transfer-failed',
         error instanceof Error ? error.message : 'Transfer failed'
@@ -1925,15 +2116,86 @@ export class SwarmManager {
     }
   }
 
+  private getCurrentChunkSizeBytes(): number {
+    return Math.max(
+      16 * 1024,
+      Math.min(
+        this.lastAdaptiveConfig?.chunkSize ??
+          this.currentTransferTuningProfile.chunkSizeBytes,
+        this.currentTransferTuningProfile.chunkSizeBytes
+      )
+    );
+  }
+
+  private async createPartitionDataPacket(params: {
+    payload: ArrayBuffer;
+    sequence: number;
+    offset: number;
+  }): Promise<ArrayBuffer> {
+    if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
+      return createPlainDataPacket(params);
+    }
+
+    if (!this.partitionCryptoKey) {
+      const sessionKey = new Uint8Array(this.sessionKey);
+      const sessionKeyBuffer = sessionKey.buffer.slice(
+        sessionKey.byteOffset,
+        sessionKey.byteOffset + sessionKey.byteLength
+      );
+      this.partitionCryptoKey = await crypto.subtle.importKey(
+        'raw',
+        sessionKeyBuffer,
+        { name: 'AES-GCM' },
+        false,
+        ['encrypt']
+      );
+    }
+
+    const nonce = new Uint8Array(12);
+    new DataView(nonce.buffer).setUint32(0, this.partitionNonceCounter, true);
+    nonce.set(this.randomPrefix.subarray(0, 8), 4);
+    const nonceBuffer = nonce.buffer.slice(
+      nonce.byteOffset,
+      nonce.byteOffset + nonce.byteLength
+    );
+    this.partitionNonceCounter += 1;
+
+    const ciphertextWithTag = await crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv: nonceBuffer,
+        tagLength: 128,
+      },
+      this.partitionCryptoKey,
+      params.payload
+    );
+
+    const packet = new ArrayBuffer(38 + ciphertextWithTag.byteLength);
+    const packetBytes = new Uint8Array(packet);
+    const packetView = new DataView(packet);
+    packetBytes[0] = 0x02;
+    packetBytes[1] = 0x01;
+    packetView.setUint16(2, 0, true);
+    packetView.setUint32(4, params.sequence, true);
+    packetView.setBigUint64(8, BigInt(params.offset), true);
+    packetView.setUint32(16, params.payload.byteLength, true);
+    packetBytes.set(nonce, 20);
+    packetBytes.set(new Uint8Array(ciphertextWithTag), 38);
+    return packet;
+  }
   private async sendFilesPartitioned(
     manifest: TransferManifest,
-    startOffset = 0
+    startOffset: number,
+    runId: number
   ): Promise<void> {
-    const partitionSize = TRANSFER_PARTITION_SIZE;
+    const partitionSize = selectPartitionSize(
+      this.currentTransferTuningProfile
+    );
+    const initialChunkSize = this.getCurrentChunkSizeBytes();
     const cursor = getPartitionedResumeCursor({
       fileSizes: this.files.map(file => file.size),
       startOffset,
-      chunkSize: CHUNK_SIZE_INITIAL,
+      chunkSize: initialChunkSize,
       partitionSize,
       totalSize: manifest.totalSize,
     });
@@ -1941,23 +2203,29 @@ export class SwarmManager {
     let globalOffset = cursor.globalOffset;
     let partitionEnd = cursor.nextPartitionEnd;
 
-    for (let fileIndex = cursor.fileIndex; fileIndex < this.files.length; fileIndex++) {
+    for (
+      let fileIndex = cursor.fileIndex;
+      fileIndex < this.files.length;
+      fileIndex++
+    ) {
       const file = this.files[fileIndex];
       let fileOffset = fileIndex === cursor.fileIndex ? cursor.fileOffset : 0;
       while (fileOffset < file.size) {
-        if (!this.isTransferring) {
-          throw new Error('Transfer stopped');
-        }
+        this.ensureActiveTransferRun(runId);
 
-        await this.waitUntilSendWindowOpen();
+        await this.waitUntilSendWindowOpen(runId);
 
-        const chunkEnd = Math.min(fileOffset + CHUNK_SIZE_INITIAL, file.size);
+        const chunkSize = this.getCurrentChunkSizeBytes();
+        const chunkEnd = Math.min(fileOffset + chunkSize, file.size);
         const payload = await file.slice(fileOffset, chunkEnd).arrayBuffer();
-        const packet = createPlainDataPacket({
+        const packet = await this.createPartitionDataPacket({
           payload,
           sequence: sequence++,
           offset: globalOffset,
         });
+        this.ensureActiveTransferRun(runId);
+        await this.waitUntilSendWindowOpen(runId);
+        this.ensureActiveTransferRun(runId);
 
         const result = this.broadcastChunk(packet);
         for (const failedPeerId of result.failedPeers) {
@@ -1975,8 +2243,12 @@ export class SwarmManager {
         this.emitProgress();
 
         if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
-          await this.sendPartitionMarkerAndWait(globalOffset);
-          partitionEnd = Math.min(partitionEnd + partitionSize, manifest.totalSize);
+          await this.sendPartitionMarkerAndWait(globalOffset, runId);
+          partitionEnd = Math.min(
+            globalOffset +
+              selectPartitionSize(this.currentTransferTuningProfile),
+            manifest.totalSize
+          );
         }
       }
     }
@@ -1987,12 +2259,18 @@ export class SwarmManager {
       );
     }
 
-    await this.sendPartitionMarkerAndWait(globalOffset);
+    await this.sendPartitionMarkerAndWait(globalOffset, runId);
   }
 
-  private async waitUntilSendWindowOpen(): Promise<void> {
+  private ensureActiveTransferRun(runId: number): void {
+    if (runId !== this.transferRunId || !this.isTransferring) {
+      throw new Error('Transfer stopped');
+    }
+  }
+
+  private async waitUntilSendWindowOpen(runId: number): Promise<void> {
     const started = performance.now();
-    while (this.isTransferring) {
+    while (runId === this.transferRunId && this.isTransferring) {
       const activePeerIds = this.getActiveTransferPeerIds();
       if (activePeerIds.length === 0) {
         throw new Error('No active receivers');
@@ -2001,7 +2279,12 @@ export class SwarmManager {
       const hasPausedPeer = activePeerIds.some(peerId =>
         this.pausedPeers.has(peerId)
       );
-      if (!hasPausedPeer && this.getHighestBufferedAmount() < HIGH_WATER_MARK) {
+      const sendBudget = calculateSendBudget({
+        targetInFlightBytes: this.getCurrentInFlightTargetBytes(),
+        bufferedAmountBytes: this.getHighestBufferedAmount(),
+        paused: hasPausedPeer,
+      });
+      if (sendBudget > 0) {
         return;
       }
 
@@ -2013,14 +2296,20 @@ export class SwarmManager {
     throw new Error('Transfer stopped');
   }
 
-  private async sendPartitionMarkerAndWait(offset: number): Promise<void> {
+  private async sendPartitionMarkerAndWait(
+    offset: number,
+    runId: number
+  ): Promise<void> {
+    this.ensureActiveTransferRun(runId);
+
     const peerIds = this.getActiveTransferPeerIds();
     if (peerIds.length === 0) {
       throw new Error('No active receivers for partition ACK');
     }
 
-    this.partitionAckWaiters.set(offset, new Set(peerIds));
-    const msg = JSON.stringify({ type: 'PARTITION', offset });
+    const waiter: PartitionAckWaiter = { runId, peers: new Set(peerIds) };
+    this.partitionAckWaiters.set(offset, waiter);
+    const msg = JSON.stringify({ type: 'PARTITION', offset, runId });
     for (const peerId of peerIds) {
       const peer = this.peers.get(peerId);
       if (peer && peer.connected) {
@@ -2029,22 +2318,30 @@ export class SwarmManager {
     }
 
     const started = performance.now();
-    while (this.isTransferring) {
+    while (runId === this.transferRunId && this.isTransferring) {
       const pending = this.partitionAckWaiters.get(offset);
-      if (!pending || pending.size === 0) {
-        this.partitionAckWaiters.delete(offset);
+      if (pending !== waiter || pending.peers.size === 0) {
+        if (pending === waiter) {
+          this.partitionAckWaiters.delete(offset);
+        }
         return;
       }
 
-      for (const peerId of Array.from(pending)) {
+      for (const peerId of Array.from(waiter.peers)) {
         const peer = this.peers.get(peerId);
-        if (!peer || !peer.connected || !this.currentTransferPeers.has(peerId)) {
-          pending.delete(peerId);
+        if (
+          !peer ||
+          !peer.connected ||
+          !this.currentTransferPeers.has(peerId)
+        ) {
+          waiter.peers.delete(peerId);
         }
       }
 
-      if (pending.size === 0) {
-        this.partitionAckWaiters.delete(offset);
+      if (waiter.peers.size === 0) {
+        if (this.partitionAckWaiters.get(offset) === waiter) {
+          this.partitionAckWaiters.delete(offset);
+        }
         return;
       }
 
@@ -2052,6 +2349,9 @@ export class SwarmManager {
         throw new Error(`Timed out waiting for partition ACK at ${offset}`);
       }
       await this.waitForSendWindowSignal(PARTITION_ACK_POLL_INTERVAL_MS);
+    }
+    if (this.partitionAckWaiters.get(offset) === waiter) {
+      this.partitionAckWaiters.delete(offset);
     }
     throw new Error('Transfer stopped');
   }
@@ -2098,8 +2398,8 @@ export class SwarmManager {
     const safeBatchSize = calculateSafeBatchRequestSize({
       desiredBatchSize: this.currentBatchSize,
       highestBufferedAmount: this.getHighestBufferedAmount(),
-      highWaterMark: HIGH_WATER_MARK,
-      chunkPayloadSize: this.lastAdaptiveConfig?.chunkSize ?? 64 * 1024,
+      highWaterMark: this.getCurrentInFlightTargetBytes(),
+      chunkPayloadSize: this.getCurrentChunkSizeBytes(),
       packetOverheadBytes: HEADER_SIZE + 48,
       minBatchSize: 1,
     });
@@ -2118,7 +2418,10 @@ export class SwarmManager {
 
   private async finishTransfer(): Promise<void> {
     if (this.awaitingWorkerResume) {
-      logInfo('[SwarmManager]', 'Ignoring worker complete while resume is pending');
+      logInfo(
+        '[SwarmManager]',
+        'Ignoring worker complete while resume is pending'
+      );
       return;
     }
 
@@ -2130,18 +2433,17 @@ export class SwarmManager {
         packetOverheadAllowance: this.currentBatchSize * (HEADER_SIZE + 16),
       })
     ) {
-      logError('[SwarmManager]', 'Worker completed before all payload bytes were queued', {
-        totalBytesSent: this.totalBytesSent,
-        totalBytes: this.totalBytes,
-      });
-      this.awaitingWorkerResume = true;
-      this.pendingWorkerResumeOffset = this.totalBytesSent;
-      this.isProcessingBatch = false;
-      this.workerInitialized = false;
-      this.worker?.terminate();
-      this.worker = getSenderWorkerV1();
-      this.setupWorkerHandlers(this.files, this.pendingManifest!);
-      return;
+      logError(
+        '[SwarmManager]',
+        'Transfer completed before all payload bytes were queued',
+        {
+          totalBytesSent: this.totalBytesSent,
+          totalBytes: this.totalBytes,
+        }
+      );
+      throw new Error(
+        `Transfer stopped before all bytes were queued (${this.totalBytesSent}/${this.totalBytes})`
+      );
     }
 
     this.isTransferring = false;
@@ -2183,6 +2485,23 @@ export class SwarmManager {
     });
   }
 
+  private getProgressDiagnosticsFields(): Record<string, unknown> {
+    return {
+      candidatePathKind: this.currentTransferDiagnostics.candidatePathKind,
+      protocol: this.currentTransferDiagnostics.protocol ?? null,
+      relayProtocol: this.currentTransferDiagnostics.relayProtocol ?? null,
+      rttMs: this.currentTransferDiagnostics.rttMs ?? null,
+      availableOutgoingBitrateBps:
+        this.currentTransferDiagnostics.availableOutgoingBitrateBps ?? null,
+      bufferedAmountBytes: this.getHighestBufferedAmount(),
+      targetWindowBytes: this.getCurrentInFlightTargetBytes(),
+      maxWindowBytes: this.currentTransferTuningProfile.maxInFlightBytes,
+      pauseCount: this.transferPauseCount,
+      pausedPeerCount: this.pausedPeers.size,
+      partitionAckCount: this.partitionAckCount,
+    };
+  }
+
   private emitProgress(progressData: WorkerProgressData = {}): void {
     const elapsed = (performance.now() - this.transferStartTime) / 1000;
     const speed = elapsed > 0 ? this.totalBytesSent / elapsed : 0;
@@ -2200,6 +2519,7 @@ export class SwarmManager {
       totalBytes: this.totalBytes,
       speed,
       peers: this.getPeerStates(),
+      ...this.getProgressDiagnosticsFields(),
     });
   }
 
@@ -2293,6 +2613,8 @@ export class SwarmManager {
   private resetState(): void {
     logInfo('[SwarmManager]', 'Resetting state...');
 
+    this.transferRunId++;
+    this.awaitingReceiverReconnect = false;
     this.isTransferring = false;
     this.isProcessingBatch = false;
     this.awaitingWorkerResume = false;
@@ -2337,8 +2659,13 @@ export class SwarmManager {
     this.pausedPeers.clear();
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
+    this.transferPauseCount = 0;
+    this.partitionAckCount = 0;
+    this.resetTransferTuning();
     this.notifySendWindowWaiters();
     this.cryptoSessionAnnouncedPeers.clear();
+    this.partitionCryptoKey = null;
+    this.partitionNonceCounter = 0;
     if (this.sessionKey) {
       this.sessionKey.fill(0);
     }

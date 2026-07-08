@@ -37,6 +37,7 @@ import {
   type RollingSpeedSample,
 } from '../utils/transferEstimate';
 import { TransferManifest } from '../types/types';
+import { formatCloudShareCode } from '../utils/cloudShareCode';
 
 type CloudUploadStatus =
   | 'IDLE'
@@ -132,6 +133,7 @@ const CloudSenderView: React.FC = () => {
   const [status, setStatus] = useState<CloudUploadStatus>('IDLE');
   const [manifest, setManifest] = useState<TransferManifest | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
+  const [shareCode, setShareCode] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -222,6 +224,7 @@ const CloudSenderView: React.FC = () => {
     if (nextManifest.totalSize > freePlan.maxTotalBytes) {
       setManifest(nextManifest);
       setShareLink(null);
+      setShareCode(null);
       setExpiresAt(null);
       setCopied(false);
       setFileProgress({});
@@ -238,6 +241,7 @@ const CloudSenderView: React.FC = () => {
     if (oversizedFile) {
       setManifest(nextManifest);
       setShareLink(null);
+      setShareCode(null);
       setExpiresAt(null);
       setCopied(false);
       setFileProgress({});
@@ -253,6 +257,7 @@ const CloudSenderView: React.FC = () => {
 
     setManifest(nextManifest);
     setShareLink(null);
+    setShareCode(null);
     setExpiresAt(null);
     setCopied(false);
     setError(null);
@@ -316,6 +321,7 @@ const CloudSenderView: React.FC = () => {
       );
       setCurrentFile(null);
       setExpiresAt(completed.expiresAt);
+      setShareCode(created.shareId);
       setShareLink(`${window.location.origin}${created.shareUrl}`);
       setStatus('DONE');
     } catch (uploadError) {
@@ -343,6 +349,12 @@ const CloudSenderView: React.FC = () => {
   const copyToClipboard = async () => {
     if (!shareLink) return;
     await navigator.clipboard.writeText(shareLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  const copyCodeToClipboard = async () => {
+    if (!shareCode) return;
+    await navigator.clipboard.writeText(shareCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -535,6 +547,19 @@ const CloudSenderView: React.FC = () => {
                 className="md:w-[180px] md:h-[180px]"
               />
             </button>
+            {shareCode && (
+              <button
+                onClick={copyCodeToClipboard}
+                className="w-full bg-emerald-500/10 border border-emerald-500/30 hover:border-emerald-300 rounded-xl p-4 text-center transition-all mb-3"
+              >
+                <p className="text-[10px] text-emerald-200/70 uppercase tracking-widest mb-2">
+                  Drop Code
+                </p>
+                <p className="text-lg text-white font-mono font-bold tracking-[0.18em] break-all">
+                  {formatCloudShareCode(shareCode)}
+                </p>
+              </button>
+            )}
 
             <button
               onClick={copyToClipboard}

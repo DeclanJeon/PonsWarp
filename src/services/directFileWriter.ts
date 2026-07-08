@@ -102,12 +102,15 @@ export class DirectFileWriter {
 
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
   private pendingBytesInBuffer = 0;
+  private queuedAcceptedBytesInBuffer = 0;
 
   // 🚀 버퍼 추적 및 흐름 제어 변수
   private isPaused = false;
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
   private cryptoSession: CryptoSession | null = null;
+  private decryptCryptoKey: CryptoKey | null = null;
+  private writeFailure: Error | null = null;
   private resumeAttempts = 0;
   private awaitingResume = false;
   private receiverZipStream: Zip64Stream | null = null;
@@ -152,9 +155,11 @@ export class DirectFileWriter {
     this.writeBuffer = [];
     this.currentBatchSize = 0;
     this.pendingBytesInBuffer = 0;
+    this.queuedAcceptedBytesInBuffer = 0;
     this.isPaused = false;
     this.resumeAttempts = 0;
     this.awaitingResume = false;
+    this.writeFailure = null;
     this.blobChunks = [];
     this.receiverZipStream = null;
     this.receiverZipFileIndex = 0;
@@ -201,6 +206,7 @@ export class DirectFileWriter {
     this.sessionKey = new Uint8Array(sessionKey);
     this.randomPrefix = new Uint8Array(randomPrefix);
     this.cryptoSession = null;
+    this.decryptCryptoKey = null;
     logInfo('[DirectFileWriter]', '🔐 Encryption key configured');
   }
 
@@ -249,9 +255,9 @@ export class DirectFileWriter {
           if (fsaError instanceof Error && fsaError.name === 'AbortError') {
             logWarn(
               '[DirectFileWriter]',
-              '⚠️ User cancelled the file save dialog - trying automatic fallback methods'
+              '⚠️ User cancelled the file save dialog'
             );
-            // 사용자 취소 시에도 자동 폴백 시도 (Blob/OPFS)
+            throw fsaError;
           } else if (
             fsaError instanceof Error &&
             fsaError.name === 'SecurityError'
@@ -961,32 +967,86 @@ export class DirectFileWriter {
    * 🚀 비동기 큐를 사용하여 쓰기 작업의 순차적 실행 보장
    */
   public async writeChunk(packet: ArrayBuffer): Promise<void> {
-    // 큐에 새로운 작업을 추가 (이전 작업이 끝나야 실행됨)
-    this.writeQueue = this.writeQueue
-      .then(async () => {
-        try {
-          await this.processChunkInternal(packet);
-        } catch (error: unknown) {
-          logError('[DirectFileWriter]', 'Write queue error:', error);
-          if (error instanceof Error) {
-            this.onErrorCallback?.(`Write failed: ${error.message}`);
-          } else {
-            this.onErrorCallback?.('Write failed: Unknown error');
-          }
-          throw error; // 에러 전파하여 체인 중단
-        }
-      })
-      .catch(() => {
-        // 이미 처리된 에러는 무시하되, 체인은 유지
-        logWarn('[DirectFileWriter]', 'Recovering from write error');
-      });
+    if (this.writeFailure) {
+      return Promise.reject(this.writeFailure);
+    }
 
-    // 호출자는 큐의 완료를 기다림
-    return this.writeQueue;
+    const queuedPayloadBytes = this.getAcceptedPayloadBytes(packet);
+    if (queuedPayloadBytes > 0) {
+      this.pendingBytesInBuffer += queuedPayloadBytes;
+      this.queuedAcceptedBytesInBuffer += queuedPayloadBytes;
+      this.checkBackpressure();
+    }
+
+    const writeTask = this.writeQueue.then(async () => {
+      if (this.writeFailure) {
+        throw this.writeFailure;
+      }
+
+      try {
+        await this.processChunkInternal(packet);
+      } catch (error: unknown) {
+        const writeError =
+          error instanceof Error ? error : new Error('Unknown write failure');
+        this.writeFailure = writeError;
+        logError('[DirectFileWriter]', 'Write queue error:', writeError);
+        this.onErrorCallback?.(`Write failed: ${writeError.message}`);
+        throw writeError;
+      } finally {
+        if (queuedPayloadBytes > 0) {
+          this.pendingBytesInBuffer = Math.max(
+            0,
+            this.pendingBytesInBuffer - queuedPayloadBytes
+          );
+          this.queuedAcceptedBytesInBuffer = Math.max(
+            0,
+            this.queuedAcceptedBytesInBuffer - queuedPayloadBytes
+          );
+          if (!this.writeFailure) {
+            this.checkBackpressure();
+          }
+        }
+      }
+    });
+
+    this.writeQueue = writeTask.catch(() => {
+      logWarn('[DirectFileWriter]', 'Write queue halted after write error');
+    });
+
+    return writeTask;
+  }
+  private getAcceptedPayloadBytes(packet: ArrayBuffer): number {
+    if (packet.byteLength < HEADER_SIZE) return 0;
+
+    const bytes = new Uint8Array(packet);
+    const view = new DataView(packet);
+
+    if (bytes[0] === 0x02 && bytes[1] === 0x01) {
+      if (packet.byteLength < ENCRYPTED_HEADER_SIZE + AUTH_TAG_SIZE) return 0;
+      const plaintextLength = view.getUint32(16, true);
+      if (
+        packet.byteLength !==
+        ENCRYPTED_HEADER_SIZE + plaintextLength + AUTH_TAG_SIZE
+      ) {
+        return 0;
+      }
+      return plaintextLength;
+    }
+
+    const fileId = view.getUint16(0, true);
+    if (fileId === 0xffff) return 0;
+
+    const payloadLength = view.getUint32(14, true);
+    if (packet.byteLength !== HEADER_SIZE + payloadLength) return 0;
+    return payloadLength;
   }
 
-  public waitForIdle(): Promise<void> {
-    return this.writeQueue;
+
+  public async waitForIdle(): Promise<void> {
+    await this.writeQueue;
+    if (this.writeFailure) {
+      throw this.writeFailure;
+    }
   }
 
   /**
@@ -995,7 +1055,9 @@ export class DirectFileWriter {
   private async processChunkInternal(packet: ArrayBuffer): Promise<void> {
     if (this.isFinalized) return;
 
-    if (packet.byteLength < HEADER_SIZE) return;
+    if (packet.byteLength < HEADER_SIZE) {
+      throw new Error('Packet too short');
+    }
 
     const normalizedPacket = await this.normalizePacket(packet);
     const view = new DataView(normalizedPacket);
@@ -1014,7 +1076,10 @@ export class DirectFileWriter {
     const offset = Number(view.getBigUint64(6, true));
 
     // 🚀 [FIX] ZIP 모드(isSizeEstimated)일 경우 Overflow 체크 완화
-    const totalReceived = this.totalBytesWritten + this.pendingBytesInBuffer;
+    const totalReceived =
+      this.totalBytesWritten +
+      this.pendingBytesInBuffer -
+      this.queuedAcceptedBytesInBuffer;
 
     // Manifest가 있고, 크기 추정 모드(ZIP 등)가 아닐 때만 엄격하게 체크
     const isSizeStrict = this.manifest && !this.manifest.isSizeEstimated;
@@ -1030,8 +1095,7 @@ export class DirectFileWriter {
 
     // 패킷 무결성 검증
     if (normalizedPacket.byteLength !== HEADER_SIZE + size) {
-      logError('[DirectFileWriter]', 'Corrupt packet');
-      return;
+      throw new Error('Corrupt packet');
     }
 
     // Writer 체크 (모드별로 다른 writer 사용)
@@ -1043,26 +1107,9 @@ export class DirectFileWriter {
           : !!this.writer;
 
     if (!hasWriter || !this.reorderingBuffer) {
-      logError(
-        '[DirectFileWriter]',
+      throw new Error(
         `No writer available (mode: ${this.writerMode}, writer: ${!!this.writer}, opfsWriter: ${!!this.opfsWriter}, reorderingBuffer: ${!!this.reorderingBuffer})`
       );
-
-      // 디버깅을 위한 상세 정보
-      if (!this.reorderingBuffer) {
-        logError(
-          '[DirectFileWriter]',
-          'ReorderingBuffer is null - initialization may have failed'
-        );
-      }
-      if (!hasWriter) {
-        logError(
-          '[DirectFileWriter]',
-          `Writer is null for mode ${this.writerMode} - initialization may have failed`
-        );
-      }
-
-      return;
     }
 
     const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
@@ -1095,7 +1142,7 @@ export class DirectFileWriter {
 
   private async normalizePacket(packet: ArrayBuffer): Promise<ArrayBuffer> {
     const bytes = new Uint8Array(packet);
-    if (bytes[0] !== 0x02) {
+    if (bytes[0] !== 0x02 || bytes[1] !== 0x01) {
       return packet;
     }
 
@@ -1114,8 +1161,11 @@ export class DirectFileWriter {
       throw new Error('Corrupt encrypted packet');
     }
 
-    const session = await this.ensureCryptoSession();
-    const decrypted = session.decrypt_chunk(bytes);
+    const decrypted = await this.decryptEncryptedPacket(bytes);
+    if (decrypted.byteLength !== plaintextLength) {
+      throw new Error('Encrypted packet plaintext length mismatch');
+    }
+
     const normalized = new ArrayBuffer(HEADER_SIZE + decrypted.length);
     const normalizedView = new DataView(normalized);
     const normalizedBytes = new Uint8Array(normalized);
@@ -1128,6 +1178,56 @@ export class DirectFileWriter {
     normalizedBytes.set(decrypted, HEADER_SIZE);
 
     return normalized;
+  }
+
+  private async decryptEncryptedPacket(bytes: Uint8Array): Promise<Uint8Array> {
+    if (this.sessionKey && globalThis.crypto?.subtle) {
+      const key = await this.ensureDecryptCryptoKey();
+      const iv = bytes.slice(20, 32);
+      const ciphertextWithTag = bytes.slice(ENCRYPTED_HEADER_SIZE);
+
+      try {
+        const decrypted = await globalThis.crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv,
+            tagLength: 128,
+          },
+          key,
+          ciphertextWithTag
+        );
+        return new Uint8Array(decrypted);
+      } catch (error) {
+        throw new Error(
+          `Encrypted packet decrypt failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+
+    const session = await this.ensureCryptoSession();
+    return session.decrypt_chunk(bytes);
+  }
+
+  private async ensureDecryptCryptoKey(): Promise<CryptoKey> {
+    if (this.decryptCryptoKey) {
+      return this.decryptCryptoKey;
+    }
+    if (!this.sessionKey) {
+      throw new Error('Encrypted packet received before crypto session');
+    }
+
+    const sessionKeyBuffer = new ArrayBuffer(this.sessionKey.byteLength);
+    new Uint8Array(sessionKeyBuffer).set(this.sessionKey);
+    this.decryptCryptoKey = await globalThis.crypto.subtle.importKey(
+      'raw',
+      sessionKeyBuffer,
+      { name: 'AES-GCM' },
+      false,
+      ['decrypt']
+    );
+    return this.decryptCryptoKey;
   }
 
   private async ensureCryptoSession(): Promise<CryptoSession> {
@@ -1225,11 +1325,17 @@ export class DirectFileWriter {
     let cursor = 0;
 
     while (cursor < data.byteLength) {
+      await this.emitPendingZeroByteZipEntries(zip);
+
       const fileMeta = this.manifest.files?.[this.receiverZipFileIndex];
       if (!fileMeta) {
         throw new Error(
           'Received more source data than the manifest describes'
         );
+      }
+
+      if (fileMeta.size === 0) {
+        continue;
       }
 
       if (this.receiverZipFileBytesWritten === 0) {
@@ -1255,11 +1361,32 @@ export class DirectFileWriter {
     }
   }
 
+  private async emitPendingZeroByteZipEntries(zip: Zip64Stream): Promise<void> {
+    while (true) {
+      const fileMeta = this.manifest.files?.[this.receiverZipFileIndex];
+      if (!fileMeta || fileMeta.size !== 0) return;
+
+      await this.writeOutputData(zip.begin_file(fileMeta.path, 0n));
+      await this.writeOutputData(zip.end_file());
+      this.receiverZipFileIndex++;
+      this.receiverZipFileBytesWritten = 0;
+    }
+  }
+
   private async finalizeReceiverZip(): Promise<void> {
     if (!this.isReceiverZipMode() || this.receiverZipFinalized) return;
     if (this.totalBytesWritten !== this.totalSize) return;
 
     const zip = await this.ensureReceiverZipStream();
+    await this.emitPendingZeroByteZipEntries(zip);
+
+    const remainingFile = this.manifest.files?.[this.receiverZipFileIndex];
+    if (remainingFile) {
+      throw new Error(
+        `Missing ZIP source data for ${remainingFile.path}: expected ${remainingFile.size} bytes`
+      );
+    }
+
     await this.writeOutputData(zip.finalize());
     this.receiverZipFinalized = true;
   }
@@ -1311,19 +1438,32 @@ export class DirectFileWriter {
     if (this.reorderingBuffer) {
       const stats = this.reorderingBuffer.getStatus();
       if (stats.bufferedCount > 0) {
+        const isSizeStrict = this.manifest && !this.manifest.isSizeEstimated;
         if (
-          this.requestResume(
-            stats.nextExpected,
-            `${stats.bufferedCount} buffered chunk(s) are waiting for missing data`
-          )
+          isSizeStrict &&
+          this.totalSize > 0 &&
+          this.totalBytesWritten >= this.totalSize
         ) {
+          logWarn(
+            '[DirectFileWriter]',
+            `Discarding ${stats.bufferedCount} buffered chunk(s) after exact-size completion`
+          );
+          this.reorderingBuffer.clear();
+        } else {
+          if (
+            this.requestResume(
+              stats.nextExpected,
+              `${stats.bufferedCount} buffered chunk(s) are waiting for missing data`
+            )
+          ) {
+            return;
+          }
+
+          await this.abortIncompleteTransfer(
+            `INCOMPLETE_TRANSFER|Transfer incomplete: ${stats.bufferedCount} chunk(s) are still waiting for missing data at offset ${stats.nextExpected}. Received ${formatBytes(this.totalBytesWritten)} of ${formatBytes(this.totalSize)}.`
+          );
           return;
         }
-
-        await this.abortIncompleteTransfer(
-          `INCOMPLETE_TRANSFER|Transfer incomplete: ${stats.bufferedCount} chunk(s) are still waiting for missing data at offset ${stats.nextExpected}. Received ${formatBytes(this.totalBytesWritten)} of ${formatBytes(this.totalSize)}.`
-        );
-        return;
       }
     }
 
@@ -1437,16 +1577,17 @@ export class DirectFileWriter {
           const fsWriter = this.writer as FileSystemWritableFileStream;
           // 🚨 [핵심 수정] 파일 크기 Truncate
           // ZIP 사이즈 불일치 문제 해결을 위한 Truncate
-          // locked 속성 체크
-          if (!(fsWriter as unknown as { locked: boolean }).locked) {
-            const maybeTruncate = (fsWriter as unknown as {
-              truncate?: (size: number) => Promise<void>;
-            }).truncate;
-            if (typeof maybeTruncate === 'function') {
-              await maybeTruncate.call(fsWriter, this.outputBytesWritten);
-            }
-            await fsWriter.close();
+          if ((fsWriter as unknown as { locked: boolean }).locked) {
+            throw new Error('File writer is locked and cannot be committed');
           }
+
+          const maybeTruncate = (fsWriter as unknown as {
+            truncate?: (size: number) => Promise<void>;
+          }).truncate;
+          if (typeof maybeTruncate === 'function') {
+            await maybeTruncate.call(fsWriter, this.outputBytesWritten);
+          }
+          await fsWriter.close();
         } else {
           const streamWriter = this.writer as WritableStreamDefaultWriter;
           await streamWriter.close();
@@ -1456,14 +1597,12 @@ export class DirectFileWriter {
           `✅ File saved (${this.writerMode}): ${this.totalBytesWritten} bytes`
         );
       } catch (error: unknown) {
-        // 이미 닫힌 스트림 에러는 무시
-        if (
-          error instanceof Error &&
-          !error.message?.includes('close') &&
-          !error.message?.includes('closed')
-        ) {
-          logError('[DirectFileWriter]', 'Error closing file:', error);
-        }
+        const closeError =
+          error instanceof Error
+            ? error
+            : new Error('Unknown file close failure');
+        logError('[DirectFileWriter]', 'Error closing file:', closeError);
+        throw closeError;
       }
     }
 
@@ -1615,6 +1754,8 @@ export class DirectFileWriter {
     this.randomPrefix = null;
     this.cryptoSession?.reset();
     this.cryptoSession = null;
+    this.decryptCryptoKey = null;
+    this.writeFailure = null;
 
     // 버퍼 정리
     if (this.reorderingBuffer) {

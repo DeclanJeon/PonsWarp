@@ -6,11 +6,18 @@
  */
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import { LOW_WATER_MARK } from '../utils/constants';
+import {
+  TransferDiagnostics,
+  CandidatePathKind,
+} from '../utils/transferFlowControl';
 import { logInfo, logError } from '../utils/logger';
 
 type EventHandler = (data: unknown) => void;
 type SimplePeerWithChannel = SimplePeer.Instance & {
   _channel?: RTCDataChannel;
+};
+type SimplePeerWithNative = SimplePeerWithChannel & {
+  _pc?: RTCPeerConnection;
 };
 
 export interface PeerConfig {
@@ -24,6 +31,23 @@ export interface PeerState {
   bufferedAmount: number;
   ready: boolean;
 }
+
+type CandidateStats = {
+  candidateType?: string;
+  protocol?: string;
+  relayProtocol?: string;
+};
+
+type CandidatePairStats = {
+  type?: string;
+  selected?: boolean;
+  nominated?: boolean;
+  state?: string;
+  localCandidateId?: string;
+  remoteCandidateId?: string;
+  currentRoundTripTime?: number;
+  availableOutgoingBitrate?: number;
+};
 
 export class SinglePeerConnection {
   public readonly id: string;
@@ -152,7 +176,8 @@ export class SinglePeerConnection {
 
     if (this.drainPollInterval) clearInterval(this.drainPollInterval);
     this.drainPollInterval = setInterval(() => {
-      if (!this.connected || this.destroyed || channel.readyState !== 'open') return;
+      if (!this.connected || this.destroyed || channel.readyState !== 'open')
+        return;
       if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
         this.emitDrainOnce();
       }
@@ -205,6 +230,118 @@ export class SinglePeerConnection {
     if (!this.pc || this.destroyed) return 0;
     const channel = (this.pc as SimplePeerWithChannel)._channel;
     return channel?.bufferedAmount ?? 0;
+  }
+
+  public async getTransferDiagnostics(): Promise<TransferDiagnostics> {
+    try {
+      const nativePeer = (this.pc as SimplePeerWithNative | null)?._pc;
+      if (!nativePeer || typeof nativePeer.getStats !== 'function') {
+        return this.getConservativeTransferDiagnostics();
+      }
+
+      return this.getTransferDiagnosticsFromStats(await nativePeer.getStats());
+    } catch {
+      return this.getConservativeTransferDiagnostics();
+    }
+  }
+
+  public getTransferDiagnosticsFromStats(
+    stats?: RTCStatsReport | null
+  ): TransferDiagnostics {
+    const fallback = this.getConservativeTransferDiagnostics();
+
+    try {
+      if (!stats || typeof stats.forEach !== 'function') return fallback;
+
+      let selectedPair: CandidatePairStats | null = null;
+      stats.forEach(value => {
+        const pair = value as CandidatePairStats;
+        if (pair.type !== 'candidate-pair') return;
+
+        if (pair.selected) {
+          selectedPair = pair;
+          return;
+        }
+
+        if (
+          !selectedPair &&
+          pair.nominated === true &&
+          pair.state === 'succeeded'
+        ) {
+          selectedPair = pair;
+        }
+      });
+
+      if (!selectedPair) return fallback;
+
+      const localCandidate = selectedPair.localCandidateId
+        ? (stats.get(selectedPair.localCandidateId) as
+            | CandidateStats
+            | undefined)
+        : undefined;
+      const remoteCandidate = selectedPair.remoteCandidateId
+        ? (stats.get(selectedPair.remoteCandidateId) as
+            | CandidateStats
+            | undefined)
+        : undefined;
+
+      const candidatePathKind = this.normalizeCandidatePath(
+        localCandidate?.candidateType,
+        remoteCandidate?.candidateType
+      );
+
+      return {
+        candidatePathKind,
+        protocol: localCandidate?.protocol ?? remoteCandidate?.protocol ?? null,
+        relayProtocol:
+          localCandidate?.relayProtocol ??
+          remoteCandidate?.relayProtocol ??
+          null,
+        rttMs: this.secondsToMilliseconds(selectedPair.currentRoundTripTime),
+        availableOutgoingBitrateBps: this.finiteNumberOrNull(
+          selectedPair.availableOutgoingBitrate
+        ),
+        bufferedAmountBytes: this.getBufferedAmount(),
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
+  private getConservativeTransferDiagnostics(): TransferDiagnostics {
+    return {
+      candidatePathKind: 'unknown',
+      protocol: null,
+      relayProtocol: null,
+      rttMs: null,
+      availableOutgoingBitrateBps: null,
+      bufferedAmountBytes: this.getBufferedAmount(),
+    };
+  }
+
+  private normalizeCandidatePath(
+    localType?: string,
+    remoteType?: string
+  ): CandidatePathKind {
+    if (typeof localType !== 'string' || typeof remoteType !== 'string') {
+      return 'unknown';
+    }
+
+    const types = [localType, remoteType];
+
+    if (types.includes('relay')) return 'relay';
+    if (types.includes('srflx')) return 'srflx';
+    if (types.every(type => type === 'host')) return 'host';
+    return 'unknown';
+  }
+
+  private secondsToMilliseconds(value: unknown): number | null {
+    const seconds = this.finiteNumberOrNull(value);
+    return seconds === null ? null : seconds * 1000;
+  }
+
+  private finiteNumberOrNull(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
   }
 
   /**

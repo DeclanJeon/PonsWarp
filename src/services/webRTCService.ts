@@ -81,7 +81,10 @@ class ReceiverService {
   private isReconnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyRetryTimers: ReturnType<typeof setTimeout>[] = [];
+  private readySignalGeneration = 0;
   private lastPartitionOffsetNeedingAck: number | null = null;
+  private lastPartitionRunIdNeedingAck: number | null = null;
 
   // 상태 관리
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -115,7 +118,6 @@ class ReceiverService {
     if (!this.roomId || !this.isTransferActive) return;
 
     if (this.peer && this.peer.connected) {
-      this.sendResumeHints('page became active');
       return;
     }
 
@@ -158,21 +160,34 @@ class ReceiverService {
     });
   }
 
-  private sendResumeHints(reason: string): void {
+  private sendResumeHints(
+    reason: string,
+    options: {
+      includePartitionAck: boolean;
+      requestResume: boolean;
+    }
+  ): void {
     if (!this.peer || !this.peer.connected) return;
 
     this.peer.send(JSON.stringify({ type: 'CONTROL', action: 'RESUME' }));
 
-    if (this.lastPartitionOffsetNeedingAck !== null) {
+    if (
+      options.includePartitionAck &&
+      this.lastPartitionOffsetNeedingAck !== null &&
+      this.lastPartitionRunIdNeedingAck !== null
+    ) {
       this.peer.send(
         JSON.stringify({
           type: 'PARTITION_ACK',
           offset: this.lastPartitionOffsetNeedingAck,
+          runId: this.lastPartitionRunIdNeedingAck,
         })
       );
     }
 
-    this.writer?.requestResumeFromCurrentOffset?.(reason);
+    if (options.requestResume) {
+      this.writer?.requestResumeFromCurrentOffset?.(reason);
+    }
   }
 
   /**
@@ -359,12 +374,10 @@ class ReceiverService {
       // Sender에게 준비 완료 신호 전송. 일부 브라우저는 data channel open 직후
       // 첫 control frame을 조용히 누락시키는 경우가 있어 짧게 재전송한다.
       if (this.peer && this.peer.connected) {
-        const readyMessage = JSON.stringify({ type: 'TRANSFER_READY' });
-        [0, 100, 300, 1000].forEach(delay => {
-          setTimeout(() => {
-            this.peer?.send(readyMessage);
-          }, delay);
-        });
+        this.scheduleTransferReadyRetries(
+          JSON.stringify({ type: 'TRANSFER_READY' }),
+          this.peer
+        );
       } else {
         throw new Error('Peer disconnected during storage init');
       }
@@ -396,6 +409,8 @@ class ReceiverService {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearReadyRetryTimers();
+
 
     if (this.peer) {
       this.peer.destroy();
@@ -422,6 +437,36 @@ class ReceiverService {
 
   // ======================= INTERNAL LOGIC =======================
 
+  private clearReadyRetryTimers(): void {
+    for (const timer of this.readyRetryTimers) {
+      clearTimeout(timer);
+    }
+    this.readyRetryTimers = [];
+    this.readySignalGeneration++;
+  }
+
+  private scheduleTransferReadyRetries(
+    readyMessage: string,
+    readyPeer: SinglePeerConnection
+  ): void {
+    this.clearReadyRetryTimers();
+    const generation = this.readySignalGeneration;
+
+    for (const delay of [0, 100, 300, 1000]) {
+      const timer = setTimeout(() => {
+        if (
+          generation !== this.readySignalGeneration ||
+          this.peer !== readyPeer ||
+          !readyPeer.connected
+        ) {
+          return;
+        }
+
+        readyPeer.send(readyMessage);
+      }, delay);
+      this.readyRetryTimers.push(timer);
+    }
+  }
   private isConnected(): boolean {
     return this.peer ? this.peer.connected : false;
   }
@@ -435,7 +480,8 @@ class ReceiverService {
         this.iceServers = response.data.iceServers;
       }
     } catch (error) {
-      // 실패 시 기본 STUN 사용
+      logError('[Receiver]', 'Failed to fetch TURN config:', error);
+      throw error;
     }
   }
 
@@ -523,7 +569,10 @@ class ReceiverService {
         }
         this.emit('status', 'RECEIVING');
         this.emit('reconnected', true);
-        this.sendResumeHints('connection restored after data channel close');
+        this.sendResumeHints('connection restored after data channel close', {
+          includePartitionAck: true,
+          requestResume: true,
+        });
       }
     });
 
@@ -656,10 +705,15 @@ class ReceiverService {
     this.peer = null;
   }
 
-  private handleData(data: ArrayBuffer) {
+  private handleData(data: ArrayBuffer | string) {
     // 1. 제어 메시지 (JSON 문자열)
     if (this.isControlMessage(data)) {
-      this.handleControlMessage(data);
+      void this.handleControlMessage(data);
+      return;
+    }
+
+    if (!(data instanceof ArrayBuffer)) {
+      logWarn('[Receiver]', 'Ignoring non-binary non-control data frame');
       return;
     }
 
@@ -682,9 +736,11 @@ class ReceiverService {
     }
   }
 
-  private isControlMessage(data: ArrayBuffer): boolean {
-    // 텍스트일 확률이 높은지 간단 체크 (첫 바이트가 '{' 인지 확인)
-    // 완벽하진 않으나 프로토콜상 바이너리 헤더는 0x00으로 시작하지 않음 (FileIndex)
+  private isControlMessage(data: ArrayBuffer | string): boolean {
+    if (typeof data === 'string') {
+      return data.trimStart().startsWith('{');
+    }
+
     if (data.byteLength > 0) {
       const view = new Uint8Array(data);
       return view[0] === 123; // '{' ASCII
@@ -692,9 +748,10 @@ class ReceiverService {
     return false;
   }
 
-  private async handleControlMessage(data: ArrayBuffer) {
+  private async handleControlMessage(data: ArrayBuffer | string) {
     try {
-      const str = new TextDecoder().decode(data);
+      const str =
+        typeof data === 'string' ? data : new TextDecoder().decode(data);
       const msg = JSON.parse(str);
 
       switch (msg.type) {
@@ -730,19 +787,37 @@ class ReceiverService {
         case 'KEEP_ALIVE':
           // 무시
           break;
-        case 'PARTITION':
-          this.lastPartitionOffsetNeedingAck = Number(msg.offset);
+        case 'PARTITION': {
+          if (
+            typeof msg.offset !== 'number' ||
+            !Number.isFinite(msg.offset) ||
+            typeof msg.runId !== 'number' ||
+            !Number.isInteger(msg.runId)
+          ) {
+            break;
+          }
+
+          this.lastPartitionOffsetNeedingAck = msg.offset;
+          this.lastPartitionRunIdNeedingAck = msg.runId;
           await this.writer?.waitForIdle?.();
           if (this.peer && this.peer.connected) {
             this.peer.send(
-              JSON.stringify({ type: 'PARTITION_ACK', offset: msg.offset })
+              JSON.stringify({
+                type: 'PARTITION_ACK',
+                offset: msg.offset,
+                runId: msg.runId,
+              })
             );
             this.lastPartitionOffsetNeedingAck = null;
+            this.lastPartitionRunIdNeedingAck = null;
           }
+        }
           break;
       }
-    } catch (e) {
-      // JSON 파싱 실패는 무시 (바이너리 데이터일 수 있음)
+    } catch (error) {
+      const message = getErrorMessage(error, 'Failed to handle control message');
+      logError('[Receiver]', 'Control message handling failed:', error);
+      this.emit('error', message);
     }
   }
 
