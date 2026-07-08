@@ -25,6 +25,8 @@ type HmacSha256 = Hmac<sha2::Sha256>;
 const MULTIPART_UPLOAD_THRESHOLD_BYTES: u64 = 512 * 1024 * 1024;
 const MULTIPART_UPLOAD_PART_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MULTIPART_PARTS: u64 = 10_000;
+const CLOUD_SHARE_CODE_LEN: usize = 12;
+const CLOUD_SHARE_CODE_ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -466,6 +468,16 @@ mod tests {
         assert_eq!(part_size, MULTIPART_UPLOAD_PART_BYTES);
         assert_eq!(part_count, 160);
     }
+
+    #[test]
+    fn cloud_share_codes_are_short_and_receive_friendly() {
+        let code = random_cloud_share_code();
+
+        assert_eq!(code.len(), CLOUD_SHARE_CODE_LEN);
+        assert!(code
+            .chars()
+            .all(|ch| CLOUD_SHARE_CODE_ALPHABET.contains(&(ch as u8))));
+    }
 }
 
 struct ResolvedCloudPolicy {
@@ -652,7 +664,7 @@ async fn create_cloud_share_inner(
     let now = unix_now();
     let expires_at = now + policy.retention_seconds;
     let drop_pass_to_consume = policy.drop_pass_id;
-    let share_id = Uuid::new_v4().simple().to_string();
+    let share_id = random_cloud_share_code();
     let root_name = clamp_name(&request.root_name, "Cloud Drop");
 
     let mut manifest_files = Vec::with_capacity(request.files.len());
@@ -1514,6 +1526,16 @@ fn random_token(bytes: usize) -> String {
     let mut data = vec![0_u8; bytes];
     rand::thread_rng().fill_bytes(&mut data);
     URL_SAFE_NO_PAD.encode(data)
+}
+
+fn random_cloud_share_code() -> String {
+    let mut data = [0_u8; CLOUD_SHARE_CODE_LEN];
+    rand::thread_rng().fill_bytes(&mut data);
+    data.iter()
+        .map(|byte| {
+            CLOUD_SHARE_CODE_ALPHABET[*byte as usize % CLOUD_SHARE_CODE_ALPHABET.len()] as char
+        })
+        .collect()
 }
 
 fn hex(bytes: &[u8]) -> String {
