@@ -7,6 +7,8 @@
   ·
   <a href="#screenshots"><strong>Screenshots</strong></a>
   ·
+  <a href="#quickstart"><strong>Quickstart</strong></a>
+  ·
   <a href="#local-development"><strong>Local Development</strong></a>
   ·
   <a href="#self-hosting-and-production-deploy"><strong>Self-hosting</strong></a>
@@ -107,6 +109,33 @@ flowchart LR
 - **Signaling/API backend**: Rust, Tokio, Axum, WebSocket endpoint at `/ws`
 - **Storage**: StreamSaver, File System Access API, Cloudflare R2 for Cloud Drop
 - **Core**: Rust/WASM package via `pons-core-wasm`
+
+## Quickstart
+
+The fastest self-hosted trial uses Docker Compose. It starts the Rust signaling server and the Vite frontend from this repository, with Direct P2P enabled and Cloud Drop/billing disabled.
+
+```bash
+git clone https://github.com/DeclanJeon/PonsWarp.git
+cd PonsWarp
+docker compose up
+```
+
+Open `http://localhost:3500`, then test with two browsers or two browser profiles:
+
+1. choose **SEND** in the first browser and select a small file;
+2. enter the generated code in **RECEIVE** in the second browser;
+3. confirm the transfer connects and the received file matches.
+
+Compose publishes:
+
+| Service | URL |
+| --- | --- |
+| Frontend | `http://localhost:3500` |
+| Rust signaling/API | `http://localhost:5502` |
+| Health | `http://localhost:5502/health` |
+| Readiness | `http://localhost:5502/ready` |
+
+This quickstart is intentionally direct-P2P-first. Production Cloud Drop needs object storage, retention policy, and optional billing/auth secrets; see [Environment Variables](#environment-variables) and [Self-hosting and Production Deploy](#self-hosting-and-production-deploy).
 
 ## Local Development
 

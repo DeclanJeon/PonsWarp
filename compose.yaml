@@ -1,0 +1,54 @@
+services:
+  signaling:
+    image: rust:1.85-bookworm
+    working_dir: /app
+    volumes:
+      - ./signaling-rs:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - signaling-target:/app/target
+    environment:
+      PONSWARP_ENV: local
+      HOST: 0.0.0.0
+      PORT: 5502
+      LOG_LEVEL: debug
+      CORS_ORIGINS: http://localhost:3500,http://127.0.0.1:3500
+      MAX_ROOM_SIZE: 4
+      ROOM_TIMEOUT: 3600000
+      TURN_SERVER_URL: turn:localhost:3478
+      TURN_SECRET: local-compose-turn-secret-change-before-production
+      TURN_REALM: localhost
+      TURN_ENABLE_TLS: "false"
+      TURN_ENABLE_UDP: "true"
+      TURN_ENABLE_TCP: "true"
+      TURN_FALLBACK_SERVERS: stun:stun.l.google.com:19302
+      PONSWARP_CLOUD_ENABLED: "false"
+      PONSWARP_BILLING_ENABLED: "false"
+      DATABASE_RUN_MIGRATIONS: "false"
+    ports:
+      - "5502:5502"
+    command: cargo run --locked
+
+  frontend:
+    image: node:20-bookworm-slim
+    working_dir: /app
+    depends_on:
+      - signaling
+    volumes:
+      - .:/app
+      - frontend-node-modules:/app/node_modules
+    environment:
+      VITE_USE_RUST_SIGNALING: "true"
+      VITE_RUST_SIGNALING_URL: ws://localhost:5502/ws
+      VITE_CLOUD_API_BASE_URL: http://localhost:5502
+    ports:
+      - "3500:3500"
+    command: >
+      sh -lc "corepack enable && corepack prepare pnpm@8 --activate &&
+      pnpm install --frozen-lockfile && pnpm dev --host 0.0.0.0"
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  signaling-target:
+  frontend-node-modules:
