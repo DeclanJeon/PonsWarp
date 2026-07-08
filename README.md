@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/ponswarp-home.png" alt="PonsWarp home screen" width="900">
+  <img src="docs/screenshots/ponswarp-demo.gif" alt="PonsWarp demo showing Direct P2P and Cloud Drop transfer flows" width="900">
 </p>
 
 ## Why PonsWarp
