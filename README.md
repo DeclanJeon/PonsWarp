@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://warp.ponslink.com"><strong>Live App</strong></a>
   ·
-  <a href="#screenshots"><strong>Screenshots</strong></a>
+  <a href="#demo"><strong>Demo</strong></a>
   ·
   <a href="#quickstart"><strong>Quickstart</strong></a>
   ·
@@ -24,8 +24,20 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/ponswarp-demo.gif" alt="PonsWarp demo showing Direct P2P and Cloud Drop transfer flows" width="900">
+  <img src="docs/screenshots/ponswarp-demo.gif" alt="PonsWarp demo showing Direct P2P room-code transfer and Cloud Drop pickup" width="900">
 </p>
+
+<p align="center">
+  <strong>Direct P2P room code + Cloud Drop QR/link/code pickup, captured from the live app.</strong>
+</p>
+
+## Demo
+
+The README demo is recorded from `https://warp.ponslink.com` and covers both transfer paths:
+
+1. choose a transfer mode;
+2. create a Direct P2P room and receive the file with a room code;
+3. create a Cloud Drop and receive it later from a QR/link/Drop Code.
 
 ## Why PonsWarp
 
@@ -47,13 +59,13 @@ PonsWarp keeps the large-file path direct. In **SEND / RECEIVE**, file bytes str
 
 ## Screenshots
 
-| Transfer Modes | Direct Send |
+| Home | Transfer Modes |
 | --- | --- |
-| <img src="docs/screenshots/ponswarp-modes.png" alt="PonsWarp transfer mode selection" width="420"> | <img src="docs/screenshots/ponswarp-send.png" alt="PonsWarp direct send screen" width="420"> |
+| <img src="docs/screenshots/ponswarp-home.png" alt="PonsWarp home screen" width="420"> | <img src="docs/screenshots/ponswarp-modes.png" alt="PonsWarp transfer mode selection" width="420"> |
 
-| Cloud Drop | Home |
+| Direct P2P Send | Cloud Drop Ready |
 | --- | --- |
-| <img src="docs/screenshots/ponswarp-cloud-drop.png" alt="PonsWarp Cloud Drop screen" width="420"> | <img src="docs/screenshots/ponswarp-home.png" alt="PonsWarp home screen" width="420"> |
+| <img src="docs/screenshots/ponswarp-send.png" alt="PonsWarp direct send screen with room code" width="420"> | <img src="docs/screenshots/ponswarp-cloud-drop.png" alt="PonsWarp Cloud Drop screen with QR code, short Drop Code, and download link" width="420"> |
 
 ## Features
 
