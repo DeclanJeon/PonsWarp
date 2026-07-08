@@ -45,10 +45,10 @@ export const MagneticButton: React.FC<MagneticButtonProps> = ({
       onMouseLeave={handleMouseLeave}
       animate={{ x: position.x, y: position.y }}
       transition={{ type: 'spring', stiffness: 150, damping: 15, mass: 0.1 }}
-      className={`relative overflow-hidden group ${className}`}
+      className={`relative overflow-hidden group outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 active:scale-[0.98] ${className}`}
     >
       {/* 배경 그라데이션 효과 */}
-      <div className="absolute inset-0 bg-gradient-to-r from-cyan-500 to-purple-600 opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
+      <div className="absolute inset-0 bg-cyan-300/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
 
       {/* 텍스트 컨텐츠 */}
       <span className="relative z-10 flex items-center justify-center gap-2">

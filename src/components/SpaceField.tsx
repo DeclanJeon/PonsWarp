@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useTransferStore } from '../store/transferStore';
 import { AppMode } from '../types/types';
 
-const STAR_COUNT = 520;
+const STAR_COUNT = 360;
 const IDLE_SPEED = 0.08;
 const WARP_SPEED = 2.8;
 const ACCELERATION = 0.035;
@@ -86,7 +86,7 @@ export default function SpaceField() {
 
       currentSpeed += (targetSpeed - currentSpeed) * ACCELERATION * 60 * delta;
 
-      ctx.fillStyle = '#000';
+      ctx.fillStyle = '#071016';
       ctx.fillRect(0, 0, width, height);
 
       const centerX = width / 2;
@@ -113,7 +113,7 @@ export default function SpaceField() {
         const dx = ((sx - centerX) / Math.max(width, 1)) * length;
         const dy = ((sy - centerY) / Math.max(height, 1)) * length;
 
-        ctx.strokeStyle = `rgba(125, 235, 255, ${alpha})`;
+        ctx.strokeStyle = `rgba(132, 214, 224, ${alpha})`;
         ctx.lineWidth = star.size * (1.2 - depth);
         ctx.beginPath();
         ctx.moveTo(sx, sy);
@@ -129,9 +129,9 @@ export default function SpaceField() {
         centerY,
         Math.max(width, height) * 0.72
       );
-      gradient.addColorStop(0, 'rgba(6, 182, 212, 0.08)');
-      gradient.addColorStop(0.45, 'rgba(168, 85, 247, 0.045)');
-      gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      gradient.addColorStop(0, 'rgba(56, 184, 200, 0.075)');
+      gradient.addColorStop(0.55, 'rgba(28, 63, 77, 0.06)');
+      gradient.addColorStop(1, 'rgba(7, 16, 22, 0)');
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
 
@@ -151,7 +151,7 @@ export default function SpaceField() {
   return (
     <canvas
       ref={canvasRef}
-      className="fixed inset-0 w-full h-full bg-black -z-50 pointer-events-none"
+      className="fixed inset-0 w-full h-full bg-[#071016] -z-50 pointer-events-none"
       aria-hidden="true"
     />
   );

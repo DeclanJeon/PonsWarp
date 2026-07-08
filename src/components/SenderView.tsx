@@ -1,9 +1,4 @@
 import { debugLog } from '../utils/logger';
-/* 🪲 [DEBUG] SenderView UI/UX 개선 시작 */
-debugLog('[SenderView] 🪲 [DEBUG] UI/UX Enhancement Started:');
-debugLog('[SenderView] 🪲 [DEBUG] - Applying focal point principles');
-debugLog('[SenderView] 🪲 [DEBUG] - Implementing gestalt proximity grouping');
-debugLog('[SenderView] 🪲 [DEBUG] - Adding responsive layout improvements');
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -34,6 +29,7 @@ import {
   formatRemainingTime,
   getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
+import { toast } from '../store/toastStore';
 
 interface SenderViewProps {
   onComplete?: () => void;
@@ -141,7 +137,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
     swarmManager.on('error', (errorMsg: string) => {
       console.error('[SenderView] SwarmManager error:', errorMsg);
-      alert(`Transfer error: ${errorMsg}\n\nPlease try again.`);
+      toast.error(`Transfer failed: ${errorMsg}`);
       setTransferStatus('IDLE');
     });
 
@@ -371,10 +367,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
         prev === 'IDLE' || prev === 'PREPARING' ? 'WAITING' : prev
       );
     } catch (error) {
-      console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
-
-      alert(
-        `Failed to initialize transfer: ${getErrorMessage(error, 'Unknown error')}\n\nPlease try again with different files.`
+      console.error('[SenderView] Init failed:', error);
+      toast.error(
+        `Failed to initialize transfer: ${getErrorMessage(error, 'Unknown error')}`
       );
       setTransferStatus('IDLE');
     }
@@ -435,7 +430,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
               <h2 className="text-2xl md:text-3xl font-bold mb-3 md:mb-4 brand-font text-white">
                 DROP FILES
               </h2>
-              <p className="text-cyan-100/60 text-sm md:text-lg mb-6 md:mb-8 font-rajdhani tracking-wide">
+              <p className="text-cyan-100/60 text-sm md:text-lg mb-6 md:mb-8 tracking-wide">
                 or select from device
               </p>
 
@@ -617,8 +612,8 @@ const SenderView: React.FC<SenderViewProps> = () => {
           >
             {/* Header */}
             <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2 animate-pulse brand-font text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400">
-                WARPING DATA...
+              <h2 className="text-3xl font-bold mb-2 animate-pulse brand-font text-transparent bg-clip-text bg-gradient-to-r from-white to-cyan-200">
+                Warping data
               </h2>
               <p className="text-6xl font-mono font-black text-white drop-shadow-[0_0_20px_rgba(6,182,212,0.5)]">
                 {progressData.progress.toFixed(1)}
@@ -650,7 +645,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             {/* Progress Bar (Visual) */}
             <div className="relative h-6 bg-gray-900/50 rounded-full overflow-hidden border border-gray-700 shadow-inner">
               <motion.div
-                className="absolute top-0 left-0 h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-600"
+                className="absolute top-0 left-0 h-full bg-gradient-to-r from-cyan-300 via-cyan-200 to-white"
                 initial={{ width: 0 }}
                 animate={{ width: `${progressData.progress}%` }}
                 transition={{ type: 'spring', stiffness: 50, damping: 15 }}

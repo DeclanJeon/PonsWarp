@@ -1,40 +1,41 @@
 @import "tailwindcss";
 
-/* 🪲 [DEBUG] UI/UX 디자인 개선 로깅 시작 - CSS 주석으로 변경 */
-/* Design System Initialization:
-   - Applying fluid typography system
-   - Implementing CSS variables for consistency
-   - Adding responsive design tokens
-*/
-
 /* -------------------------------------------------------------------------- */
-/* 🌌 Design Tokens & Variables                                              */
+/* Design tokens                                                              */
 /* -------------------------------------------------------------------------- */
 :root {
-  --primary-cyan: #06b6d4;
-  --primary-purple: #a855f7;
-  --glass-bg: rgba(0, 0, 0, 0.4);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --primary-glow: 0 0 20px rgba(6, 182, 212, 0.6);
+  --bg-ink: #071016;
+  --bg-panel: rgba(9, 19, 27, 0.72);
+  --bg-panel-strong: rgba(12, 25, 34, 0.86);
+  --border-soft: rgba(150, 190, 205, 0.16);
+  --accent-teal: #38b8c8;
+  --accent-teal-soft: rgba(56, 184, 200, 0.14);
+  --accent-glow: 0 24px 80px rgba(25, 126, 145, 0.22);
 }
 
 body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background-color: #000000;
-  font-family: 'Rajdhani', sans-serif;
-  color: white;
+  background:
+    radial-gradient(circle at 20% 12%, rgba(56, 184, 200, 0.14), transparent 28rem),
+    radial-gradient(circle at 82% 78%, rgba(38, 87, 102, 0.16), transparent 34rem),
+    var(--bg-ink);
+  font-family: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #f4fbff;
   -webkit-font-smoothing: antialiased;
-  line-height: 1.6; /* Optimal Line Height (3.webp) */
+  line-height: 1.6;
+  text-wrap: pretty;
+  font-variant-numeric: tabular-nums;
 }
 
 /* -------------------------------------------------------------------------- */
 /* Typography System (Responsive Fluid Type)                                 */
 /* -------------------------------------------------------------------------- */
 h1, h2, h3, .brand-font {
-  font-family: 'Orbitron', sans-serif;
-  letter-spacing: 0.05em; /* 가독성을 위한 자간 확보 */
+  font-family: 'Outfit', system-ui, sans-serif;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
 }
 
 /* 뷰포트 크기에 따라 폰트 크기가 유동적으로 변함 */
@@ -57,12 +58,12 @@ h1, h2, h3, .brand-font {
 /* Animations & Effects                                                      */
 /* -------------------------------------------------------------------------- */
 .brand-gradient {
-  background: linear-gradient(90deg, #00f5ff, #ff00ff, #00f5ff);
-  background-size: 200%;
+  background: linear-gradient(90deg, #f4fbff, #38b8c8);
+  background-size: 160%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: glow 4s linear infinite;
+  animation: glow 6s ease-in-out infinite;
 }
 
 @keyframes glow {
@@ -72,7 +73,7 @@ h1, h2, h3, .brand-font {
 
 /* 새로운 그라데이션 애니메이션 - 캐치프레이즈용 */
 .animate-gradient-x {
-  background: linear-gradient(90deg, #22d3ee, #a855f7, #22d3ee);
+  background: linear-gradient(90deg, #f4fbff, #38b8c8, #9fdbe3);
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
@@ -119,16 +120,35 @@ h1, h2, h3, .brand-font {
   border-radius: 3px;
 }
 
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at center, black, transparent 78%);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 유틸리티: 텍스트 줄바꿈 방지 및 말줄임 */
 .text-truncate {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-/* 🪲 [DEBUG] 디자인 시스템 적용 완료 로깅 - CSS 주석으로 변경 */
-/* Design System Applied Successfully:
-   - Fluid typography active
-   - CSS variables defined
-   - Responsive utilities ready
-*/
