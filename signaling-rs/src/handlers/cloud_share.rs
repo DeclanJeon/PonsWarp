@@ -25,7 +25,7 @@ type HmacSha256 = Hmac<sha2::Sha256>;
 const MULTIPART_UPLOAD_THRESHOLD_BYTES: u64 = 512 * 1024 * 1024;
 const MULTIPART_UPLOAD_PART_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MULTIPART_PARTS: u64 = 10_000;
-const CLOUD_SHARE_CODE_LEN: usize = 12;
+const CLOUD_SHARE_CODE_LEN: usize = 10;
 const CLOUD_SHARE_CODE_ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
 
 #[derive(Debug, Deserialize)]
