@@ -99,6 +99,7 @@ export class ReceiverService {
 
   // 🚨 [추가] TURN 설정 로딩 상태를 추적하기 위한 Promise
   private turnConfigPromise: Promise<void> | null = null;
+  private pendingIceCandidates: PeerSignalData[] = [];
   private writerCleanup: Promise<void> = Promise.resolve();
   private completionEmitted = false;
 
@@ -429,6 +430,7 @@ export class ReceiverService {
     logInfo('[Receiver]', 'Resetting state...');
     this.roomId = null;
     this.connectedPeerId = null;
+    this.pendingIceCandidates = [];
     this.currentManifest = null;
     this.isTransferActive = false;
     this.isReconnecting = false;
@@ -584,13 +586,21 @@ export class ReceiverService {
 
     // 시그널링 처리
     if (d.offer) this.peer.signal(d.offer);
+    for (const candidate of this.pendingIceCandidates.splice(0)) {
+      this.peer.signal(candidate);
+    }
   };
 
   private handleIceCandidate = (d: ReceiverSignalMessage) => {
     if (this.connectedPeerId && d.from !== this.connectedPeerId) return;
-    if (!this.peer || this.peer.isDestroyed()) return;
+    if (!d.candidate) return;
 
-    if (d.candidate) this.peer.signal(d.candidate);
+    if (!this.peer || this.peer.isDestroyed()) {
+      this.pendingIceCandidates.push(d.candidate);
+      return;
+    }
+
+    this.peer.signal(d.candidate);
   };
 
   private setupPeerEvents(peer: SinglePeerConnection) {
