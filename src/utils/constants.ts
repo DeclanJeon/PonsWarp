@@ -34,7 +34,8 @@ export const SEND_WINDOW_POLL_INTERVAL_MS = 5;
 export const PARTITION_ACK_POLL_INTERVAL_MS = 10;
 
 export const HEADER_SIZE = 22; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4) + Checksum(4)
-export const CONNECTION_TIMEOUT_MS = 15000;
+// DNS, authenticated TURN allocation, and relay candidate gathering can exceed 15 seconds.
+export const CONNECTION_TIMEOUT_MS = 45000;
 
 // 단일-flight 배치: 성능보다 drain/receiver 안정성을 우선한다.
 export const BATCH_SIZE_MIN = 1;
