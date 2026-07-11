@@ -83,7 +83,10 @@ restore_after_failure() {
     else rm -f "$current" || restore_rc=1; fi
     if [[ "$restore_rc" -eq 0 ]]; then nginx -t && nginx -s reload || restore_rc=1; [[ -z "$old_current" ]] || smoke_public || restore_rc=1; fi
   fi
-  [[ "$container_started" -eq 0 ]] || docker rm -f "$name" >/dev/null 2>&1 || true
+  if [[ "$container_started" -eq 1 ]]; then
+    docker logs "$name" >&2 || true
+    docker rm -f "$name" >/dev/null 2>&1 || true
+  fi
   [[ -z "$activation" ]] || rm -rf "$activation"
   [[ -z "$staging" ]] || rm -rf "$staging"
   if [[ "$final_created" -eq 1 ]]; then rm -rf "$release"; fi
@@ -130,6 +133,32 @@ else
   docker image inspect "$image_identity" >/dev/null || { echo "release image is unavailable: $RELEASE_ID" >&2; exit 1; }
   [[ -z "$old_current" || ! -f "$old_current/release.id" || "$(<"$old_current/release.id")" != "$RELEASE_ID" ]] || { echo "refusing same-release rollback: $RELEASE_ID" >&2; exit 2; }
 fi
+if [[ "$MODE" == deploy ]]; then
+  env_source_container=''
+  if [[ -n "$old_current" && -f "$old_current/release.id" ]]; then
+    env_source_container="ponswarp-signaling-$(<"$old_current/release.id")"
+  elif docker container inspect ponswarp-signaling >/dev/null 2>&1; then
+    env_source_container='ponswarp-signaling'
+  fi
+  if [[ -n "$env_source_container" ]] && docker container inspect "$env_source_container" >/dev/null 2>&1; then
+    declare -A existing_env_keys=()
+    merged_env="$release/.env.production.merged"
+    : > "$merged_env"
+    while IFS= read -r line; do
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"
+      existing_env_keys["$key"]=1
+      printf '%s\n' "$line" >> "$merged_env"
+    done < <(docker inspect "$env_source_container" --format '{{range .Config.Env}}{{println .}}{{end}}')
+    while IFS= read -r line; do
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"
+      [[ -n "${existing_env_keys[$key]:-}" ]] || printf '%s\n' "$line" >> "$merged_env"
+    done < "$release/.env.production"
+    install -m 0600 "$merged_env" "$release/.env.production"
+    rm -f "$merged_env"
+  fi
+fi
 
 if [[ -n "$old_current" ]]; then old_port="$(sed -n 's/.*127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' "$old_current/backend.inc")"; [[ "$old_port" == 5502 || "$old_port" == 5503 ]] || { echo 'invalid active backend port' >&2; exit 1; }
 else old_port=5502; fi
@@ -148,7 +177,7 @@ fi
 container_started=1
 docker_args=(-d --name "$name" --restart unless-stopped --network "$NETWORK" --env-file "$release/.env.production" -e PONSWARP_ENV=production)
 if [[ "$NETWORK" == host ]]; then
-  docker_args+=(-e "PORT=$new_port")
+  docker_args+=(--add-host postgres:127.0.0.1 -e "PORT=$new_port")
 else
   docker_args+=(-p "127.0.0.1:${new_port}:5502")
 fi
