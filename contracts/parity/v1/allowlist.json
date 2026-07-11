@@ -1,0 +1,31 @@
+{
+  "contract": "ponswarp-backend-parity/v1",
+  "permittedDifferences": [
+    {
+      "kind": "missing-left",
+      "path": "src/protocol/contract.rs",
+      "rationale": "Root canonical backend adds a test-only v1 protocol fixture module; it does not add runtime protocol variants or handlers."
+    },
+    {
+      "kind": "checksum",
+      "path": "src/protocol/mod.rs",
+      "rationale": "The root protocol module only exports the test-only v1 contract fixture module; runtime wire types remain unchanged."
+    },
+    {
+      "kind": "checksum",
+      "path": "README.md",
+      "rationale": "Documentation differs to describe the canonical contract/parity baseline and has no runtime effect."
+    }
+  ],
+  "ignoredPaths": [
+    "target/**",
+    ".git/**",
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    ".env",
+    ".env.local",
+    ".env.production"
+  ],
+  "notes": "Differences are not permitted by the stage-1 baseline except the explicitly documented test-only contract fixture and documentation checksum differences above. Secret values are never emitted; only environment key names and default presence are compared. Runtime, migration, route, protocol, and environment key/default differences remain fail-closed."
+}

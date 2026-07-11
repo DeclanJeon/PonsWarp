@@ -1,0 +1,57 @@
+[package]
+name = "ponswarp-signaling-rs"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance WebRTC signaling server for PonsWarp"
+authors = ["PonsWarp Team"]
+
+[dependencies]
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web Framework & WebSocket
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Cloud object storage (Cloudflare R2 via S3 API)
+aws-config = "1"
+aws-sdk-s3 = { version = "1", features = ["http-1x"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database (optional Cloud Drop persistence)
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json"] }
+
+# Thread-safe Collections
+dashmap = "6"
+
+# TURN Credentials (HMAC-SHA1)
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+
+# Configuration
+dotenvy = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error Handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# UUID Generation
+uuid = { version = "1", features = ["v4"] }
+
+# Random
+rand = "0.8"
+
+# Async utilities
+futures = "0.3"
+

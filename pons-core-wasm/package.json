@@ -1,0 +1,19 @@
+{
+  "name": "pons-core-wasm",
+  "version": "0.4.3",
+  "description": "PonsWarp core modules - Zero-Copy, ZIP64, FEC support",
+  "main": "pkg/pons_core_wasm.js",
+  "types": "pkg/pons_core_wasm.d.ts",
+  "files": ["pkg"],
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build": "./build.sh",
+    "build:simd": "ENABLE_SIMD=1 ./build.sh",
+    "test": "cargo test"
+  },
+  "keywords": ["wasm", "webassembly", "zero-copy", "fec", "zip64"],
+  "author": "",
+  "license": "MIT"
+}

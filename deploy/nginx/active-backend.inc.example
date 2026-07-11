@@ -1,0 +1,3 @@
+# Generated inside each immutable release by deploy-production.sh.
+# The nginx configuration includes the file through the atomic current symlink.
+set $ponswarp_backend http://127.0.0.1:5502;

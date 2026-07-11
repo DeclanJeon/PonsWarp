@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "v1",
+  "defaultTier": "local",
+  "stream": {
+    "algorithm": "SHA-256",
+    "framing": "UTF8(seed) || 0x00 || UTF8(fixtureId) || 0x00 || u64be(counter)",
+    "counter": "unsigned-64-bit-big-endian",
+    "digestConcatenation": "D0 || D1 || ...",
+    "truncation": "final-digest-only",
+    "encoding": "UTF-8-no-BOM-no-newline-no-normalization-no-terminator"
+  },
+  "tiers": {
+    "local": {
+      "releaseEvidence": false,
+      "regularBytes": { "default": 268435456, "min": 268435456, "max": 1073741824 },
+      "throughputRssBudgetPercent": 10,
+      "measurement": { "warmups": 3, "samples": 10, "artifactDirectory": "../results", "modes": ["baseline-record", "candidate"], "comparison": "fail-closed-on-fingerprint-mismatch-or-regression" },
+      "budgetRequiresIdentical": ["machine", "image", "browser", "netem"],
+      "zip64Boundary": { "mode": "logical-only", "length": 4294967297, "physicalFixture": false, "tests": ["rust-zip64-boundary"] }
+    },
+    "release": {
+      "releaseEvidence": true,
+      "regularBytes": 1073741824,
+      "zip64BoundaryBytes": 4294967297,
+      "zip64BoundaryAllocation": "fully-materialized-no-holes",
+      "requiresPinnedRunner": true,
+      "releaseMode": "optional-dedicated-runner-or-nightly",
+      "physicalZip64Boundary": "optional-release/nightly"
+    }
+  },
+  "fixtures": {
+    "regular": { "id": "ponswarp-benchmark-v1:regular-256MiB", "seed": "ponswarp-benchmark-v1:regular-1GiB", "file": "regular-256MiB.bin", "length": 268435456, "expectedSha256": null },
+    "zip64Boundary": {
+      "id": "ponswarp-benchmark-v1:zip64-boundary-4GiB-plus-1",
+      "seed": "ponswarp-benchmark-v1:zip64-boundary-4GiB-plus-1",
+      "file": "zip64-boundary-4GiB-plus-1.bin",
+      "length": 4294967297,
+      "allocation": "logical-only",
+      "expectedSha256": null,
+      "zip64Output": { "expectedSha256": null, "centralDirectory": { "required": true, "versionNeeded": 45, "usesZip64ExtraFields": true, "assertions": ["offsets-and-sizes-use-u64", "eocd64-and-locator-present"] } }
+    }
+  }
+}

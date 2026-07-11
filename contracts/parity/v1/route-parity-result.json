@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "contract": "ponswarp-backend-parity/v1",
+  "mode": "routes-only",
+  "recordedAt": "2026-07-10T23:00:00Z",
+  "command": "node scripts/backend-parity.mjs --routes-only",
+  "passed": true,
+  "sources": {
+    "evidence": "PonsWarp/signaling-rs",
+    "canonical": "ponswarp-signaling-rs"
+  },
+  "routeContractDigest": "e547a75d3591ffdbab03d93d1117fd492834f5fafca4111ac9cd201c5efc04cc",
+  "routeSetsEqual": true,
+  "protocolVariantSetsEqual": true,
+  "expectedContractMatched": true,
+  "unexplainedDifferences": [],
+  "rawOutputRef": "artifact://197"
+}

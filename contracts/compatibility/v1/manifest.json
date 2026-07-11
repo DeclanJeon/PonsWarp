@@ -1,0 +1,100 @@
+{
+  "contract": "ponswarp-compatibility",
+  "version": "v1",
+  "status": "immutable-baseline",
+  "constructors": [
+    { "module": "PonsWarp/src/services/swarmManager.ts", "export": "SwarmManager", "kind": "class", "role": "sender" },
+    { "module": "PonsWarp/src/services/webRTCService.ts", "export": "ReceiverService", "kind": "class", "role": "receiver", "visibility": "module-private" },
+    { "module": "PonsWarp/src/services/signaling-factory.ts", "export": "SignalingFactory", "kind": "class", "visibility": "module-private" }
+  ],
+  "methods": [
+    { "owner": "SwarmManager", "name": "on", "signature": "(event: string, handler: (data: unknown) => void) => void" },
+    { "owner": "SwarmManager", "name": "off", "signature": "(event: string, handler: (data: unknown) => void) => void" },
+    { "owner": "SwarmManager", "name": "removeAllListeners", "signature": "() => void" },
+    { "owner": "SwarmManager", "name": "enableEncryption", "signature": "() => void" },
+    { "owner": "SwarmManager", "name": "getCryptoService", "signature": "() => CryptoService | null" },
+    { "owner": "SwarmManager", "name": "setSessionKey", "signature": "(sessionKey: Uint8Array, randomPrefix: Uint8Array) => void" },
+    { "owner": "SwarmManager", "name": "isEncryptionEnabled", "signature": "() => boolean" },
+    { "owner": "SwarmManager", "name": "addPeer", "signature": "(peerId: string, initiator: boolean) => SinglePeerConnection | null" },
+    { "owner": "SwarmManager", "name": "removePeer", "signature": "(peerId: string, reason?: string) => void" },
+    { "owner": "SwarmManager", "name": "getPeer", "signature": "(peerId: string) => SinglePeerConnection | undefined" },
+    { "owner": "SwarmManager", "name": "getPeerCount", "signature": "() => number" },
+    { "owner": "SwarmManager", "name": "getConnectedPeers", "signature": "() => SinglePeerConnection[]" },
+    { "owner": "SwarmManager", "name": "getReadyPeerCount", "signature": "() => number" },
+    { "owner": "SwarmManager", "name": "broadcastChunk", "signature": "(chunk: ArrayBuffer) => BroadcastResult" },
+    { "owner": "SwarmManager", "name": "broadcastMessage", "signature": "(message: object) => void" },
+    { "owner": "SwarmManager", "name": "getHighestBufferedAmount", "signature": "() => number" },
+    { "owner": "SwarmManager", "name": "canRequestMoreChunks", "signature": "() => boolean" },
+    { "owner": "SwarmManager", "name": "isSessionComplete", "signature": "() => boolean" },
+    { "owner": "SwarmManager", "name": "initSender", "signature": "(manifest: TransferManifest, files: File[], roomId: string) => Promise<void>" },
+    { "owner": "SwarmManager", "name": "getState", "signature": "() => SwarmState" },
+    { "owner": "SwarmManager", "name": "getPeerStates", "signature": "() => PeerState[]" },
+    { "owner": "SwarmManager", "name": "cleanup", "signature": "() => void" },
+    { "owner": "SwarmManager", "name": "getQueueState", "signature": "() => { queueSize: number; currentTransferPeers: string[] }" },
+    { "owner": "ReceiverService", "name": "enableEncryption", "signature": "() => void" },
+    { "owner": "ReceiverService", "name": "getCryptoService", "signature": "() => CryptoService | null" },
+    { "owner": "ReceiverService", "name": "setSessionKey", "signature": "(sessionKey: Uint8Array, randomPrefix: Uint8Array) => void" },
+    { "owner": "ReceiverService", "name": "isEncryptionEnabled", "signature": "() => boolean" },
+    { "owner": "ReceiverService", "name": "initReceiver", "signature": "(roomId: string) => Promise<void>" },
+    { "owner": "ReceiverService", "name": "setWriter", "signature": "(writer: IFileWriter) => void" },
+    { "owner": "ReceiverService", "name": "startReceiving", "signature": "(manifest: TransferManifest) => Promise<void>" },
+    { "owner": "ReceiverService", "name": "cleanup", "signature": "() => void" },
+    { "owner": "ReceiverService", "name": "on", "signature": "(event: string, handler: (data: unknown) => void) => void" },
+    { "owner": "ReceiverService", "name": "off", "signature": "(event: string, handler: (data: unknown) => void) => void" },
+    { "owner": "SignalingFactory", "name": "getService", "signature": "() => ISignalingService" },
+    { "owner": "SignalingFactory", "name": "connect", "signature": "() => Promise<void>" },
+    { "owner": "SignalingFactory", "name": "isUsingRust", "signature": "() => boolean" },
+    { "owner": "SignalingFactory", "name": "getServerUrl", "signature": "() => string" },
+    { "owner": "ISignalingService", "name": "connect", "signature": "() => Promise<void>" },
+    { "owner": "ISignalingService", "name": "joinRoom", "signature": "(roomId: string) => Promise<void>" },
+    { "owner": "ISignalingService", "name": "leaveRoom", "signature": "(roomId: string) => void" },
+    { "owner": "ISignalingService", "name": "sendOffer", "signature": "(roomId: string, offer: RTCSessionDescriptionInit, target?: string) => void" },
+    { "owner": "ISignalingService", "name": "sendAnswer", "signature": "(roomId: string, answer: RTCSessionDescriptionInit, target?: string) => void" },
+    { "owner": "ISignalingService", "name": "sendCandidate", "signature": "(roomId: string, candidate: RTCIceCandidate, target?: string) => void" },
+    { "owner": "ISignalingService", "name": "requestTurnConfig", "signature": "(roomId: string) => Promise<TurnConfigResponse>" },
+    { "owner": "ISignalingService", "name": "on", "signature": "(event: string, handler: (data: unknown) => void) => void" },
+    { "owner": "ISignalingService", "name": "off", "signature": "(event: string, handler: (data: unknown) => void) => void" },
+    { "owner": "ISignalingService", "name": "getSocketId", "signature": "() => string | null | undefined" },
+    { "owner": "ISignalingService", "name": "isConnected", "signature": "() => boolean" },
+    { "owner": "ISignalingService", "name": "disconnect", "signature": "() => void" }
+  ],
+  "singletonExports": [
+    { "module": "PonsWarp/src/services/webRTCService.ts", "name": "transferService", "type": "ReceiverService", "role": "receiver" },
+    { "module": "PonsWarp/src/services/signaling-factory.ts", "name": "signalingFactory", "type": "SignalingFactory" },
+    { "module": "PonsWarp/src/services/signaling-factory.ts", "name": "getSignalingService", "type": "() => ISignalingService" }
+  ],
+  "namedExports": [
+    { "module": "PonsWarp/src/services/swarmManager.ts", "name": "MAX_DIRECT_PEERS", "type": "number", "value": 3 },
+    { "module": "PonsWarp/src/services/signaling-factory.ts", "name": "ISignalingService", "type": "interface" }
+  ],
+  "events": {
+    "SwarmManager": ["status", "error", "room-full", "peer-rejected", "peer-disconnected", "peer-connected", "peer-timeout", "data", "peer-queued", "peer-ready", "ready-countdown-start", "peer-complete", "message", "all-peers-ready", "ready-status", "transfer-batch-start", "transfer-failed", "preparing-next-transfer", "ready-for-next", "batch-complete", "queue-cleared", "progress", "all-transfers-complete", "complete", "remote-processing"],
+    "transferService": ["status", "error", "room-full", "storage-ready", "connected", "reconnected", "reconnecting", "metadata", "remote-started", "transfer-missed", "queued", "transfer-starting", "ready-for-download", "progress", "complete"],
+    "signaling": ["connected", "connection-failed", "joined-room", "room-users", "peer-joined", "user-left", "offer", "answer", "ice-candidate", "room-full", "disconnect"]
+  },
+  "eventPayloadSemantics": {
+    "listenerOrdering": "Listeners run synchronously in registration order; each matching handler is invoked once per emit.",
+    "off": "Removes every registration whose handler reference equals the supplied handler; unknown events and handlers are no-ops.",
+    "progress": { "sender": "SwarmProgress: overall aggregate progress; totalBytesSent is aggregate bytes sent across peers.", "receiver": "ReceiverProgressPayload: progress, speed, bytesTransferred, and totalBytes; numeric writer progress is normalized with other fields zero." },
+    "ready-countdown-start": "{ readyCount, totalCount, waitTime } where waitTime is milliseconds.",
+    "reconnecting": "{ attempt, maxAttempts } with maxAttempts fixed at 5 for receiver reconnects.",
+    "complete": "Receiver payload is { actualSize }; sender completion has no payload.",
+    "errors": "Error payloads are strings for service errors, except signaling connection-failed may carry Error."
+  },
+  "timeoutsAndRetries": {
+    "swarmPeerConnectionTimeoutMs": 30000,
+    "swarmReadyWait1NMs": 10000,
+    "receiverReconnectMaxAttempts": 5,
+    "receiverReconnectBaseDelayMs": 1000,
+    "receiverTurnFailure": "TURN failure is caught and default STUN/P2P connection continues.",
+    "receiverTransferReadyRetries": "TRANSFER_READY is retried by the receiver after storage initialization; exact timer schedule is implementation detail."
+  },
+  "roles": { "sender": "SwarmManager sends to multiple peers and reports aggregate progress.", "receiver": "transferService writes one incoming transfer and reports downloaded progress." },
+  "callsites": [
+    { "module": "PonsWarp/src/components/SenderView.tsx", "uses": "new SwarmManager(), initSender, public event listeners, isSessionComplete, cleanup, removeAllListeners" },
+    { "module": "PonsWarp/src/components/ReceiverView.tsx", "uses": "transferService.initReceiver, setWriter, startReceiving, on/off for receiver events, cleanup" },
+    { "module": "PonsWarp/src/services/swarmManager.ts", "uses": "getSignalingService() at module load" },
+    { "module": "PonsWarp/src/services/webRTCService.ts", "uses": "getSignalingService() at module load" },
+    { "module": "PonsWarp/src/services/signaling-factory.ts", "uses": "signalingFactory singleton and getSignalingService compatibility export" }
+  ]
+}
