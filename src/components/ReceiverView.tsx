@@ -33,7 +33,6 @@ import {
   getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
 
-
 interface ReceiverViewProps {
   onOpenCloudShare?: (shareId: string) => void;
 }
@@ -599,7 +598,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                   onChange={e => setReceiveInput(e.target.value)}
                   placeholder="CODE OR LINK"
                   maxLength={160}
-                  className="w-full bg-black/30 border border-gray-600 rounded-2xl p-6 text-center text-3xl font-mono tracking-[0.5em] focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 outline-none text-white placeholder-gray-700 transition-all uppercase"
+                  className="w-full rounded-2xl border border-gray-600 bg-black/30 p-5 text-center font-mono text-xl uppercase tracking-[0.25em] text-white outline-none transition-all placeholder-gray-600 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 sm:p-6 sm:text-3xl sm:tracking-[0.5em]"
                 />
                 <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-cyan-500/50 rounded-tl-lg -translate-x-2 -translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
                 <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-purple-500/50 rounded-br-lg translate-x-2 translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />

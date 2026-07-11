@@ -1,9 +1,4 @@
 import { debugLog } from './utils/logger';
-/* 🪲 [DEBUG] App.tsx UI/UX 개선 시작 */
-debugLog('[App.tsx] 🪲 [DEBUG] UI/UX Enhancement Started:');
-debugLog('[App.tsx] 🪲 [DEBUG] - Applying responsive grid layout');
-debugLog('[App.tsx] 🪲 [DEBUG] - Implementing fluid typography');
-debugLog('[App.tsx] 🪲 [DEBUG] - Adding visual hierarchy improvements');
 
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
@@ -126,7 +121,7 @@ const App: React.FC = () => {
 
         {/* 3. Header (Responsive) */}
         <header
-          className="absolute top-0 left-0 w-full p-4 md:p-8 z-50 flex items-center justify-between cursor-pointer"
+          className="absolute top-0 left-0 w-full px-5 py-5 md:px-10 md:py-8 z-50 flex items-center justify-between cursor-pointer"
           onClick={() => {
             setCloudShareId(null);
             setMode(AppMode.INTRO);
@@ -146,15 +141,15 @@ const App: React.FC = () => {
             className="flex min-w-0 items-center gap-2 md:gap-3"
             onClick={event => event.stopPropagation()}
           >
-            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-mono text-gray-400 sm:flex">
-              <ShieldCheck size={14} className="text-green-400" />
+            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-mono text-gray-300 backdrop-blur-md sm:flex">
+              <ShieldCheck size={15} className="text-emerald-400" />
               <span>End-to-End Encrypted</span>
             </div>
           </div>
         </header>
 
         {/* 4. Main Content Area */}
-        <main className="relative z-10 w-full h-full flex flex-col items-center justify-center p-4">
+        <main className="relative z-10 flex h-full w-full flex-col items-center overflow-y-auto p-4">
           <AnimatePresence mode="wait">
             {/* --- INTRO SCREEN --- */}
             {mode === AppMode.INTRO && (
@@ -163,33 +158,36 @@ const App: React.FC = () => {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
-                className="flex flex-col items-center justify-center max-w-4xl w-full text-center space-y-8 md:space-y-12"
+                className="my-auto flex w-full max-w-5xl flex-col items-center justify-center space-y-10 py-20 text-center md:space-y-12"
               >
-                <div className="space-y-4 md:space-y-6">
+                <div className="space-y-5 md:space-y-7">
                   {/* 캐치프레이즈 리뉴얼 */}
-                  <div className="flex justify-center items-center gap-2 mb-2">
-                    <span className="px-3 py-1 bg-cyan-500/10 border border-cyan-500/30 rounded-full text-xs font-bold text-cyan-300 tracking-wider uppercase flex items-center gap-1">
-                      <Zap size={12} fill="currentColor" /> Next-Gen P2P
+                  <div className="flex items-center justify-center">
+                    <span className="flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-cyan-200 backdrop-blur-md">
+                      <Zap size={13} fill="currentColor" /> Next-Gen P2P
                     </span>
                   </div>
-                  <h2 className="text-4xl md:text-7xl font-black brand-font tracking-tighter drop-shadow-[0_0_40px_rgba(6,182,212,0.4)] leading-tight">
+                  <h2 className="brand-font text-[clamp(2.75rem,8vw,5.75rem)] font-black leading-[0.98] tracking-[-0.04em] drop-shadow-[0_0_40px_rgba(6,182,212,0.4)]">
                     HYPER-SPEED
                     <br />
                     <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500 animate-gradient-x">
                       ZERO LIMITS.
                     </span>
                   </h2>
-                  <p className="text-gray-400 text-sm md:text-xl max-w-2xl mx-auto leading-relaxed px-6">
-                    Unlimited file transfer directly via your browser.
-                    <br className="hidden md:block" />
-                    No servers. No size caps. Just pure speed.
+                  <p className="mx-auto max-w-2xl px-4 text-base leading-7 text-gray-300 sm:text-lg md:text-xl md:leading-8">
+                    <span className="block">
+                      Transfer files directly from browser to browser.
+                    </span>
+                    <span className="mt-1 block">
+                      No size caps, no detours—just a secure, high-speed link.
+                    </span>
                   </p>
                 </div>
 
-                <div className="flex flex-col sm:flex-row items-center gap-3">
+                <div className="flex items-center justify-center">
                   <MagneticButton
                     onClick={startApp}
-                    className="relative group bg-white text-black border border-white/50 px-8 py-3 md:px-12 md:py-5 rounded-full font-bold text-base md:text-lg tracking-widest hover:bg-cyan-500 hover:text-white hover:border-cyan-400 transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] overflow-hidden"
+                    className="relative group bg-white text-black border border-white/50 px-9 py-4 md:px-12 md:py-5 rounded-full font-bold text-base md:text-lg tracking-[0.16em] hover:bg-cyan-500 hover:text-white hover:border-cyan-400 transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] overflow-hidden"
                   >
                     <span className="relative z-10 flex items-center gap-3">
                       INITIALIZE LINK
@@ -200,93 +198,102 @@ const App: React.FC = () => {
               </motion.div>
             )}
 
-            {/* --- SELECTION SCREEN (Grid Layout) --- */}
+            {/* --- SELECTION SCREEN --- */}
             {mode === AppMode.SELECTION && (
-              <motion.div
+              <motion.section
                 key="selection"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 1.05, filter: 'blur(10px)' }}
-                className="w-full max-w-6xl px-4"
+                aria-labelledby="transfer-mode-heading"
+                className="w-full max-w-5xl px-1 pb-4 pt-16 sm:px-4 md:my-auto md:py-0"
               >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 w-full items-stretch justify-center">
-                  <div className="group relative flex min-h-[360px] md:min-h-[380px] flex-col justify-between bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-cyan-500 transition-all duration-300 shadow-2xl w-full overflow-hidden p-6 md:p-8">
-                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 via-transparent to-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="mb-5 text-center md:mb-7">
+                  <p className="mb-2 text-xs font-bold uppercase tracking-[0.24em] text-cyan-300">
+                    Secure transfer
+                  </p>
+                  <h2
+                    id="transfer-mode-heading"
+                    className="brand-font text-2xl font-bold tracking-wide text-white sm:text-3xl md:text-4xl"
+                  >
+                    Choose how to connect
+                  </h2>
+                  <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-gray-400 sm:text-base">
+                    Start a live transfer, create a shareable link, or receive
+                    files from someone else.
+                  </p>
+                </div>
+
+                <div className="grid w-full grid-cols-1 items-stretch gap-4 md:grid-cols-2 md:gap-5">
+                  <div className="group relative flex flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/45 p-5 shadow-2xl backdrop-blur-xl transition-colors duration-300 hover:border-cyan-400/50 sm:p-6 md:min-h-[350px]">
+                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 via-transparent to-emerald-500/10 opacity-60" />
 
                     <div className="relative z-10 flex items-center gap-4">
-                      <div className="relative shrink-0">
-                        <div className="absolute inset-0 bg-cyan-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
-                        <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-cyan-400 flex items-center justify-center relative z-10 shadow-lg">
-                          <Send className="w-8 h-8 md:w-10 md:h-10 text-white" />
-                        </div>
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-400/10 shadow-lg sm:h-16 sm:w-16">
+                        <Send className="h-7 w-7 text-cyan-100 sm:h-8 sm:w-8" />
                       </div>
-
                       <div>
-                        <h3 className="text-3xl md:text-5xl font-bold brand-font tracking-wider group-hover:text-cyan-400 transition-colors">
+                        <h3 className="brand-font text-2xl font-bold tracking-wider text-white sm:text-3xl">
                           SEND
                         </h3>
-                        <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                          Choose a sending method
+                        <p className="mt-1 text-sm text-gray-400">
+                          Pick the delivery style that fits.
                         </p>
                       </div>
                     </div>
 
-                    <div className="relative z-10 grid gap-3 md:gap-4">
+                    <div className="relative z-10 mt-5 grid flex-1 gap-3">
                       <button
                         onClick={() => setMode(AppMode.SENDER)}
-                        className="group/p2p flex min-h-[104px] flex-col justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-5 py-4 text-left hover:bg-cyan-500/20 hover:border-cyan-300 transition-colors"
+                        className="group/p2p flex min-h-[98px] flex-col justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-5 py-4 text-left transition-all hover:border-cyan-300 hover:bg-cyan-500/20"
                       >
-                        <span className="flex items-center gap-2 text-lg md:text-xl font-bold tracking-widest text-cyan-100">
-                          <Zap className="w-5 h-5" />
+                        <span className="flex items-center gap-2 text-base font-bold tracking-[0.12em] text-cyan-100 sm:text-lg">
+                          <Zap className="h-5 w-5" />
                           SEND NOW
                         </span>
-                        <span className="mt-2 text-sm md:text-base text-cyan-50/75 leading-snug">
-                          Send directly while both people stay on this page; if
-                          either person leaves, the transfer may fail.
+                        <span className="mt-2 text-sm leading-5 text-cyan-50/75 sm:text-base sm:leading-6">
+                          Transfer live while both people keep this page open.
                         </span>
                       </button>
 
                       <button
                         onClick={() => setMode(AppMode.CLOUD_SENDER)}
-                        className="group/cloud flex min-h-[104px] flex-col justify-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-left hover:bg-emerald-500/20 hover:border-emerald-300 transition-colors"
+                        className="group/cloud flex min-h-[98px] flex-col justify-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-left transition-all hover:border-emerald-300 hover:bg-emerald-500/20"
                       >
-                        <span className="flex items-center gap-2 text-lg md:text-xl font-bold tracking-widest text-emerald-100">
-                          <CloudUpload className="w-5 h-5" />
+                        <span className="flex items-center gap-2 text-base font-bold tracking-[0.12em] text-emerald-100 sm:text-lg">
+                          <CloudUpload className="h-5 w-5" />
                           SEND BY LINK
                         </span>
-                        <span className="mt-2 text-sm md:text-base text-emerald-50/75 leading-snug">
-                          Upload once and share a download link; link sending is
-                          free up to 10GB.
+                        <span className="mt-2 text-sm leading-5 text-emerald-50/75 sm:text-base sm:leading-6">
+                          Upload once and share a free link for files up to
+                          10GB.
                         </span>
                       </button>
                     </div>
                   </div>
 
-                  {/* RECEIVER CARD - 높이 축소 */}
                   <MagneticButton
                     onClick={() => setMode(AppMode.RECEIVER)}
-                    className="group relative flex flex-col items-center justify-center min-h-[240px] md:min-h-[380px] bg-black/40 backdrop-blur-xl border border-gray-700/50 rounded-[2rem] hover:border-purple-500 transition-all duration-300 shadow-2xl w-full overflow-hidden"
+                    className="group relative flex min-h-[180px] w-full flex-col items-center justify-center overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/45 p-6 shadow-2xl backdrop-blur-xl transition-colors duration-300 hover:border-purple-400/50 md:min-h-[350px]"
                   >
-                    <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-
-                    <div className="relative mb-4 md:mb-6 transform group-hover:scale-110 transition-transform duration-300">
-                      <div className="absolute inset-0 bg-purple-500 blur-2xl opacity-20 group-hover:opacity-50 transition-opacity" />
-                      <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gray-800/80 border border-gray-600 group-hover:border-purple-400 flex items-center justify-center relative z-10 shadow-lg">
-                        <Download className="w-8 h-8 md:w-10 md:h-10 text-white" />
+                    <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 via-transparent to-cyan-500/5 opacity-60" />
+                    <div className="relative z-10 flex flex-col items-center text-center">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-purple-300/20 bg-purple-400/10 shadow-lg sm:h-16 sm:w-16">
+                        <Download className="h-7 w-7 text-purple-100 sm:h-8 sm:w-8" />
                       </div>
-                    </div>
-
-                    <div className="relative z-10 text-center space-y-1">
-                      <h3 className="text-2xl md:text-4xl font-bold brand-font tracking-wider group-hover:text-purple-400 transition-colors">
+                      <p className="mt-5 text-xs font-bold uppercase tracking-[0.22em] text-purple-300">
+                        Code or link
+                      </p>
+                      <h3 className="brand-font mt-2 text-2xl font-bold tracking-wider text-white sm:text-3xl">
                         RECEIVE
                       </h3>
-                      <p className="text-gray-500 text-xs md:text-sm tracking-widest uppercase">
-                        Enter a code or open a download link
+                      <p className="mt-2 max-w-xs text-sm leading-6 text-gray-400 sm:text-base">
+                        Enter a room code or open a shared download link.
                       </p>
                     </div>
                   </MagneticButton>
                 </div>
-              </motion.div>
+              </motion.section>
             )}
 
             {/* --- ACTIVE STATES (SENDER/RECEIVER VIEWS) --- */}
@@ -308,7 +315,7 @@ const App: React.FC = () => {
 
                 <button
                   onClick={() => setMode(AppMode.SELECTION)}
-                  className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
+                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
                   Abort Mission
                 </button>
@@ -327,7 +334,7 @@ const App: React.FC = () => {
 
                 <button
                   onClick={() => setMode(AppMode.SELECTION)}
-                  className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
+                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
                   Close Drop
                 </button>
@@ -350,7 +357,7 @@ const App: React.FC = () => {
                     setMode(AppMode.SELECTION);
                     window.history.pushState({}, '', '/');
                   }}
-                  className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
+                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
                   Close Drop
                 </button>
@@ -378,7 +385,7 @@ const App: React.FC = () => {
                     setMode(AppMode.SELECTION);
                     setRoomId(null);
                   }}
-                  className="fixed bottom-8 text-gray-500 hover:text-white transition-colors uppercase tracking-widest text-xs py-2 px-4 hover:bg-white/5 rounded-full"
+                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
                   Close Gate
                 </button>
