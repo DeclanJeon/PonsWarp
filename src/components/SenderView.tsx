@@ -19,6 +19,7 @@ import {
   Users,
 } from 'lucide-react';
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
+import { lanEvidenceAdapter } from '../services/lanEvidenceAdapter';
 import { createManifest, formatBytes } from '../utils/fileUtils';
 import {
   scanFiles,
@@ -114,6 +115,72 @@ const SenderView: React.FC<SenderViewProps> = () => {
     // SwarmManager 인스턴스 생성
     const swarmManager = new SwarmManager();
     swarmManagerRef.current = swarmManager;
+    let stopEvidenceCommands: (() => void) | undefined;
+    if (lanEvidenceAdapter.enabled) {
+      void (async () => {
+        try {
+          await lanEvidenceAdapter.hello();
+          swarmManager.armTransferStartGate();
+          stopEvidenceCommands = lanEvidenceAdapter.onCommand(command => {
+            if (command.type !== 'START') return;
+            void (async () => {
+              try {
+                const payload = (command.payload || {}) as Record<
+                  string,
+                  unknown
+                >;
+                const pipelineOn =
+                  payload.pipelineOn === true || payload.control === 'on';
+                if (pipelineOn) {
+                  const certificateId = String(payload.certificateId || '');
+                  const certificateDigest = String(
+                    payload.certificateDigest || ''
+                  );
+                  const armDigest = String(payload.armDigest || '');
+                  const certificateExpiresAtMs = Number(
+                    payload.certificateExpiresAtMs
+                  );
+                  const generation = swarmManager.getTransferGeneration();
+                  if (
+                    !certificateId ||
+                    !certificateDigest ||
+                    !armDigest ||
+                    !Number.isFinite(certificateExpiresAtMs) ||
+                    !swarmManager.setPipelineCertificateBinding({
+                      generation,
+                      runId: generation,
+                      certificateId,
+                      certificateDigest,
+                      armDigest,
+                      expiresAtMs: certificateExpiresAtMs,
+                    })
+                  )
+                    throw new Error('Evidence pipeline certificate rejected');
+                } else {
+                  swarmManager.clearPipelineCertificateBinding();
+                }
+                if (!swarmManager.releaseTransferStartGate())
+                  throw new Error('Evidence START release rejected');
+                await lanEvidenceAdapter.reportPhase('STARTED', { pipelineOn });
+              } catch (error) {
+                swarmManager.disableLanHostPipelineForActiveRun(
+                  'evidence-start-rejected'
+                );
+                swarmManager.clearPipelineCertificateBinding();
+                await lanEvidenceAdapter
+                  .report('ERROR', { message: String(error) })
+                  .catch(() => undefined);
+              }
+            })();
+          });
+          await lanEvidenceAdapter.listen(() => undefined);
+        } catch (error) {
+          await lanEvidenceAdapter
+            .report('ERROR', { message: String(error) })
+            .catch(() => undefined);
+        }
+      })();
+    }
     const completionPoll = setInterval(() => {
       if (swarmManager.isSessionComplete()) {
         setTransferStatus('DONE');
@@ -292,6 +359,12 @@ const SenderView: React.FC<SenderViewProps> = () => {
     });
 
     return () => {
+      if (lanEvidenceAdapter.enabled) {
+        stopEvidenceCommands?.();
+        swarmManager.disableLanHostPipelineForActiveRun('evidence-cleanup');
+        swarmManager.clearPipelineCertificateBinding();
+        void lanEvidenceAdapter.release();
+      }
       clearInterval(completionPoll);
       swarmManager.cleanup();
       swarmManager.removeAllListeners();
@@ -365,6 +438,15 @@ const SenderView: React.FC<SenderViewProps> = () => {
       debugLog('[SenderView] 🚀 [DEBUG] Initializing SwarmManager...');
       await swarmManagerRef.current?.initSender(manifest, files, id);
       debugLog('[SenderView] ✅ [DEBUG] SwarmManager initialized successfully');
+      await lanEvidenceAdapter.reportPhase('READY', {
+        transferId: manifest.transferId,
+        totalBytes: manifest.totalSize,
+        roomId: id,
+      });
+      await lanEvidenceAdapter.reportPhase('ROOM_READY', {
+        transferId: manifest.transferId,
+        roomId: id,
+      });
 
       // 초기화 완료 후에도 이미 전송/완료 이벤트가 들어왔다면 상태를 되돌리지 않는다.
       setTransferStatus(prev =>

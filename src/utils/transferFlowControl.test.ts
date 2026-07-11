@@ -5,6 +5,11 @@ import {
   DIRECT_SRFLX_TRANSFER_TUNING_PROFILE,
   RELAY_TRANSFER_TUNING_PROFILE,
   UNKNOWN_TRANSFER_TUNING_PROFILE,
+  PREPARATION_LEDGER_BYTES,
+  PEER_ADMISSION_BYTES,
+  HostTransferScheduler,
+  candidateTuplesEqual,
+  hasStableHostRoute,
   calculateSendBudget,
   calculateSafeBatchRequestSize,
   clampDataChannelChunkSize,
@@ -17,6 +22,84 @@ import {
 } from './transferFlowControl';
 
 describe('transferFlowControl', () => {
+  it('requires two identical host/udp samples at least 500ms apart', () => {
+    const base = {
+      selectedPairId: 'pair',
+      localCandidateId: 'local',
+      remoteCandidateId: 'remote',
+      localCandidateType: 'host',
+      remoteCandidateType: 'host',
+      localProtocol: 'udp',
+      remoteProtocol: 'udp',
+      selectedOrNominatedSucceeded: true,
+    };
+    expect(
+      hasStableHostRoute([
+        { ...base, sampledAtMs: 0 },
+        { ...base, sampledAtMs: 499 },
+      ])
+    ).toBe(false);
+    expect(
+      hasStableHostRoute([
+        { ...base, sampledAtMs: 0 },
+        { ...base, sampledAtMs: 500 },
+      ])
+    ).toBe(true);
+    expect(
+      candidateTuplesEqual(
+        { ...base, sampledAtMs: 0 },
+        { ...base, remoteCandidateId: 'changed', sampledAtMs: 500 }
+      )
+    ).toBe(false);
+  });
+
+  it('bounds reservations and burns nonce attempts', () => {
+    const chunkBytes = 512 * 1024;
+    const totalBytes = 8 * 1024 * 1024;
+    const scheduler = new HostTransferScheduler(totalBytes);
+    scheduler.enable();
+    const first = scheduler.reserve(chunkBytes);
+    const second = scheduler.reserve(chunkBytes);
+    expect(first?.bytes).toBe(chunkBytes);
+    expect(second?.bytes).toBe(chunkBytes);
+    expect(scheduler.getUnsettledCount()).toBe(2);
+    expect(scheduler.reserve(1)).toBeNull();
+    scheduler.abandon(second!);
+    const retry = scheduler.reserve(chunkBytes);
+    expect(retry?.cursor).toBe(chunkBytes);
+    expect(retry?.nonce).toBe(2);
+    expect(scheduler.getUnsettledBytes()).toBe(chunkBytes * 2);
+    expect(PREPARATION_LEDGER_BYTES).toBe(1376450);
+  });
+  it('starts from a resume cursor with the next nonce', () => {
+    const scheduler = new HostTransferScheduler(
+      16 * 1024 * 1024,
+      5 * 1024 * 1024,
+      7
+    );
+    scheduler.enable();
+    const reservation = scheduler.reserve(1024);
+    expect(reservation).toEqual({
+      cursor: 5 * 1024 * 1024,
+      bytes: 1024,
+      nonce: 7,
+    });
+  });
+  it('clears reservations on downgrade without rewinding the burned cursor', () => {
+    const scheduler = new HostTransferScheduler(16 * 1024 * 1024);
+    scheduler.enable();
+    const first = scheduler.reserve(1024)!;
+    scheduler.settle(first);
+    const second = scheduler.reserve(2048)!;
+    expect(second.cursor).toBe(1024);
+    scheduler.disable();
+    expect(scheduler.getUnsettledCount()).toBe(0);
+    expect(scheduler.getCursor()).toBe(3072);
+    scheduler.enable();
+    const resumed = scheduler.reserve(1024)!;
+    expect(resumed.cursor).toBe(3072);
+    expect(resumed.nonce).toBe(2);
+  });
   it('keeps the default profile below browser DataChannel pressure cliffs', () => {
     expect(DEFAULT_FLOW_CONTROL_PROFILE.chunkSize).toBe(16 * 1024);
     expect(DEFAULT_FLOW_CONTROL_PROFILE.highWaterMark).toBe(128 * 1024);
@@ -42,26 +125,25 @@ describe('transferFlowControl', () => {
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
       4 * 1024 * 1024
     );
-    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16).toBeLessThan(
-      256 * 1024
-    );
-    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16).toBeLessThan(
-      256 * 1024
-    );
+    expect(
+      DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
+    ).toBeLessThan(256 * 1024);
+    expect(
+      DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
+    ).toBeLessThan(256 * 1024);
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThan(
       receiverPauseHighBytes
     );
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThan(
       receiverPauseHighBytes
     );
-    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThanOrEqual(
-      8 * 1024 * 1024
-    );
-    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThanOrEqual(
-      8 * 1024 * 1024
-    );
+    expect(
+      DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes
+    ).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(
+      DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes
+    ).toBeLessThanOrEqual(8 * 1024 * 1024);
   });
-
 
   it('keeps relay and unknown profiles conservative', () => {
     expect(selectTransferTuningProfile({ candidatePathKind: 'relay' })).toBe(

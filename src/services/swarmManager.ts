@@ -45,6 +45,9 @@ import {
   UNKNOWN_TRANSFER_TUNING_PROFILE,
   TransferDiagnostics,
   TransferTuningProfile,
+  HostTransferScheduler,
+  CandidateEligibilityTuple,
+  hasStableHostRoute,
 } from '../utils/transferFlowControl';
 import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
 
@@ -101,6 +104,14 @@ type PartitionAckWaiter = {
   runId: number;
   peers: Set<string>;
 };
+
+export type StartIntent = {
+  offset: number;
+  generation: number;
+  reason: 'initial' | 'resume' | 'queued';
+};
+
+type StartGateState = 'DISABLED' | 'ARMED' | 'TRANSFER_READY' | 'RELEASED';
 type WorkerProgressData = Partial<SwarmProgress> & {
   progress?: number;
 };
@@ -216,6 +227,21 @@ export class SwarmManager {
   private transferPauseCount = 0;
   private partitionAckCount = 0;
   private transferRunId = 0;
+  private startGateState: StartGateState = 'DISABLED';
+  private pendingStartIntent: StartIntent | null = null;
+  private pipelineCertificateVerified = false;
+  private pipelineCertificateBinding: {
+    generation: number;
+    runId: number;
+    certificateId: string;
+    certificateDigest: string;
+    armDigest: string;
+    expiresAtMs: number;
+  } | null = null;
+  private hostRouteSamples: CandidateEligibilityTuple[] = [];
+  private hostTransferScheduler: HostTransferScheduler | null = null;
+  private lanHostPipelineDisabledReason: string | null = null;
+  private startedEventEmitted = false;
 
   // Bound Handlers to allow removal
   private boundHandlePeerJoined = this.handlePeerJoined.bind(this);
@@ -601,13 +627,16 @@ export class SwarmManager {
       );
     })()
       .catch(error => {
-        logError('[SwarmManager]', 'Failed to restore signaling session:', error);
+        logError(
+          '[SwarmManager]',
+          'Failed to restore signaling session:',
+          error
+        );
       })
       .finally(() => {
         this.signalingRecoveryPromise = null;
       });
   }
-
 
   private handleOffer(data: SignalingPeerMessage): void {
     // roomId가 설정되지 않았으면 무시
@@ -817,6 +846,12 @@ export class SwarmManager {
       this.currentTransferTuningProfile,
       selected
     );
+    if (selected.candidateTuple) {
+      this.hostRouteSamples = [
+        ...this.hostRouteSamples,
+        selected.candidateTuple,
+      ].slice(-2);
+    }
   }
 
   private selectConservativeDiagnostics(
@@ -913,7 +948,11 @@ export class SwarmManager {
     this.totalBytesSent = msg.offset;
     this.transferStartTime = performance.now();
 
-    void this.runPartitionedTransfer(msg.offset);
+    this.requestTransferStart({
+      offset: msg.offset,
+      generation: this.transferRunId,
+      reason: 'resume',
+    });
   }
 
   private canResumeSingleFileTransfer(): boolean {
@@ -1270,7 +1309,10 @@ export class SwarmManager {
               const readyTimeoutPeerIds = new Set(pendingPeers.map(p => p.id));
               this.readyTimeout = setTimeout(() => {
                 this.readyTimeout = null;
-                if (!this.isTransferring && this.roomId === readyTimeoutRoomId) {
+                if (
+                  !this.isTransferring &&
+                  this.roomId === readyTimeoutRoomId
+                ) {
                   const currentReadyPeers = this.getConnectedPeers().filter(
                     p =>
                       p.ready &&
@@ -1295,7 +1337,7 @@ export class SwarmManager {
         }
         break;
 
-      case 'DOWNLOAD_COMPLETE':
+      case 'DOWNLOAD_COMPLETE': {
         debugLog(
           '[SwarmManager] 📥 Received DOWNLOAD_COMPLETE from peer:',
           peerId,
@@ -1378,6 +1420,7 @@ export class SwarmManager {
         debugLog('[SwarmManager] 🔄 Calling checkTransferComplete...');
         this.checkTransferComplete();
         break;
+      }
 
       case 'RESUME_REQUEST':
         this.handleResumeRequest(peerId, msg);
@@ -1519,7 +1562,6 @@ export class SwarmManager {
       return;
     }
 
-
     const connectedPeers = this.getConnectedPeers();
     const readyPeers = connectedPeers.filter(
       p => p.ready && !this.completedPeersInSession.has(p.id)
@@ -1552,7 +1594,11 @@ export class SwarmManager {
         `🚀 Starting transfer to ${readyPeers.length} peer(s): ${[...this.currentTransferPeers].join(', ')}`
       );
       this.emit('transfer-batch-start', { peerCount: readyPeers.length });
-      this.startTransfer();
+      this.requestTransferStart({
+        offset: 0,
+        generation: this.transferRunId,
+        reason: 'initial',
+      });
     } else {
       logError('[SwarmManager]', 'No ready peers to start transfer');
       this.emit('transfer-failed', 'No receivers ready');
@@ -1827,7 +1873,11 @@ export class SwarmManager {
       // 🚀 [핵심] 대기열 초기화 이벤트 발생 (SenderView UI 업데이트용)
       this.emit('queue-cleared', { processedCount: validPeers.length });
 
-      this.startTransfer();
+      this.requestTransferStart({
+        offset: 0,
+        generation: this.transferRunId,
+        reason: 'queued',
+      });
     } else {
       logInfo(
         '[SwarmManager]',
@@ -2120,12 +2170,169 @@ export class SwarmManager {
 
   private startTransfer(): void {
     if (this.isTransferring) return;
-    void this.runPartitionedTransfer(0);
+    this.requestTransferStart({
+      offset: 0,
+      generation: this.transferRunId,
+      reason: 'initial',
+    });
   }
 
-  private async runPartitionedTransfer(startOffset = 0): Promise<void> {
-    if (!this.pendingManifest) return;
-    const runId = ++this.transferRunId;
+  private requestTransferStart(intent: StartIntent): void {
+    if (
+      !Number.isFinite(intent.offset) ||
+      !Number.isInteger(intent.offset) ||
+      intent.offset < 0 ||
+      !Number.isInteger(intent.generation) ||
+      intent.generation !== this.transferRunId ||
+      !this.pendingManifest ||
+      intent.offset > this.pendingManifest.totalSize
+    ) {
+      logWarn(
+        '[SwarmManager]',
+        'Rejected stale or invalid transfer start intent'
+      );
+      return;
+    }
+    if (intent.reason === 'resume' && !this.canResumeSingleFileTransfer())
+      return;
+    if (
+      this.startGateState === 'ARMED' ||
+      this.startGateState === 'TRANSFER_READY'
+    ) {
+      this.pendingStartIntent = intent;
+      this.startGateState = 'TRANSFER_READY';
+      return;
+    }
+    this.executeStartIntent(intent);
+  }
+
+  private executeStartIntent(intent: StartIntent): void {
+    if (this.isTransferring) return;
+    if (intent.generation !== this.transferRunId) return;
+    this.startGateState = 'RELEASED';
+    if (intent.reason === 'initial' && !this.startedEventEmitted) {
+      this.startedEventEmitted = true;
+      this.emit('STARTED');
+    }
+    void this.runPartitionedTransfer(intent.offset, intent.generation);
+  }
+
+  public armTransferStartGate(): void {
+    if (this.startGateState === 'DISABLED') this.startGateState = 'ARMED';
+  }
+  public getTransferGeneration(): number {
+    return this.transferRunId;
+  }
+  public setPipelineCertificateBinding(binding: {
+    generation: number;
+    runId: number;
+    certificateId: string;
+    certificateDigest: string;
+    armDigest: string;
+    expiresAtMs: number;
+  }): boolean {
+    const hex64 = /^[0-9a-f]{64}$/i;
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const now = Date.now();
+    if (
+      !Number.isInteger(binding.generation) ||
+      binding.generation !== this.transferRunId ||
+      !Number.isInteger(binding.runId) ||
+      binding.runId !== this.transferRunId ||
+      !uuid.test(binding.certificateId) ||
+      !hex64.test(binding.certificateDigest) ||
+      !hex64.test(binding.armDigest) ||
+      !Number.isFinite(binding.expiresAtMs) ||
+      binding.expiresAtMs <= now ||
+      binding.expiresAtMs > now + 30 * 60 * 1000
+    ) {
+      this.pipelineCertificateVerified = false;
+      this.pipelineCertificateBinding = null;
+      return false;
+    }
+    this.pipelineCertificateBinding = { ...binding };
+    this.pipelineCertificateVerified = true;
+    this.lanHostPipelineDisabledReason = null;
+    return true;
+  }
+
+  public clearPipelineCertificateBinding(): void {
+    this.pipelineCertificateVerified = false;
+    this.pipelineCertificateBinding = null;
+    this.disableLanHostPipelineForActiveRun('certificate-cleared');
+  }
+
+  public disableLanHostPipelineForActiveRun(reason: string): void {
+    this.pipelineCertificateVerified = false;
+    this.lanHostPipelineDisabledReason = reason || 'disabled';
+    this.hostTransferScheduler?.disable();
+    this.hostTransferScheduler = null;
+  }
+
+  private canUseHostPipeline(): boolean {
+    const binding = this.pipelineCertificateBinding;
+    const now = Date.now();
+    if (import.meta.env.VITE_LAN_HOST_PIPELINE !== 'true') return false;
+    if (
+      !this.pipelineCertificateVerified ||
+      !binding ||
+      binding.generation !== this.transferRunId ||
+      binding.runId !== this.transferRunId ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(binding.certificateId) ||
+      !/^[0-9a-f]{64}$/i.test(binding.certificateDigest) ||
+      !/^[0-9a-f]{64}$/i.test(binding.armDigest) ||
+      !Number.isFinite(binding.expiresAtMs) ||
+      binding.expiresAtMs <= now ||
+      binding.expiresAtMs > now + 30 * 60 * 1000
+    ) {
+      if (binding?.expiresAtMs && binding.expiresAtMs <= now)
+        this.disableLanHostPipelineForActiveRun('certificate-expired');
+      return false;
+    }
+    if (this.lanHostPipelineDisabledReason) return false;
+    if (!this.currentTransferDiagnostics.candidateTuple) return false;
+    if (!hasStableHostRoute(this.hostRouteSamples)) return false;
+    if (this.hostTransferScheduler) this.hostTransferScheduler.enable();
+    return true;
+  }
+  private async awaitStableHostPipeline(runId: number): Promise<boolean> {
+    if (
+      import.meta.env.VITE_LAN_HOST_PIPELINE !== 'true' ||
+      !this.pipelineCertificateVerified ||
+      !this.pipelineCertificateBinding ||
+      this.pipelineCertificateBinding.runId !== runId
+    ) return false;
+    if (hasStableHostRoute(this.hostRouteSamples)) return true;
+    const first = this.hostRouteSamples[this.hostRouteSamples.length - 1];
+    if (!first) return false;
+    const waitMs = Math.max(0, 500 - (Date.now() - first.sampledAtMs));
+    if (waitMs > 0) {
+      await new Promise<void>(resolve => setTimeout(resolve, waitMs));
+    }
+    if (runId !== this.transferRunId || !this.isTransferring) return false;
+    await this.sampleAdaptiveStats();
+    return runId === this.transferRunId &&
+      this.isTransferring &&
+      hasStableHostRoute(this.hostRouteSamples);
+  }
+
+  public releaseTransferStartGate(): boolean {
+    if (this.startGateState !== 'TRANSFER_READY' || !this.pendingStartIntent)
+      return false;
+    const intent = this.pendingStartIntent;
+    this.pendingStartIntent = null;
+    this.startGateState = 'RELEASED';
+    this.executeStartIntent(intent);
+    return true;
+  }
+
+  private async runPartitionedTransfer(
+    startOffset = 0,
+    generation = this.transferRunId
+  ): Promise<void> {
+    if (!this.pendingManifest || generation !== this.transferRunId) return;
+    const runId = generation;
 
     this.isTransferring = true;
     this.awaitingReceiverReconnect = false;
@@ -2229,6 +2436,7 @@ export class SwarmManager {
     payload: ArrayBuffer;
     sequence: number;
     offset: number;
+    nonceCounter?: number;
   }): Promise<ArrayBuffer> {
     if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
       return createPlainDataPacket(params);
@@ -2249,14 +2457,14 @@ export class SwarmManager {
       );
     }
 
+    const nonceCounter = params.nonceCounter ?? this.partitionNonceCounter++;
     const nonce = new Uint8Array(12);
-    new DataView(nonce.buffer).setUint32(0, this.partitionNonceCounter, true);
+    new DataView(nonce.buffer).setUint32(0, nonceCounter, true);
     nonce.set(this.randomPrefix.subarray(0, 8), 4);
     const nonceBuffer = nonce.buffer.slice(
       nonce.byteOffset,
       nonce.byteOffset + nonce.byteLength
     );
-    this.partitionNonceCounter += 1;
 
     const ciphertextWithTag = await crypto.subtle.encrypt(
       {
@@ -2286,6 +2494,15 @@ export class SwarmManager {
     startOffset: number,
     runId: number
   ): Promise<void> {
+    const hostPipelineReady = await this.awaitStableHostPipeline(runId);
+    const scheduler = hostPipelineReady
+      ? (this.hostTransferScheduler ??= new HostTransferScheduler(
+          manifest.totalSize,
+          startOffset,
+          this.partitionNonceCounter
+        ))
+      : null;
+    if (scheduler) scheduler.enable();
     const partitionSize = selectPartitionSize(
       this.currentTransferTuningProfile
     );
@@ -2301,45 +2518,158 @@ export class SwarmManager {
     let globalOffset = cursor.globalOffset;
     let partitionEnd = cursor.nextPartitionEnd;
 
-    for (
-      let fileIndex = cursor.fileIndex;
-      fileIndex < this.files.length;
-      fileIndex++
-    ) {
-      const file = this.files[fileIndex];
-      let fileOffset = fileIndex === cursor.fileIndex ? cursor.fileOffset : 0;
-      while (fileOffset < file.size) {
+    if (!scheduler) {
+      for (
+        let fileIndex = cursor.fileIndex;
+        fileIndex < this.files.length;
+        fileIndex++
+      ) {
+        const file = this.files[fileIndex];
+        let fileOffset = fileIndex === cursor.fileIndex ? cursor.fileOffset : 0;
+        while (fileOffset < file.size) {
+          this.ensureActiveTransferRun(runId);
+          await this.waitUntilSendWindowOpen(runId);
+          const chunkSize = this.getCurrentChunkSizeBytes();
+          const chunkEnd = Math.min(fileOffset + chunkSize, file.size);
+          const payload = await file.slice(fileOffset, chunkEnd).arrayBuffer();
+          const packet = await this.createPartitionDataPacket({
+            payload,
+            sequence: sequence++,
+            offset: globalOffset,
+          });
+          this.ensureActiveTransferRun(runId);
+          await this.waitUntilSendWindowOpen(runId);
+          this.ensureActiveTransferRun(runId);
+          const result = this.broadcastChunk(packet);
+          for (const failedPeerId of result.failedPeers) {
+            this.removePeer(failedPeerId, 'partitioned-send-failed');
+          }
+          if (result.successCount === 0)
+            throw new Error('No connected receivers available');
+          fileOffset += payload.byteLength;
+          globalOffset += payload.byteLength;
+          this.totalBytesSent = globalOffset;
+          networkController.recordSend(packet.byteLength);
+          this.emitProgress();
+          if (
+            globalOffset >= partitionEnd &&
+            globalOffset < manifest.totalSize
+          ) {
+            await this.sendPartitionMarkerAndWait(globalOffset, runId);
+            partitionEnd = Math.min(
+              globalOffset +
+                selectPartitionSize(this.currentTransferTuningProfile),
+              manifest.totalSize
+            );
+          }
+        }
+      }
+    } else {
+      type Descriptor = {
+        file: File;
+        fileOffset: number;
+        offset: number;
+        sequence: number;
+        bytes: number;
+        reservation: ReturnType<HostTransferScheduler['reserve']>;
+      };
+      let nextFile = cursor.fileIndex;
+      let nextFileOffset = cursor.fileOffset;
+      let nextOffset = cursor.globalOffset;
+      let nextSequence = cursor.sequence;
+      const nextDescriptor = (): Descriptor | null => {
+        while (
+          nextFile < this.files.length &&
+          nextFileOffset >= this.files[nextFile].size
+        ) {
+          nextFile++;
+          nextFileOffset = 0;
+        }
+        if (nextFile >= this.files.length) return null;
+        const bytes = Math.min(
+          this.getCurrentChunkSizeBytes(),
+          this.files[nextFile].size - nextFileOffset
+        );
+        if (!this.canUseHostPipeline()) return null;
+        const reservation = scheduler.reserve(bytes);
+        if (!reservation) return null;
+        const descriptor: Descriptor = {
+          file: this.files[nextFile],
+          fileOffset: nextFileOffset,
+          offset: nextOffset,
+          sequence: nextSequence++,
+          bytes,
+          reservation,
+        };
+        nextFileOffset += bytes;
+        nextOffset += bytes;
+        return descriptor;
+      };
+      type Prepared = {
+        d: Descriptor;
+        payload?: ArrayBuffer;
+        packet?: ArrayBuffer;
+        error?: unknown;
+      };
+      const prepare = async (d: Descriptor): Promise<Prepared> => {
+        try {
+          const payload = await d.file
+            .slice(d.fileOffset, d.fileOffset + d.bytes)
+            .arrayBuffer();
+          const packet = await this.createPartitionDataPacket({
+            payload,
+            sequence: d.sequence,
+            offset: d.offset,
+            nonceCounter: d.reservation!.nonce,
+          });
+          return { d, payload, packet };
+        } catch (error) {
+          return { d, error };
+        }
+      };
+      const pending: Array<ReturnType<typeof prepare>> = [];
+      let acceptReservations = true;
+      const fill = () => {
+        while (acceptReservations && pending.length < 2) {
+          if (!this.canUseHostPipeline()) {
+            acceptReservations = false;
+            break;
+          }
+          const d = nextDescriptor();
+          if (!d) break;
+          pending.push(prepare(d));
+        }
+      };
+      fill();
+      while (pending.length > 0) {
+        const prepared = await pending.shift()!;
+        fill();
+        if (prepared.error || !prepared.payload || !prepared.packet) {
+          scheduler.disable();
+          await Promise.all(pending);
+          throw prepared.error instanceof Error
+            ? prepared.error
+            : new Error('Host pipeline preparation failed');
+        }
         this.ensureActiveTransferRun(runId);
-
         await this.waitUntilSendWindowOpen(runId);
-
-        const chunkSize = this.getCurrentChunkSizeBytes();
-        const chunkEnd = Math.min(fileOffset + chunkSize, file.size);
-        const payload = await file.slice(fileOffset, chunkEnd).arrayBuffer();
-        const packet = await this.createPartitionDataPacket({
-          payload,
-          sequence: sequence++,
-          offset: globalOffset,
-        });
-        this.ensureActiveTransferRun(runId);
-        await this.waitUntilSendWindowOpen(runId);
-        this.ensureActiveTransferRun(runId);
-
-        const result = this.broadcastChunk(packet);
+        const result = this.broadcastChunk(prepared.packet);
         for (const failedPeerId of result.failedPeers) {
           this.removePeer(failedPeerId, 'partitioned-send-failed');
         }
         if (result.successCount === 0) {
+          scheduler.abandon(prepared.d.reservation!);
           throw new Error('No connected receivers available');
         }
-
-        const payloadBytes = payload.byteLength;
-        fileOffset += payloadBytes;
-        globalOffset += payloadBytes;
+        globalOffset = prepared.d.offset + prepared.payload.byteLength;
         this.totalBytesSent = globalOffset;
-        networkController.recordSend(packet.byteLength);
+        scheduler.settle(prepared.d.reservation!);
+        this.partitionNonceCounter = Math.max(
+          this.partitionNonceCounter,
+          prepared.d.reservation!.nonce + 1
+        );
+        networkController.recordSend(prepared.packet.byteLength);
         this.emitProgress();
-
         if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
           await this.sendPartitionMarkerAndWait(globalOffset, runId);
           partitionEnd = Math.min(
@@ -2349,8 +2679,58 @@ export class SwarmManager {
           );
         }
       }
+      if (!acceptReservations) {
+        scheduler.disable();
+        sequence = nextSequence;
+        for (
+          let fileIndex = nextFile;
+          fileIndex < this.files.length;
+          fileIndex++
+        ) {
+          const file = this.files[fileIndex];
+          let fileOffset = fileIndex === nextFile ? nextFileOffset : 0;
+          while (fileOffset < file.size) {
+            this.ensureActiveTransferRun(runId);
+            await this.waitUntilSendWindowOpen(runId);
+            const chunkSize = this.getCurrentChunkSizeBytes();
+            const chunkEnd = Math.min(fileOffset + chunkSize, file.size);
+            const payload = await file
+              .slice(fileOffset, chunkEnd)
+              .arrayBuffer();
+            const packet = await this.createPartitionDataPacket({
+              payload,
+              sequence: sequence++,
+              offset: globalOffset,
+            });
+            this.ensureActiveTransferRun(runId);
+            await this.waitUntilSendWindowOpen(runId);
+            const result = this.broadcastChunk(packet);
+            for (const failedPeerId of result.failedPeers) {
+              this.removePeer(failedPeerId, 'partitioned-send-failed');
+            }
+            if (result.successCount === 0) {
+              throw new Error('No connected receivers available');
+            }
+            fileOffset += payload.byteLength;
+            globalOffset += payload.byteLength;
+            this.totalBytesSent = globalOffset;
+            networkController.recordSend(packet.byteLength);
+            this.emitProgress();
+            if (
+              globalOffset >= partitionEnd &&
+              globalOffset < manifest.totalSize
+            ) {
+              await this.sendPartitionMarkerAndWait(globalOffset, runId);
+              partitionEnd = Math.min(
+                globalOffset +
+                  selectPartitionSize(this.currentTransferTuningProfile),
+                manifest.totalSize
+              );
+            }
+          }
+        }
+      }
     }
-
     if (globalOffset !== manifest.totalSize) {
       throw new Error(
         `Transfer size mismatch: sent ${globalOffset}, expected ${manifest.totalSize}`
@@ -2648,7 +3028,8 @@ export class SwarmManager {
 
   private async fetchTurnConfig(roomId: string): Promise<void> {
     try {
-      const response = await this.getSignalingService().requestTurnConfig(roomId);
+      const response =
+        await this.getSignalingService().requestTurnConfig(roomId);
       if (response?.success && response?.data) {
         this.iceServers = response.data.iceServers;
       }
@@ -2765,6 +3146,10 @@ export class SwarmManager {
     this.partitionAckCount = 0;
     this.resetTransferTuning();
     this.notifySendWindowWaiters();
+    this.pipelineCertificateVerified = false;
+    this.pipelineCertificateBinding = null;
+    this.hostRouteSamples = [];
+    this.hostTransferScheduler = null;
     this.cryptoSessionAnnouncedPeers.clear();
     this.partitionCryptoKey = null;
     this.partitionNonceCounter = 0;

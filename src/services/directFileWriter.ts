@@ -51,7 +51,19 @@ const ENCRYPTED_HEADER_SIZE = 38;
 const AUTH_TAG_SIZE = 16;
 const MAX_RESUME_ATTEMPTS = 3;
 
+import type { EvidenceFsaHandleContext } from './lanEvidenceAdapter';
 export class DirectFileWriter {
+  private evidenceFsaHandleContext: EvidenceFsaHandleContext | null = null;
+
+  public setEvidenceFsaHandleContext(
+    context: EvidenceFsaHandleContext | null
+  ): void {
+    this.evidenceFsaHandleContext = context;
+  }
+
+  public getWriterMode(): string {
+    return this.writerMode;
+  }
   private manifest: {
     totalSize: number;
     totalFiles?: number;
@@ -71,14 +83,10 @@ export class DirectFileWriter {
 
   // 파일 Writer
   private writer:
-    | WritableStreamDefaultWriter
-    | FileSystemWritableFileStream
-    | null = null;
+    WritableStreamDefaultWriter | FileSystemWritableFileStream | null = null;
   private writerMode:
-    | 'file-system-access'
-    | 'streamsaver'
-    | 'blob-fallback'
-    | 'opfs-fallback' = 'streamsaver';
+    'file-system-access' | 'streamsaver' | 'blob-fallback' | 'opfs-fallback' =
+    'streamsaver';
 
   // 🚀 [Blob 폴백용] 메모리 버퍼 (작은 파일용)
   private blobChunks: Uint8Array[] = [];
@@ -132,8 +140,7 @@ export class DirectFileWriter {
   private onFlowControlCallback: ((action: 'PAUSE' | 'RESUME') => void) | null =
     null;
   private onResumeRequestCallback:
-    | ((offset: number, reason: string) => void)
-    | null = null;
+    ((offset: number, reason: string) => void) | null = null;
 
   /**
    * 스토리지 초기화
@@ -222,6 +229,19 @@ export class DirectFileWriter {
       `🔍 Starting initialization for file: ${fileName}, size: ${fileSize} bytes`
     );
 
+    // Firefox 감지
+    if (this.evidenceFsaHandleContext) {
+      if (
+        !this.evidenceFsaHandleContext.verified ||
+        Date.now() >= this.evidenceFsaHandleContext.expiresAtMs
+      ) {
+        throw new Error(
+          'Evidence FSA handle is missing, expired, or unverified'
+        );
+      }
+      await this.initEvidenceFileSystemAccess(fileName);
+      return;
+    }
     // Firefox 감지
     const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
     logDebug('[DirectFileWriter]', `Browser detected - Firefox: ${isFirefox}`);
@@ -879,6 +899,19 @@ export class DirectFileWriter {
   /**
    * File System Access API 초기화 로직 (분리됨)
    */
+  private async initEvidenceFileSystemAccess(fileName: string): Promise<void> {
+    const context = this.evidenceFsaHandleContext;
+    if (!context || !context.verified || Date.now() >= context.expiresAtMs) {
+      throw new Error('Evidence FSA handle is missing, expired, or unverified');
+    }
+    this.writer = await context.handle.createWritable();
+    context.consume();
+    this.writerMode = 'file-system-access';
+    this.reorderingBuffer = new WasmReorderingBuffer();
+    await this.reorderingBuffer.initialize(0);
+    logInfo('[DirectFileWriter]', `Evidence FSA ready: ${fileName}`);
+  }
+
   private async initFileSystemAccess(fileName: string): Promise<void> {
     logDebug(
       '[DirectFileWriter]',
@@ -1040,7 +1073,6 @@ export class DirectFileWriter {
     if (packet.byteLength !== HEADER_SIZE + payloadLength) return 0;
     return payloadLength;
   }
-
 
   public async waitForIdle(): Promise<void> {
     await this.writeQueue;
@@ -1362,7 +1394,7 @@ export class DirectFileWriter {
   }
 
   private async emitPendingZeroByteZipEntries(zip: Zip64Stream): Promise<void> {
-    while (true) {
+    while (this.receiverZipFileIndex < (this.manifest.files?.length ?? 0)) {
       const fileMeta = this.manifest.files?.[this.receiverZipFileIndex];
       if (!fileMeta || fileMeta.size !== 0) return;
 
@@ -1581,9 +1613,11 @@ export class DirectFileWriter {
             throw new Error('File writer is locked and cannot be committed');
           }
 
-          const maybeTruncate = (fsWriter as unknown as {
-            truncate?: (size: number) => Promise<void>;
-          }).truncate;
+          const maybeTruncate = (
+            fsWriter as unknown as {
+              truncate?: (size: number) => Promise<void>;
+            }
+          ).truncate;
           if (typeof maybeTruncate === 'function') {
             await maybeTruncate.call(fsWriter, this.outputBytesWritten);
           }
