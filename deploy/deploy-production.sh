@@ -6,7 +6,7 @@ FRONTEND_DIR="$ROOT_DIR/PonsWarp"
 BACKEND_DIR="$ROOT_DIR/ponswarp-signaling-rs"
 REMOTE_HOST="${PONSWARP_DEPLOY_HOST:-pons-link}"
 REMOTE_DIR="${PONSWARP_DEPLOY_DIR:-/home/declan/ponswarp-deploy}"
-REMOTE_NETWORK="${PONSWARP_DOCKER_NETWORK:-ponslink-sfu_default}"
+REMOTE_NETWORK="${PONSWARP_DOCKER_NETWORK:-host}"
 PUBLIC_URL="${PONSWARP_PUBLIC_URL:-https://warp.ponslink.com}"
 PRODUCTION_ENV="$BACKEND_DIR/.env.production"
 
@@ -134,7 +134,11 @@ fi
 if [[ -n "$old_current" ]]; then old_port="$(sed -n 's/.*127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' "$old_current/backend.inc")"; [[ "$old_port" == 5502 || "$old_port" == 5503 ]] || { echo 'invalid active backend port' >&2; exit 1; }
 else old_port=5502; fi
 if [[ "$old_port" == 5502 ]]; then new_port=5503; else new_port=5502; fi
-[[ -z "$(docker ps -q --filter "publish=$new_port")" ]] || { echo "candidate port $new_port is already in use" >&2; exit 1; }
+if [[ "$NETWORK" == host ]]; then
+  [[ -z "$(ss -H -ltn "sport = :$new_port")" ]] || { echo "candidate port $new_port is already in use" >&2; exit 1; }
+else
+  [[ -z "$(docker ps -q --filter "publish=$new_port")" ]] || { echo "candidate port $new_port is already in use" >&2; exit 1; }
+fi
 activation="$REMOTE_DIR/activations/${RELEASE_ID}-$(date -u +%Y%m%d%H%M%S)-$$"; mkdir -p "$activation"
 ln -s "$release/static" "$activation/static"; printf '%s\n' "$RELEASE_ID" > "$activation/release.id"; printf 'set $ponswarp_backend http://127.0.0.1:%s;\n' "$new_port" > "$activation/backend.inc"
 if docker container inspect "$name" >/dev/null 2>&1; then
@@ -142,11 +146,23 @@ if docker container inspect "$name" >/dev/null 2>&1; then
   exit 1
 fi
 container_started=1
-docker run -d --name "$name" --restart unless-stopped --network "$NETWORK" --env-file "$release/.env.production" -e PONSWARP_ENV=production -p "127.0.0.1:${new_port}:5502" "$image_identity" >/dev/null
+docker_args=(-d --name "$name" --restart unless-stopped --network "$NETWORK" --env-file "$release/.env.production" -e PONSWARP_ENV=production)
+if [[ "$NETWORK" == host ]]; then
+  docker_args+=(-e "PORT=$new_port")
+else
+  docker_args+=(-p "127.0.0.1:${new_port}:5502")
+fi
+docker run "${docker_args[@]}" "$image_identity" >/dev/null
 for path in health ready; do for attempt in {1..30}; do curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${new_port}/$path" >/dev/null && break; sleep 1; done; curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${new_port}/$path" >/dev/null; done
 rm -f "$current.new"; ln -s "$activation" "$current.new"; mv -Tf "$current.new" "$current"; swapped=1
 nginx -t; nginx -s reload; smoke_public
-if [[ -n "$old_current" ]]; then old_container="$(docker ps -q --filter "publish=$old_port")"; while IFS= read -r cid; do [[ -z "$cid" ]] || docker rm -f "$cid" >/dev/null 2>&1 || true; done <<< "$old_container"; fi
+if [[ -n "$old_current" ]]; then
+  old_release_id="$(<"$old_current/release.id")"
+  old_container_name="ponswarp-signaling-$old_release_id"
+  docker rm -f "$old_container_name" >/dev/null 2>&1 || true
+else
+  docker rm -f ponswarp-signaling >/dev/null 2>&1 || true
+fi
 committed_success=1
 if [[ "$MODE" == rollback ]]; then printf 'rolled back to %s\n' "$RELEASE_ID"; else printf 'deployed release %s on port %s\n' "$RELEASE_ID" "$new_port"; fi
 REMOTE
