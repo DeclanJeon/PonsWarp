@@ -184,6 +184,8 @@ fi
 docker run "${docker_args[@]}" "$image_identity" >/dev/null
 for path in health ready; do for attempt in {1..30}; do curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${new_port}/$path" >/dev/null && break; sleep 1; done; curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${new_port}/$path" >/dev/null; done
 rm -f "$current.new"; ln -s "$activation" "$current.new"; mv -Tf "$current.new" "$current"; swapped=1
+install -m 0644 "$release/warp.ponslink.com.conf" /etc/nginx/sites-available/warp.ponslink.com
+ln -sfn /etc/nginx/sites-available/warp.ponslink.com /etc/nginx/sites-enabled/warp.ponslink.com
 nginx -t; nginx -s reload; smoke_public
 if [[ -n "$old_current" ]]; then
   old_release_id="$(<"$old_current/release.id")"
