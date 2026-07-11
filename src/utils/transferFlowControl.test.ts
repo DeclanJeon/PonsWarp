@@ -37,7 +37,7 @@ describe('transferFlowControl', () => {
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE
     );
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      12 * 1024 * 1024
+      4 * 1024 * 1024
     );
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
       4 * 1024 * 1024
@@ -55,24 +55,13 @@ describe('transferFlowControl', () => {
       receiverPauseHighBytes
     );
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThanOrEqual(
-      16 * 1024 * 1024
+      8 * 1024 * 1024
     );
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThanOrEqual(
       8 * 1024 * 1024
     );
   });
 
-  it('keeps a larger LAN window without changing internet-direct tuning', () => {
-    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.minInFlightBytes).toBe(
-      8 * 1024 * 1024
-    );
-    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(
-      16 * 1024 * 1024
-    );
-    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(
-      8 * 1024 * 1024
-    );
-  });
 
   it('keeps relay and unknown profiles conservative', () => {
     expect(selectTransferTuningProfile({ candidatePathKind: 'relay' })).toBe(
