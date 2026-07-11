@@ -14,9 +14,14 @@ import { TransferManifest } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
 import { shouldKeepReceiverReconnectAlive } from '../utils/mobileResumePolicy';
 
+import { lanEvidenceAdapter } from './lanEvidenceAdapter';
 export interface ReceiverServiceOptions {
   signaling?: ISignalingService;
-  peerFactory?: (peerId: string, initiator: boolean, config: PeerConfig) => SinglePeerConnection;
+  peerFactory?: (
+    peerId: string,
+    initiator: boolean,
+    config: PeerConfig
+  ) => SinglePeerConnection;
   writer?: IFileWriter;
   clock?: Pick<typeof globalThis, 'setTimeout' | 'clearTimeout'>;
   output?: { emit?: (event: { type: string; data: unknown }) => void };
@@ -69,8 +74,15 @@ export class ReceiverService {
   // 연결 관리
   private peer: SinglePeerConnection | null = null;
   private signalingService: ISignalingService | null = null;
-  private readonly peerFactory: (peerId: string, initiator: boolean, config: PeerConfig) => SinglePeerConnection;
-  private readonly clock: Pick<typeof globalThis, 'setTimeout' | 'clearTimeout'>;
+  private readonly peerFactory: (
+    peerId: string,
+    initiator: boolean,
+    config: PeerConfig
+  ) => SinglePeerConnection;
+  private readonly clock: Pick<
+    typeof globalThis,
+    'setTimeout' | 'clearTimeout'
+  >;
   private disposed = false;
   private readonly output?: ReceiverServiceOptions['output'];
   private roomId: string | null = null;
@@ -114,7 +126,10 @@ export class ReceiverService {
     this.emit('room-full', 'Room is currently occupied. Please wait.');
   };
   private readonly handleVisibilityChange = () => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+    if (
+      typeof document !== 'undefined' &&
+      document.visibilityState === 'visible'
+    ) {
       this.handlePageBecameActive();
     }
   };
@@ -123,7 +138,8 @@ export class ReceiverService {
     this.signalingService = options.signaling ?? null;
     this.peerFactory =
       options.peerFactory ??
-      ((peerId, initiator, config) => new SinglePeerConnection(peerId, initiator, config));
+      ((peerId, initiator, config) =>
+        new SinglePeerConnection(peerId, initiator, config));
     this.clock = options.clock ?? globalThis;
     this.output = options.output;
     this.writer = options.writer ?? null;
@@ -151,7 +167,8 @@ export class ReceiverService {
   };
 
   private setupPageLifecycleHandlers(): void {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    if (typeof window === 'undefined' || typeof document === 'undefined')
+      return;
 
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('pageshow', this.handlePageBecameActive);
@@ -159,12 +176,16 @@ export class ReceiverService {
   }
 
   private isPageHidden(): boolean {
-    return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    return (
+      typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    );
   }
 
   private getCurrentFileCount(): number {
     return (
-      this.currentManifest?.totalFiles ?? this.currentManifest?.files?.length ?? 0
+      this.currentManifest?.totalFiles ??
+      this.currentManifest?.files?.length ??
+      0
     );
   }
 
@@ -303,7 +324,9 @@ export class ReceiverService {
 
   public async setWriter(writerInstance: IFileWriter) {
     if (this.disposed) return;
-    this.writerCleanup = this.writer ? this.writer.cleanup() : Promise.resolve();
+    this.writerCleanup = this.writer
+      ? this.writer.cleanup()
+      : Promise.resolve();
     await this.writerCleanup;
     this.writer = writerInstance;
 
@@ -324,12 +347,33 @@ export class ReceiverService {
     });
 
     this.writer.onComplete(actualSize => {
-      if (this.completionEmitted) return;
-      this.completionEmitted = true;
-      this.isTransferActive = false;
-      this.isReconnecting = false;
-      this.emit('complete', { actualSize });
-      this.notifyDownloadComplete(actualSize);
+      void (async () => {
+        if (this.completionEmitted) return;
+        try {
+          if (lanEvidenceAdapter.enabled) {
+            await this.writer?.waitForIdle?.();
+            const expectedSha256 =
+              this.currentManifest?.files?.length === 1
+                ? this.currentManifest.files[0].checksum
+                : undefined;
+            await lanEvidenceAdapter.uploadSavedFileReadback({
+              artifactId: this.currentManifest?.transferId || 'transfer',
+              expectedSize: actualSize,
+              expectedSha256,
+            });
+          }
+          this.completionEmitted = true;
+          this.isTransferActive = false;
+          this.isReconnecting = false;
+          this.emit('complete', { actualSize });
+          this.notifyDownloadComplete(actualSize);
+        } catch (error) {
+          this.emit(
+            'error',
+            getErrorMessage(error, 'Evidence readback failed')
+          );
+        }
+      })();
     });
 
     this.writer.onError(err => this.emit('error', err));
@@ -388,6 +432,10 @@ export class ReceiverService {
       await this.writer.initStorage(manifest);
 
       debugLog('[Receiver] ✅ Storage ready. Sending TRANSFER_READY...');
+      await lanEvidenceAdapter.reportPhase('RECEIVER_READY', {
+        transferId: manifest.transferId,
+        totalBytes: manifest.totalSize,
+      });
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
       this.isTransferActive = true;
@@ -417,10 +465,15 @@ export class ReceiverService {
     if (this.disposed) return;
     this.disposed = true;
     logInfo('[Receiver]', 'Cleaning up resources (Full)...');
-    void this.resetState().catch(error => this.emit('error', getErrorMessage(error, 'Cleanup failed')));
+    void this.resetState().catch(error =>
+      this.emit('error', getErrorMessage(error, 'Cleanup failed'))
+    );
     this.removeSignalingHandlers();
     if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      document.removeEventListener(
+        'visibilitychange',
+        this.handleVisibilityChange
+      );
       window.removeEventListener('pageshow', this.handlePageBecameActive);
       window.removeEventListener('focus', this.handlePageBecameActive);
     }
@@ -441,7 +494,6 @@ export class ReceiverService {
       this.reconnectTimer = null;
     }
     this.clearReadyRetryTimers();
-
 
     if (this.peer) {
       this.peer.destroy();
@@ -467,9 +519,11 @@ export class ReceiverService {
     this.clearLifecycleTimers();
   }
 
-  private setTimeout(callback: () => void, delay: number): ReturnType<typeof setTimeout> {
-    let timer: ReturnType<typeof setTimeout>;
-    timer = this.clock.setTimeout(() => {
+  private setTimeout(
+    callback: () => void,
+    delay: number
+  ): ReturnType<typeof setTimeout> {
+    const timer = this.clock.setTimeout(() => {
       this.lifecycleTimers.delete(timer);
       callback();
     }, delay);
@@ -609,7 +663,11 @@ export class ReceiverService {
       if (data.type === 'answer') {
         this.ensureSignalingService().sendAnswer(this.roomId!, data, peer.id);
       } else if (data.candidate) {
-        this.ensureSignalingService().sendCandidate(this.roomId!, data, peer.id);
+        this.ensureSignalingService().sendCandidate(
+          this.roomId!,
+          data,
+          peer.id
+        );
       }
     });
 
@@ -672,7 +730,10 @@ export class ReceiverService {
     }
 
     this.isReconnecting = true;
-    if (!this.isPageHidden() || this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+    if (
+      !this.isPageHidden() ||
+      this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS
+    ) {
       this.reconnectAttempts++;
     }
     this.connectedPeerId = null;
@@ -846,35 +907,39 @@ export class ReceiverService {
         case 'KEEP_ALIVE':
           // 무시
           break;
-        case 'PARTITION': {
-          if (
-            typeof msg.offset !== 'number' ||
-            !Number.isFinite(msg.offset) ||
-            typeof msg.runId !== 'number' ||
-            !Number.isInteger(msg.runId)
-          ) {
-            break;
-          }
+        case 'PARTITION':
+          {
+            if (
+              typeof msg.offset !== 'number' ||
+              !Number.isFinite(msg.offset) ||
+              typeof msg.runId !== 'number' ||
+              !Number.isInteger(msg.runId)
+            ) {
+              break;
+            }
 
-          this.lastPartitionOffsetNeedingAck = msg.offset;
-          this.lastPartitionRunIdNeedingAck = msg.runId;
-          await this.writer?.waitForIdle?.();
-          if (this.peer && this.peer.connected) {
-            this.peer.send(
-              JSON.stringify({
-                type: 'PARTITION_ACK',
-                offset: msg.offset,
-                runId: msg.runId,
-              })
-            );
-            this.lastPartitionOffsetNeedingAck = null;
-            this.lastPartitionRunIdNeedingAck = null;
+            this.lastPartitionOffsetNeedingAck = msg.offset;
+            this.lastPartitionRunIdNeedingAck = msg.runId;
+            await this.writer?.waitForIdle?.();
+            if (this.peer && this.peer.connected) {
+              this.peer.send(
+                JSON.stringify({
+                  type: 'PARTITION_ACK',
+                  offset: msg.offset,
+                  runId: msg.runId,
+                })
+              );
+              this.lastPartitionOffsetNeedingAck = null;
+              this.lastPartitionRunIdNeedingAck = null;
+            }
           }
-        }
           break;
       }
     } catch (error) {
-      const message = getErrorMessage(error, 'Failed to handle control message');
+      const message = getErrorMessage(
+        error,
+        'Failed to handle control message'
+      );
       logError('[Receiver]', 'Control message handling failed:', error);
       this.emit('error', message);
     }

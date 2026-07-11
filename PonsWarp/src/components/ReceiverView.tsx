@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { transferService } from '../services/webRTCService';
 import { CONNECTION_TIMEOUT_MS } from '../utils/constants';
+import { lanEvidenceAdapter } from '../services/lanEvidenceAdapter';
 import { DirectFileWriter } from '../services/directFileWriter';
 import { formatBytes } from '../utils/fileUtils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -466,6 +467,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
         if (!isMountedRef.current) {
           debugLog('[ReceiverView] Component unmounted, cleaning up...');
           transferService.cleanup();
+          void lanEvidenceAdapter.release();
         }
       }, 100);
     };
@@ -503,8 +505,13 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       );
 
       const writer = new DirectFileWriter();
-
-      // 서비스에 Writer 주입
+      const fileName =
+        manifest.totalFiles === 1
+          ? manifest.files[0].path.split('/').pop() || 'download'
+          : `${manifest.rootName || 'download'}.zip`;
+      const evidenceHandle =
+        await lanEvidenceAdapter.pickReceiverSaveHandle(fileName);
+      writer.setEvidenceFsaHandleContext(evidenceHandle);
       transferService.setWriter(writer);
 
       // 🚨 [핵심] 수신 시작 - 이 함수가 완료되어야 TRANSFER_READY가 전송됨

@@ -6,7 +6,10 @@ const signalingService = vi.hoisted(() => ({
   off: vi.fn(),
   connect: vi.fn(async () => undefined),
   joinRoom: vi.fn(async () => undefined),
-  requestTurnConfig: vi.fn(async () => ({ success: true, data: { iceServers: [] } })),
+  requestTurnConfig: vi.fn(async () => ({
+    success: true,
+    data: { iceServers: [] },
+  })),
   getSocketId: vi.fn(() => 'sender-socket'),
   reconnect: vi.fn(async () => undefined),
 }));
@@ -14,7 +17,6 @@ const signalingService = vi.hoisted(() => ({
 vi.mock('./signaling-factory', () => ({
   getSignalingService: () => signalingService,
 }));
-
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -149,7 +151,6 @@ describe('SwarmManager guard paths', () => {
     ]);
   });
 
-
   it('rejects non-finite receiver download sizes', async () => {
     const { SwarmManager } = await import('./swarmManager');
     const manager = new SwarmManager();
@@ -195,7 +196,6 @@ describe('SwarmManager guard paths', () => {
     ]);
   });
 
-
   it('rejects incomplete receiver download sizes for exact-size manifests', async () => {
     const { SwarmManager } = await import('./swarmManager');
     const manager = new SwarmManager();
@@ -225,10 +225,7 @@ describe('SwarmManager guard paths', () => {
     const waiter = { runId: 1, peers: new Set(['peer-1']) };
     const managerInternals = manager as unknown as {
       transferRunId: number;
-      partitionAckWaiters: Map<
-        number,
-        { runId: number; peers: Set<string> }
-      >;
+      partitionAckWaiters: Map<number, { runId: number; peers: Set<string> }>;
       partitionAckCount: number;
       handleControlMessage(
         peerId: string,
@@ -263,7 +260,6 @@ describe('SwarmManager guard paths', () => {
     expect(managerInternals.partitionAckWaiters.has(4096)).toBe(false);
     expect(managerInternals.partitionAckCount).toBe(1);
   });
-
 
   it('encrypts partitioned data packets when sender encryption is enabled', async () => {
     const { SwarmManager } = await import('./swarmManager');
@@ -313,13 +309,15 @@ describe('SwarmManager guard paths', () => {
     manager.setSessionKey(sessionKey, randomPrefix);
 
     const payload = new TextEncoder().encode('receiver-webcrypto-check');
-    const packet = await (manager as unknown as {
-      createPartitionDataPacket(params: {
-        payload: ArrayBuffer;
-        sequence: number;
-        offset: number;
-      }): Promise<ArrayBuffer>;
-    }).createPartitionDataPacket({
+    const packet = await (
+      manager as unknown as {
+        createPartitionDataPacket(params: {
+          payload: ArrayBuffer;
+          sequence: number;
+          offset: number;
+        }): Promise<ArrayBuffer>;
+      }
+    ).createPartitionDataPacket({
       payload: payload.buffer.slice(
         payload.byteOffset,
         payload.byteOffset + payload.byteLength
@@ -330,9 +328,11 @@ describe('SwarmManager guard paths', () => {
 
     const writer = new DirectFileWriter();
     writer.setEncryptionKey(sessionKey, randomPrefix);
-    const normalized = await (writer as unknown as {
-      normalizePacket(packet: ArrayBuffer): Promise<ArrayBuffer>;
-    }).normalizePacket(packet);
+    const normalized = await (
+      writer as unknown as {
+        normalizePacket(packet: ArrayBuffer): Promise<ArrayBuffer>;
+      }
+    ).normalizePacket(packet);
 
     const view = new DataView(normalized);
     const normalizedPayload = new Uint8Array(normalized, 22);
@@ -353,9 +353,11 @@ describe('SwarmManager guard paths', () => {
     view.setUint32(14, 3, true);
     bytes.set([1, 2, 3], 22);
 
-    const normalized = await (writer as unknown as {
-      normalizePacket(packet: ArrayBuffer): Promise<ArrayBuffer>;
-    }).normalizePacket(packet);
+    const normalized = await (
+      writer as unknown as {
+        normalizePacket(packet: ArrayBuffer): Promise<ArrayBuffer>;
+      }
+    ).normalizePacket(packet);
 
     expect(normalized).toBe(packet);
   });
@@ -415,7 +417,8 @@ describe('SwarmManager guard paths', () => {
       }),
     };
     writerInternals.writerMode = 'streamsaver';
-    writerInternals.onCompleteCallback = actualSize => completed.push(actualSize);
+    writerInternals.onCompleteCallback = actualSize =>
+      completed.push(actualSize);
     writerInternals.onErrorCallback = error => failures.push(error);
 
     await expect(writerInternals.finalize()).rejects.toThrow(
@@ -440,7 +443,8 @@ describe('SwarmManager guard paths', () => {
       close: vi.fn(async () => undefined),
     };
     writerInternals.writerMode = 'file-system-access';
-    writerInternals.onCompleteCallback = actualSize => completed.push(actualSize);
+    writerInternals.onCompleteCallback = actualSize =>
+      completed.push(actualSize);
 
     await expect(writerInternals.finalize()).rejects.toThrow(
       'File writer is locked'
@@ -475,7 +479,8 @@ describe('SwarmManager guard paths', () => {
     };
     writerInternals.writer = { close: vi.fn(async () => undefined) };
     writerInternals.writerMode = 'streamsaver';
-    writerInternals.onCompleteCallback = actualSize => completed.push(actualSize);
+    writerInternals.onCompleteCallback = actualSize =>
+      completed.push(actualSize);
 
     await writerInternals.finalize();
 
@@ -511,6 +516,76 @@ describe('SwarmManager guard paths', () => {
     expect(managerInternals.sendWindowWaiters.size).toBe(0);
     expect(waiter).toHaveBeenCalledOnce();
   });
+  it('exposes the current generation and rejects a binding from the invalidated generation', async () => {
+    const { SwarmManager } = await import('./swarmManager');
+    const manager = new SwarmManager();
+    const before = manager.getTransferGeneration();
+    expect(
+      manager.setPipelineCertificateBinding({
+        generation: before,
+        certificateId: '00000000-0000-4000-8000-000000000000',
+        expiresAtMs: Date.now() + 60_000,
+        runId: before,
+        certificateDigest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        armDigest: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      })
+    ).toBe(true);
+    manager.cleanup();
+    const after = manager.getTransferGeneration();
+    expect(after).toBe(before + 1);
+    expect(
+      manager.setPipelineCertificateBinding({
+        generation: before,
+        certificateId: '00000000-0000-4000-8000-000000000001',
+        expiresAtMs: Date.now() + 60_000,
+        runId: before,
+        certificateDigest: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        armDigest: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      })
+    ).toBe(false);
+    expect(
+      manager.setPipelineCertificateBinding({
+        generation: after,
+        certificateId: '00000000-0000-4000-8000-000000000002',
+        expiresAtMs: Date.now() + 60_000,
+        runId: after,
+        certificateDigest: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        armDigest: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+      })
+    ).toBe(true);
+  });
+  it('fails closed when a second host-route sample is unavailable', async () => {
+    const { SwarmManager } = await import('./swarmManager');
+    const manager = new SwarmManager();
+    const internals = manager as unknown as {
+      awaitStableHostPipeline(runId: number): Promise<boolean>;
+      transferRunId: number;
+      isTransferring: boolean;
+      pipelineCertificateVerified: boolean;
+      pipelineCertificateBinding: {
+        generation: number;
+        runId: number;
+        certificateId: string;
+        certificateDigest: string;
+        armDigest: string;
+        expiresAtMs: number;
+      } | null;
+      hostRouteSamples: unknown[];
+    };
+    internals.transferRunId = 4;
+    internals.isTransferring = true;
+    internals.pipelineCertificateVerified = true;
+    internals.pipelineCertificateBinding = {
+      generation: 4,
+      runId: 4,
+      certificateId: '00000000-0000-4000-8000-000000000003',
+      certificateDigest: '1111111111111111111111111111111111111111111111111111111111111111',
+      armDigest: '2222222222222222222222222222222222222222222222222222222222222222',
+      expiresAtMs: Date.now() + 60_000,
+    };
+    internals.hostRouteSamples = [];
+    await expect(internals.awaitStableHostPipeline(4)).resolves.toBe(false);
+  });
 
   it('counts queued writer payload bytes before the write task executes and pauses immediately', async () => {
     const { DirectFileWriter } = await import('./directFileWriter');
@@ -534,7 +609,9 @@ describe('SwarmManager guard paths', () => {
     });
     writerInternals.onFlowControl(action => flowActions.push(action));
 
-    const pendingWrite = writerInternals.writeChunk(packet).catch(() => undefined);
+    const pendingWrite = writerInternals
+      .writeChunk(packet)
+      .catch(() => undefined);
 
     expect(flowActions).toEqual(['PAUSE']);
     expect(writerInternals.pendingBytesInBuffer).toBe(32 * 1024 * 1024);
@@ -556,7 +633,10 @@ describe('SwarmManager guard paths', () => {
     vi.stubGlobal('navigator', { userAgent: 'Firefox' });
     vi.stubGlobal('window', { showSaveFilePicker });
     vi.stubGlobal('document', { createElement: vi.fn() });
-    vi.stubGlobal('URL', { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(),
+      revokeObjectURL: vi.fn(),
+    });
 
     const writer = new DirectFileWriter();
 
@@ -680,7 +760,9 @@ describe('SwarmManager guard paths', () => {
         sentMessages.push(JSON.parse(message));
       },
     };
-    receiverInternals.writer = { requestResumeFromCurrentOffset: requestResume };
+    receiverInternals.writer = {
+      requestResumeFromCurrentOffset: requestResume,
+    };
     receiverInternals.lastPartitionOffsetNeedingAck = 1024;
     receiverInternals.lastPartitionRunIdNeedingAck = 3;
 

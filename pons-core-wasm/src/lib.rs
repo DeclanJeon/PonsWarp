@@ -8,6 +8,7 @@ mod file_signature;
 mod merkle_tree;
 mod packet;
 mod reordering_buffer;
+mod sha256_stream;
 mod zero_copy_pool;
 pub mod zip64;
 
@@ -21,6 +22,7 @@ pub use file_signature::*;
 pub use merkle_tree::*;
 pub use packet::*;
 pub use reordering_buffer::*;
+pub use sha256_stream::Sha256Stream;
 pub use zero_copy_pool::*;
 pub use zip64::Zip64Stream;
 

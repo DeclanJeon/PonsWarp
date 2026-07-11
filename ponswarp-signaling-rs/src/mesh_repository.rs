@@ -213,13 +213,24 @@ impl MeshRepository for InMemoryMeshRepository {
         _created_at: u64,
     ) -> BoxFuture<'_, Result<MeshNode>> {
         async move {
-            let _guard = self.state.node_registration_lock.lock().expect("node registration lock poisoned");
-            self.state.nodes.insert((node.workspace_id.clone(), node.node_id.clone()), node.clone());
+            let _guard = self
+                .state
+                .node_registration_lock
+                .lock()
+                .expect("node registration lock poisoned");
+            self.state.nodes.insert(
+                (node.workspace_id.clone(), node.node_id.clone()),
+                node.clone(),
+            );
             if let Some(token_hash) = token_hash {
-                self.state.node_tokens.insert((node.workspace_id.clone(), node.node_id.clone()), token_hash);
+                self.state.node_tokens.insert(
+                    (node.workspace_id.clone(), node.node_id.clone()),
+                    token_hash,
+                );
             }
             Ok(node)
-        }.boxed()
+        }
+        .boxed()
     }
     fn register_node_with_token_and_audit(
         &self,
@@ -229,14 +240,25 @@ impl MeshRepository for InMemoryMeshRepository {
         event: MeshEvent,
     ) -> BoxFuture<'_, Result<MeshNode>> {
         async move {
-            let _guard = self.state.node_registration_lock.lock().expect("node registration lock poisoned");
-            self.state.nodes.insert((node.workspace_id.clone(), node.node_id.clone()), node.clone());
+            let _guard = self
+                .state
+                .node_registration_lock
+                .lock()
+                .expect("node registration lock poisoned");
+            self.state.nodes.insert(
+                (node.workspace_id.clone(), node.node_id.clone()),
+                node.clone(),
+            );
             if let Some(token_hash) = token_hash {
-                self.state.node_tokens.insert((node.workspace_id.clone(), node.node_id.clone()), token_hash);
+                self.state.node_tokens.insert(
+                    (node.workspace_id.clone(), node.node_id.clone()),
+                    token_hash,
+                );
             }
             self.state.events.insert(event.event_id.clone(), event);
             Ok(node)
-        }.boxed()
+        }
+        .boxed()
     }
 
     fn issue_node_token_hash(
@@ -450,25 +472,46 @@ impl MeshRepository for InMemoryMeshRepository {
         event: MeshEvent,
     ) -> BoxFuture<'_, Result<MeshQuotaResult<MeshFile>>> {
         async move {
-            let lock = self.state.quota_locks.entry(file.workspace_id.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+            let lock = self
+                .state
+                .quota_locks
+                .entry(file.workspace_id.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone();
             let _guard = lock.lock().expect("workspace quota lock poisoned");
-            if !self.state.files.contains_key(&(file.workspace_id.clone(), file.file_id.clone())) {
-                let current = self.state.files.iter().filter(|entry| entry.key().0 == file.workspace_id).count();
+            if !self
+                .state
+                .files
+                .contains_key(&(file.workspace_id.clone(), file.file_id.clone()))
+            {
+                let current = self
+                    .state
+                    .files
+                    .iter()
+                    .filter(|entry| entry.key().0 == file.workspace_id)
+                    .count();
                 if current >= quota {
                     return Ok(MeshQuotaResult::Exceeded { current, quota });
                 }
             }
-            self.state.files.insert((file.workspace_id.clone(), file.file_id.clone()), file.clone());
+            self.state.files.insert(
+                (file.workspace_id.clone(), file.file_id.clone()),
+                file.clone(),
+            );
             if let Some(availability) = availability {
                 self.state.availability.insert(
-                    (availability.workspace_id.clone(), availability.file_id.clone(), availability.node_id.clone()),
+                    (
+                        availability.workspace_id.clone(),
+                        availability.file_id.clone(),
+                        availability.node_id.clone(),
+                    ),
                     availability,
                 );
             }
             self.state.events.insert(event.event_id.clone(), event);
             Ok(MeshQuotaResult::Created(file))
-        }.boxed()
+        }
+        .boxed()
     }
 
     fn create_share_with_quota(
@@ -512,20 +555,32 @@ impl MeshRepository for InMemoryMeshRepository {
         event: MeshEvent,
     ) -> BoxFuture<'_, Result<MeshQuotaResult<MeshShare>>> {
         async move {
-            let _guard = self.state.share_creation_lock.lock().expect("share creation lock poisoned");
+            let _guard = self
+                .state
+                .share_creation_lock
+                .lock()
+                .expect("share creation lock poisoned");
             if self.state.shares.contains_key(&share.code) {
                 return Ok(MeshQuotaResult::Conflict);
             }
-            let current = self.state.shares.iter().filter(|entry| {
-                entry.workspace_id == share.workspace_id && entry.revoked_at.is_none() && entry.expires_at > now
-            }).count();
+            let current = self
+                .state
+                .shares
+                .iter()
+                .filter(|entry| {
+                    entry.workspace_id == share.workspace_id
+                        && entry.revoked_at.is_none()
+                        && entry.expires_at > now
+                })
+                .count();
             if current >= quota {
                 return Ok(MeshQuotaResult::Exceeded { current, quota });
             }
             self.state.shares.insert(share.code.clone(), share.clone());
             self.state.events.insert(event.event_id.clone(), event);
             Ok(MeshQuotaResult::Created(share))
-        }.boxed()
+        }
+        .boxed()
     }
 
     fn get_file(
@@ -591,7 +646,11 @@ impl MeshRepository for InMemoryMeshRepository {
     ) -> BoxFuture<'_, Result<Option<MeshShare>>> {
         let code = code.to_string();
         async move {
-            let _guard = self.state.share_creation_lock.lock().expect("share creation lock poisoned");
+            let _guard = self
+                .state
+                .share_creation_lock
+                .lock()
+                .expect("share creation lock poisoned");
             let Some(mut share) = self.state.shares.get_mut(&code) else {
                 return Ok(None);
             };
@@ -599,7 +658,8 @@ impl MeshRepository for InMemoryMeshRepository {
             let share = share.clone();
             self.state.events.insert(event.event_id.clone(), event);
             Ok(Some(share))
-        }.boxed()
+        }
+        .boxed()
     }
 
     fn record_event(&self, event: MeshEvent) -> BoxFuture<'_, Result<MeshEvent>> {
@@ -1015,7 +1075,13 @@ impl MeshRepository for PostgresMeshRepository {
             Ok(MeshQuotaResult::Created(file))
         }.boxed()
     }
-    fn publish_file_with_availability_and_audit(&self, file: MeshFile, availability: Option<MeshAvailability>, quota: usize, event: MeshEvent) -> BoxFuture<'_, Result<MeshQuotaResult<MeshFile>>> {
+    fn publish_file_with_availability_and_audit(
+        &self,
+        file: MeshFile,
+        availability: Option<MeshAvailability>,
+        quota: usize,
+        event: MeshEvent,
+    ) -> BoxFuture<'_, Result<MeshQuotaResult<MeshFile>>> {
         async move {
             let mut tx = self.pool.begin().await?;
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))").bind(&file.workspace_id).execute(&mut *tx).await?;
@@ -1077,7 +1143,13 @@ impl MeshRepository for PostgresMeshRepository {
         }
         .boxed()
     }
-    fn create_share_with_quota_and_audit(&self, share: MeshShare, quota: usize, now: u64, event: MeshEvent) -> BoxFuture<'_, Result<MeshQuotaResult<MeshShare>>> {
+    fn create_share_with_quota_and_audit(
+        &self,
+        share: MeshShare,
+        quota: usize,
+        now: u64,
+        event: MeshEvent,
+    ) -> BoxFuture<'_, Result<MeshQuotaResult<MeshShare>>> {
         async move {
             let mut tx = self.pool.begin().await?;
             sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))").bind(&share.workspace_id).execute(&mut *tx).await?;
@@ -1137,7 +1209,12 @@ impl MeshRepository for PostgresMeshRepository {
             row.as_ref().map(share_from_row).transpose()
         }.boxed()
     }
-    fn revoke_share_with_audit(&self, code: &str, revoked_at: u64, event: MeshEvent) -> BoxFuture<'_, Result<Option<MeshShare>>> {
+    fn revoke_share_with_audit(
+        &self,
+        code: &str,
+        revoked_at: u64,
+        event: MeshEvent,
+    ) -> BoxFuture<'_, Result<Option<MeshShare>>> {
         let code = code.to_string();
         async move {
             let mut tx = self.pool.begin().await?;

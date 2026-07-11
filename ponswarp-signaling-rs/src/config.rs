@@ -17,6 +17,9 @@ pub struct Config {
     pub host: String,
     #[allow(dead_code)]
     pub cors_origins: Vec<String>,
+    pub lan_evidence_mode: bool,
+    pub lan_evidence_ws_origins: Vec<CanonicalOrigin>,
+    lan_evidence_mode_error: Option<String>,
     pub database: DatabaseConfig,
     pub auth: AuthConfig,
     pub admin: AdminConfig,
@@ -26,6 +29,38 @@ pub struct Config {
     pub cloud: CloudConfig,
     pub mesh: MeshConfig,
     pub log_level: String,
+}
+/// A strictly canonical origin used by the LAN evidence WebSocket allowlist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalOrigin(String);
+
+impl CanonicalOrigin {
+    pub fn parse(value: &str) -> Result<Self> {
+        let value = value;
+        let prefix = "http://localhost:";
+        if !value.starts_with(prefix) {
+            bail!("LAN_EVIDENCE_WS_ORIGINS must contain canonical http://localhost:<port> origins");
+        }
+        let port = &value[prefix.len()..];
+        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+            bail!("LAN_EVIDENCE_WS_ORIGINS contains an invalid localhost port");
+        }
+        let port: u16 = port
+            .parse()
+            .context("LAN_EVIDENCE_WS_ORIGINS port is out of range")?;
+        if !(1024..=65535).contains(&port) {
+            bail!("LAN_EVIDENCE_WS_ORIGINS ports must be in 1024..=65535");
+        }
+        let canonical = format!("{prefix}{port}");
+        if value != canonical {
+            bail!("LAN_EVIDENCE_WS_ORIGINS origin is not canonical: {value}");
+        }
+        Ok(Self(canonical))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// 관리자 접근 설정.
@@ -224,6 +259,30 @@ impl Config {
                     && !r2_access_key.is_empty()
                     && !r2_secret_key.is_empty()
             });
+        let lan_evidence_mode_error =
+            env::var("LAN_EVIDENCE_MODE")
+                .ok()
+                .and_then(|value| match value.as_str() {
+                    "true" | "false" => None,
+                    _ => Some(format!(
+                        "LAN_EVIDENCE_MODE must be exactly true or false, got {value:?}"
+                    )),
+                });
+        let lan_evidence_mode = env::var("LAN_EVIDENCE_MODE")
+            .map(|value| value == "true")
+            .unwrap_or(false);
+        let lan_evidence_ws_origins = if lan_evidence_mode {
+            env::var("LAN_EVIDENCE_WS_ORIGINS")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|origin| !origin.trim().is_empty())
+                .map(|origin| {
+                    CanonicalOrigin::parse(origin).unwrap_or_else(|error| panic!("{error}"))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         Self {
             port: env::var("PORT")
@@ -236,6 +295,9 @@ impl Config {
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect(),
+            lan_evidence_mode,
+            lan_evidence_ws_origins,
+            lan_evidence_mode_error,
             database: DatabaseConfig {
                 url: env::var("DATABASE_URL")
                     .or_else(|_| env::var("POSTGRES_URL"))
@@ -499,6 +561,12 @@ impl Config {
         {
             bail!("PONSWARP_MESH_ENABLED=true with PONSWARP_MESH_STORAGE=postgres requires PONSWARP_MESH_ADMIN_TOKEN with at least 32 characters");
         }
+        if let Some(error) = &self.lan_evidence_mode_error {
+            bail!("{error}");
+        }
+        if self.lan_evidence_mode {
+            validate_evidence_origins(&self.lan_evidence_ws_origins)?;
+        }
         Ok(())
     }
 }
@@ -516,6 +584,9 @@ impl Config {
             port: 5502,
             host: "127.0.0.1".into(),
             cors_origins: vec![],
+            lan_evidence_mode: false,
+            lan_evidence_ws_origins: vec![],
+            lan_evidence_mode_error: None,
             database: DatabaseConfig {
                 url: String::new(),
                 max_connections: 5,
@@ -668,10 +739,52 @@ pub fn cors_layer(config: &Config) -> Result<CorsLayer> {
         .allow_credentials(true))
 }
 
+fn validate_evidence_origins(origins: &[CanonicalOrigin]) -> Result<()> {
+    if origins.len() != 2 {
+        bail!("LAN_EVIDENCE_WS_ORIGINS must contain exactly two origins");
+    }
+    if origins[0] == origins[1] {
+        bail!("LAN_EVIDENCE_WS_ORIGINS origins must be unique");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn evidence_origin_parser_accepts_only_canonical_localhost_origins() {
+        assert!(CanonicalOrigin::parse("http://localhost:4173").is_ok());
+        for invalid in [
+            "http://localhost:4173/",
+            "https://localhost:4173",
+            "http://127.0.0.1:4173",
+            "http://localhost:80",
+            "http://localhost:4173?x=1",
+            "*",
+        ] {
+            assert!(CanonicalOrigin::parse(invalid).is_err(), "{invalid}");
+        }
+    }
+    #[test]
+    fn evidence_mode_value_validation_rejects_typos() {
+        let mut config = Config::minimal_for_test();
+        config.lan_evidence_mode_error = Some("invalid".into());
+        assert!(config.validate().is_err());
+        config.lan_evidence_mode_error = None;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn evidence_origin_validation_requires_two_unique_origins() {
+        let first = CanonicalOrigin::parse("http://localhost:4173").unwrap();
+        let second = CanonicalOrigin::parse("http://localhost:4174").unwrap();
+        assert!(validate_evidence_origins(&[first.clone(), second]).is_ok());
+        assert!(validate_evidence_origins(&[]).is_err());
+        assert!(validate_evidence_origins(&[first.clone()]).is_err());
+        assert!(validate_evidence_origins(&[first.clone(), first]).is_err());
+    }
     #[test]
     fn mesh_defaults_are_disabled_without_environment_dependency() {
         let mesh = MeshConfig::default();

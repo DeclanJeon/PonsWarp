@@ -396,7 +396,8 @@ pub async fn register_node(
         payload: json!({ "nodeId": req.node_id, "tokenId": token_id }),
         created_at: now,
     };
-    let node = match state.mesh_repository
+    let node = match state
+        .mesh_repository
         .register_node_with_token_and_audit(node, token_hash, now, audit_event)
         .await
     {
@@ -1276,7 +1277,11 @@ pub async fn revoke_share(
         payload: json!({ "fileId": existing_share.file_id, "createdByNodeId": existing_share.created_by_node_id }),
         created_at: now,
     };
-    let Some(share) = (match state.mesh_repository.revoke_share_with_audit(&code, now, audit_event).await {
+    let Some(share) = (match state
+        .mesh_repository
+        .revoke_share_with_audit(&code, now, audit_event)
+        .await
+    {
         Ok(share) => share,
         Err(error) => return repository_error_response(error),
     }) else {
@@ -1489,11 +1494,7 @@ async fn authorize_node_owned_action(
     }
 }
 
-fn authenticated_mesh_rate_limit_subject(
-    workspace_id: &str,
-    route: &str,
-    actor: &Actor,
-) -> String {
+fn authenticated_mesh_rate_limit_subject(workspace_id: &str, route: &str, actor: &Actor) -> String {
     let identity = match actor {
         Actor::Anonymous { ip_hash } => format!("anonymous:{ip_hash}"),
         Actor::User {
@@ -1630,11 +1631,7 @@ async fn authorize_workspace_or_node_action(
             Json(json!({ "error": "mesh_forbidden" })),
         ));
     }
-    let Some(node) = (match state
-        .mesh_repository
-        .get_node(workspace_id, &node_id)
-        .await
-    {
+    let Some(node) = (match state.mesh_repository.get_node(workspace_id, &node_id).await {
         Ok(node) => node,
         Err(_) => {
             return Err((
@@ -1877,7 +1874,6 @@ fn active_share(state: &AppState, code: &str) -> Option<MeshShare> {
     }
     Some(share)
 }
-
 
 fn generate_share_code() -> String {
     let raw = uuid::Uuid::new_v4().simple().to_string();

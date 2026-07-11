@@ -1,12 +1,12 @@
 //! PonsWarp Rust 시그널링 서버
 
 use anyhow::{Context, Result};
-use axum::http::StatusCode;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
         State, WebSocketUpgrade,
     },
+    http::{header::ORIGIN, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
@@ -26,6 +26,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Config::from_env();
+    config.validate()?;
     if !config.mesh.enabled {
         tracing::warn!(
             "PONSWARP_MESH_ENABLED=false; mesh coordinator routes will report disabled readiness"
@@ -199,8 +200,41 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
     )
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn ws_handler(
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if !ws_origin_allowed(
+        headers.get(ORIGIN),
+        state.config.lan_evidence_mode,
+        &state.config.lan_evidence_ws_origins,
+        &state.config.cors_origins,
+    ) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
+}
+
+fn ws_origin_allowed(
+    origin: Option<&axum::http::HeaderValue>,
+    evidence_mode: bool,
+    evidence_origins: &[ponswarp_signaling_rs::config::CanonicalOrigin],
+    cors_origins: &[String],
+) -> bool {
+    let Some(origin) = origin.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    if evidence_mode {
+        return evidence_origins
+            .iter()
+            .any(|allowed| allowed.as_str() == origin);
+    }
+    cors_origins.iter().any(|allowed| {
+        let allowed = allowed.trim();
+        allowed == "*" || allowed == origin
+    })
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
@@ -337,5 +371,61 @@ async fn handle_client_message(
                     .as_secs(),
             });
         }
+    }
+}
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    use ponswarp_signaling_rs::config::CanonicalOrigin;
+
+    fn header(value: &str) -> axum::http::HeaderValue {
+        axum::http::HeaderValue::from_str(value).unwrap()
+    }
+
+    #[test]
+    fn evidence_mode_allows_only_the_two_exact_origins() {
+        let allowed = vec![
+            CanonicalOrigin::parse("http://localhost:4173").unwrap(),
+            CanonicalOrigin::parse("http://localhost:4174").unwrap(),
+        ];
+        for origin in ["http://localhost:4173", "http://localhost:4174"] {
+            assert!(ws_origin_allowed(
+                Some(&header(origin)),
+                true,
+                &allowed,
+                &[]
+            ));
+        }
+        for origin in [
+            "https://warp.ponslink.com",
+            "http://localhost:4175",
+            "http://127.0.0.1:4173",
+            "*",
+        ] {
+            assert!(!ws_origin_allowed(
+                Some(&header(origin)),
+                true,
+                &allowed,
+                &[]
+            ));
+        }
+        assert!(!ws_origin_allowed(None, true, &allowed, &[]));
+    }
+
+    #[test]
+    fn normal_mode_keeps_configured_production_origin() {
+        let cors = vec!["https://warp.ponslink.com".to_string()];
+        assert!(ws_origin_allowed(
+            Some(&header("https://warp.ponslink.com")),
+            false,
+            &[],
+            &cors
+        ));
+        assert!(!ws_origin_allowed(
+            Some(&header("http://localhost:4173")),
+            false,
+            &[],
+            &cors
+        ));
     }
 }

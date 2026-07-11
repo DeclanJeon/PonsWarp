@@ -33,12 +33,14 @@ export interface PeerState {
 }
 
 type CandidateStats = {
+  id?: string;
   candidateType?: string;
   protocol?: string;
   relayProtocol?: string;
 };
 
 type CandidatePairStats = {
+  id?: string;
   type?: string;
   selected?: boolean;
   nominated?: boolean;
@@ -258,7 +260,7 @@ export class SinglePeerConnection {
         const pair = value as CandidatePairStats;
         if (pair.type !== 'candidate-pair') return;
 
-        if (pair.selected) {
+        if (pair.selected === true) {
           selectedPair = pair;
           return;
         }
@@ -276,22 +278,32 @@ export class SinglePeerConnection {
 
       const localCandidate = selectedPair.localCandidateId
         ? (stats.get(selectedPair.localCandidateId) as
-            | CandidateStats
-            | undefined)
+            CandidateStats | undefined)
         : undefined;
       const remoteCandidate = selectedPair.remoteCandidateId
         ? (stats.get(selectedPair.remoteCandidateId) as
-            | CandidateStats
-            | undefined)
+            CandidateStats | undefined)
         : undefined;
-
-      const candidatePathKind = this.normalizeCandidatePath(
-        localCandidate?.candidateType,
-        remoteCandidate?.candidateType
-      );
+      const succeeded =
+        selectedPair.selected === true ||
+        (selectedPair.nominated === true && selectedPair.state === 'succeeded');
+      const tuple = {
+        selectedPairId: selectedPair.id ?? null,
+        localCandidateId: selectedPair.localCandidateId ?? null,
+        remoteCandidateId: selectedPair.remoteCandidateId ?? null,
+        localCandidateType: localCandidate?.candidateType ?? null,
+        remoteCandidateType: remoteCandidate?.candidateType ?? null,
+        localProtocol: localCandidate?.protocol?.toLowerCase() ?? null,
+        remoteProtocol: remoteCandidate?.protocol?.toLowerCase() ?? null,
+        selectedOrNominatedSucceeded: succeeded,
+        sampledAtMs: Date.now(),
+      };
 
       return {
-        candidatePathKind,
+        candidatePathKind: this.normalizeCandidatePath(
+          localCandidate?.candidateType,
+          remoteCandidate?.candidateType
+        ),
         protocol: localCandidate?.protocol ?? remoteCandidate?.protocol ?? null,
         relayProtocol:
           localCandidate?.relayProtocol ??
@@ -302,6 +314,7 @@ export class SinglePeerConnection {
           selectedPair.availableOutgoingBitrate
         ),
         bufferedAmountBytes: this.getBufferedAmount(),
+        candidateTuple: tuple,
       };
     } catch {
       return fallback;
@@ -316,6 +329,7 @@ export class SinglePeerConnection {
       rttMs: null,
       availableOutgoingBitrateBps: null,
       bufferedAmountBytes: this.getBufferedAmount(),
+      candidateTuple: null,
     };
   }
 
