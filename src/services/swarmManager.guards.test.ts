@@ -7,6 +7,8 @@ const signalingService = vi.hoisted(() => ({
   connect: vi.fn(async () => undefined),
   joinRoom: vi.fn(async () => undefined),
   requestTurnConfig: vi.fn(async () => ({ success: true, data: { iceServers: [] } })),
+  getSocketId: vi.fn(() => 'sender-socket'),
+  reconnect: vi.fn(async () => undefined),
 }));
 
 vi.mock('./signaling-factory', () => ({
@@ -18,6 +20,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   signalingService.requestTurnConfig.mockReset();
+  signalingService.connect.mockReset();
+  signalingService.connect.mockResolvedValue(undefined);
+  signalingService.joinRoom.mockReset();
+  signalingService.joinRoom.mockResolvedValue(undefined);
+  signalingService.getSocketId.mockReset();
+  signalingService.getSocketId.mockReturnValue('sender-socket');
+  signalingService.reconnect.mockReset();
+  signalingService.reconnect.mockResolvedValue(undefined);
   signalingService.requestTurnConfig.mockResolvedValue({
     success: true,
     data: { iceServers: [] },
@@ -45,6 +55,44 @@ function createManifest(totalSize: number): TransferManifest {
 }
 
 describe('SwarmManager guard paths', () => {
+  it('rejoins the active room after signaling reconnects', async () => {
+    const { SwarmManager } = await import('./swarmManager');
+    const manager = new SwarmManager({ signaling: signalingService as never });
+    const managerInternals = manager as unknown as {
+      roomId: string;
+      signalingRecoveryPromise: Promise<void> | null;
+      handleSignalingConnected(): void;
+    };
+    managerInternals.roomId = 'ABC123';
+
+    managerInternals.handleSignalingConnected();
+    await managerInternals.signalingRecoveryPromise;
+
+    expect(signalingService.requestTurnConfig).toHaveBeenCalledWith('ABC123');
+    expect(signalingService.joinRoom).toHaveBeenCalledWith('ABC123');
+    manager.cleanup();
+  });
+
+  it('initiates peers already present when the sender rejoins a room', async () => {
+    const { SwarmManager } = await import('./swarmManager');
+    const manager = new SwarmManager({ signaling: signalingService as never });
+    const addPeer = vi.fn();
+    const managerInternals = manager as unknown as {
+      roomId: string;
+      addPeer: typeof addPeer;
+      handleRoomUsers(data: { users: string[] }): void;
+    };
+    managerInternals.roomId = 'ABC123';
+    managerInternals.addPeer = addPeer;
+
+    managerInternals.handleRoomUsers({
+      users: ['sender-socket', 'receiver-socket'],
+    });
+
+    expect(addPeer).toHaveBeenCalledOnce();
+    expect(addPeer).toHaveBeenCalledWith('receiver-socket', true);
+    manager.cleanup();
+  });
   it('rejects resume requests beyond the manifest size instead of restarting from an unsafe offset', async () => {
     const { SwarmManager } = await import('./swarmManager');
     const manager = new SwarmManager();

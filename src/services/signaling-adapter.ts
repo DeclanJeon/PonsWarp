@@ -306,6 +306,39 @@ class RustSignalingAdapter {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
+  async reconnect(): Promise<void> {
+    const socket = this.ws;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.OPEN ||
+        socket.readyState === WebSocket.CONNECTING ||
+        socket.readyState === WebSocket.CLOSING)
+    ) {
+      await new Promise<void>(resolve => {
+        const timeout = setTimeout(resolve, 1000);
+        socket.addEventListener(
+          'close',
+          () => {
+            clearTimeout(timeout);
+            resolve();
+          },
+          { once: true }
+        );
+        if (
+          socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING
+        ) {
+          socket.close();
+        }
+      });
+    }
+
+    if (this.ws === socket) {
+      this.ws = null;
+    }
+    this.connectionPromise = null;
+    await this.connect(this.url || RUST_SIGNALING_URL);
+  }
   disconnect() {
     if (this.ws) {
       this.ws.close();
