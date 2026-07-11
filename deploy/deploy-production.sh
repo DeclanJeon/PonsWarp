@@ -162,18 +162,23 @@ if [[ "$MODE" == deploy ]]; then
     while IFS= read -r line; do
       [[ "$line" == *=* ]] || continue
       key="${line%%=*}"
-      [[ -n "${merged_env_values[$key]+set}" ]] || merged_env_order+=("$key")
-      merged_env_values["$key"]="$line"
-    done < "$release/.env.production"
-    while IFS= read -r line; do
-      [[ "$line" == *=* ]] || continue
-      key="${line%%=*}"
       case "$key" in PATH|HOSTNAME|HOME|TERM) continue ;; esac
       if [[ -z "${merged_env_values[$key]+set}" ]]; then
         merged_env_order+=("$key")
         merged_env_values["$key"]="$line"
       fi
     done < <(docker inspect "$env_source_container" --format '{{range .Config.Env}}{{println .}}{{end}}')
+    while IFS= read -r line; do
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"
+      if [[ "$key" == TURN_SERVER_URL ]]; then
+        [[ -n "${merged_env_values[$key]+set}" ]] || merged_env_order+=("$key")
+        merged_env_values["$key"]="$line"
+      elif [[ -z "${merged_env_values[$key]+set}" ]]; then
+        merged_env_order+=("$key")
+        merged_env_values["$key"]="$line"
+      fi
+    done < "$release/.env.production"
     : > "$merged_env"
     for key in "${merged_env_order[@]}"; do
       printf '%s\n' "${merged_env_values[$key]}" >> "$merged_env"
