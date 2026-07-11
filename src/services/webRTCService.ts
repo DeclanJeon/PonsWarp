@@ -798,7 +798,11 @@ export class ReceiverService {
   }
 
   private isControlMessage(data: ArrayBuffer | string): boolean {
-    return typeof data === 'string' && data.trimStart().startsWith('{');
+    if (typeof data === 'string') {
+      return data.trimStart().startsWith('{');
+    }
+
+    return data.byteLength > 0 && new Uint8Array(data)[0] === 123;
   }
 
   private async handleControlMessage(data: ArrayBuffer | string) {

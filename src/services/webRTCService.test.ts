@@ -73,6 +73,15 @@ describe('ReceiverService signaling', () => {
     });
 
     await vi.waitFor(() => expect(signals).toEqual([offer, candidate]));
+    const metadata = vi.fn();
+    service.on('metadata', metadata);
+    const manifest = { rootName: 'fixture.txt', totalFiles: 1, totalSize: 49 };
+    const controlFrame = new TextEncoder().encode(
+      JSON.stringify({ type: 'MANIFEST', manifest })
+    ).buffer as ArrayBuffer;
+    peerHandlers.get('data')?.forEach(handler => handler(controlFrame));
+
+    await vi.waitFor(() => expect(metadata).toHaveBeenCalledWith(manifest));
     service.cleanup();
   });
 });
