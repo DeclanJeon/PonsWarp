@@ -303,7 +303,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
+                className="flex min-h-full w-full flex-col items-center justify-start pt-12 pb-28 md:justify-center md:pt-20 md:pb-10"
               >
                 <SenderView />
 
@@ -328,7 +328,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
+                className="flex min-h-full w-full flex-col items-center justify-start pt-12 pb-28 md:justify-center md:pt-20 md:pb-10"
               >
                 <CloudSenderView />
 
@@ -370,7 +370,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
+                className="flex min-h-full w-full flex-col items-center justify-start pt-12 pb-28 md:justify-center md:pt-20 md:pb-10"
               >
                 <ReceiverView
                   onOpenCloudShare={shareId => {

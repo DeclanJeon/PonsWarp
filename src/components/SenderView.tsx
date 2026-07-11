@@ -57,7 +57,6 @@ const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
 const SenderView: React.FC<SenderViewProps> = () => {
   type SenderStatus =
     | 'IDLE'
-    | 'PREPARING'
     | 'WAITING'
     | 'CONNECTING'
     | 'TRANSFERRING'
@@ -69,6 +68,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<SenderStatus>('IDLE');
+  const [isOpeningRoom, setIsOpeningRoom] = useState(false);
   const setTransferStatus = useCallback(
     (next: SenderStatus | ((prev: SenderStatus) => SenderStatus)) => {
       setStatus(prev => {
@@ -192,14 +192,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setTransferStatus(prev => {
         if (prev === 'DONE') return prev;
         if (s === 'WAITING_FOR_PEER') {
-          return prev === 'IDLE' || prev === 'PREPARING' || prev === 'WAITING'
-            ? 'WAITING'
-            : prev;
+          return prev === 'IDLE' || prev === 'WAITING' ? 'WAITING' : prev;
         }
         if (s === 'CONNECTING') {
-          return prev === 'IDLE' || prev === 'PREPARING' || prev === 'WAITING'
-            ? 'CONNECTING'
-            : prev;
+          return prev === 'IDLE' || prev === 'WAITING' ? 'CONNECTING' : prev;
         }
         if (s === 'TRANSFERRING') return 'TRANSFERRING';
         return prev;
@@ -374,7 +370,8 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const scannedFiles = processInputFiles(e.target.files);
-      processScannedFiles(scannedFiles);
+      void processScannedFiles(scannedFiles);
+      e.target.value = '';
     }
   };
 
@@ -399,11 +396,11 @@ const SenderView: React.FC<SenderViewProps> = () => {
     // DataTransferItemList가 있으면 FileSystemEntry 스캔 사용
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       const scannedFiles = await scanFiles(e.dataTransfer.items);
-      processScannedFiles(scannedFiles);
+      void processScannedFiles(scannedFiles);
     } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       // Fallback: 단순 파일 처리
       const scannedFiles = processInputFiles(e.dataTransfer.files);
-      processScannedFiles(scannedFiles);
+      void processScannedFiles(scannedFiles);
     }
   };
 
@@ -421,16 +418,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
       rootName: manifest.rootName,
     });
 
-    // 여러 파일이면 ZIP 압축 준비 중 표시
-    if (files.length > 1) {
-      setTransferStatus('PREPARING');
-    } else {
-      setTransferStatus('WAITING');
-    }
-
     const id = Math.random().toString(36).substring(2, 8).toUpperCase();
     setRoomId(id);
     setShareLink(`${window.location.origin}/receive/${id}`);
+    setIsOpeningRoom(true);
+    // Room code/QR must appear immediately for multi-file mobile sends.
+    // ZIP/encryption preparation starts only after a receiver accepts, so
+    // holding users on PREPARING while signaling initializes is misleading.
+    setTransferStatus('WAITING');
 
     debugLog('[SenderView] 🏠 [DEBUG] Room created:', id);
 
@@ -448,16 +443,18 @@ const SenderView: React.FC<SenderViewProps> = () => {
         roomId: id,
       });
 
+      setIsOpeningRoom(false);
       // 초기화 완료 후에도 이미 전송/완료 이벤트가 들어왔다면 상태를 되돌리지 않는다.
-      setTransferStatus(prev =>
-        prev === 'IDLE' || prev === 'PREPARING' ? 'WAITING' : prev
-      );
+      setTransferStatus(prev => (prev === 'IDLE' ? 'WAITING' : prev));
     } catch (error) {
       console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
 
       alert(
         `Failed to initialize transfer: ${getErrorMessage(error, 'Unknown error')}\n\nPlease try again with different files.`
       );
+      setIsOpeningRoom(false);
+      setRoomId(null);
+      setShareLink(null);
       setTransferStatus('IDLE');
     }
   };
@@ -472,10 +469,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
   // 공통 Glass Panel 스타일 (통일성 유지)
   const glassPanelClass =
-    'bg-black/40 backdrop-blur-2xl border border-cyan-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
+    'bg-black/40 backdrop-blur-2xl border border-cyan-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)]';
 
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
+    <div className="relative z-10 flex min-h-full w-full flex-col items-center justify-start px-4 pb-20 pt-0 md:justify-center md:px-0 md:py-6">
       <AnimatePresence>
         {/* --- STATE: IDLE (File Selection) --- */}
         {status === 'IDLE' && (
@@ -484,7 +481,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
-            className={`w-full max-w-2xl p-2 ${glassPanelClass}`}
+            className={`w-full max-w-2xl overflow-hidden p-2 ${glassPanelClass}`}
           >
             {/* Drag & Drop Zone (Focal Point) */}
             <div
@@ -547,27 +544,6 @@ const SenderView: React.FC<SenderViewProps> = () => {
           </motion.div>
         )}
 
-        {status === 'PREPARING' && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="text-center p-8 bg-cyan-900/20 rounded-3xl border border-cyan-500/30 max-w-lg w-full"
-          >
-            <div className="relative w-20 h-20 mx-auto mb-6">
-              <Loader2 className="w-full h-full text-cyan-500 animate-spin" />
-            </div>
-
-            <h2 className="text-2xl font-bold text-white mb-2">
-              Preparing Files...
-            </h2>
-            <p className="text-gray-400 mb-4">
-              Compressing {manifest?.totalFiles} files into ZIP archive
-            </p>
-            <p className="text-sm text-gray-500">
-              This may take a moment for large folders. Please wait...
-            </p>
-          </motion.div>
-        )}
 
         {/* --- STATE: WAITING (QR & Room ID) --- */}
         {status === 'WAITING' && roomId && shareLink && (
@@ -576,10 +552,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className={`w-full max-w-sm p-6 md:p-8 flex flex-col items-center ${glassPanelClass}`}
+            className={`w-full max-w-sm p-3 sm:p-5 md:p-8 flex flex-col items-center ${glassPanelClass}`}
           >
             {/* Status Badge */}
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 mb-6 md:mb-8">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 mb-3 md:mb-8">
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
@@ -591,26 +567,26 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
             {/* QR Code */}
             <div
-              className="bg-white p-3 md:p-4 rounded-2xl mb-6 md:mb-8 shadow-[0_0_40px_rgba(6,182,212,0.25)] cursor-pointer"
+              className="bg-white p-3 md:p-4 rounded-2xl mb-3 md:mb-8 shadow-[0_0_40px_rgba(6,182,212,0.25)] cursor-pointer"
               onClick={copyToClipboard}
             >
               <QRCodeSVG
                 value={shareLink}
-                size={140}
-                className="md:w-[180px] md:h-[180px]"
+                size={180}
+                className="h-[104px] w-[104px] sm:h-[140px] sm:w-[140px] md:h-[180px] md:w-[180px]"
               />
             </div>
 
             {/* Room ID Display */}
             <div
-              className="text-center mb-6 md:mb-8 w-full group cursor-pointer"
+              className="text-center mb-3 md:mb-8 w-full group cursor-pointer"
               onClick={copyToClipboard}
             >
               <p className="text-gray-500 text-[10px] tracking-[0.3em] uppercase mb-2">
                 Warp Key
               </p>
               <div className="relative">
-                <p className="text-4xl md:text-6xl font-mono font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-white to-cyan-400 bg-300% animate-shine group-hover:scale-105 transition-transform">
+                <p className="text-3xl sm:text-4xl md:text-6xl font-mono font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-white to-cyan-400 bg-300% animate-shine group-hover:scale-105 transition-transform">
                   {roomId}
                 </p>
                 {copied && (
@@ -626,7 +602,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             {/* Peer Status Indicators (Visual Hierarchy) */}
-            <div className="w-full bg-gray-900/40 p-4 rounded-xl mb-4 border border-gray-700/50 backdrop-blur-sm">
+            <div className="w-full bg-gray-900/40 p-3 md:p-4 rounded-xl mb-2 md:mb-4 border border-gray-700/50 backdrop-blur-sm">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2 text-sm text-gray-300">
                   <Users size={14} className="text-cyan-400" />
@@ -653,7 +629,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             {/* File Info Card (Left Aligned for Readability - 7.webp) */}
-            <div className="w-full bg-gray-800/30 p-4 rounded-xl border border-gray-700/50 flex items-center gap-4 text-left">
+            <div className="w-full bg-gray-800/30 p-3 md:p-4 rounded-xl border border-gray-700/50 flex items-center gap-3 md:gap-4 text-left">
               <div className="w-10 h-10 rounded-lg bg-gray-700/50 flex items-center justify-center flex-shrink-0">
                 {manifest?.isFolder ? (
                   <Folder className="text-yellow-400 w-5 h-5" />
@@ -673,16 +649,18 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             {/* Waiting Message / Countdown */}
-            <div className="mt-6 text-center h-6">
+            <div className="mt-3 md:mt-6 text-center h-6">
               {readyCountdown !== null ? (
                 <p className="text-yellow-400 text-sm font-bold animate-pulse tracking-wide">
                   Auto-starting in {readyCountdown}s...
                 </p>
               ) : (
                 <p className="text-xs text-gray-500 font-mono">
-                  {connectedPeers.length === 0
-                    ? 'Waiting for connection...'
-                    : 'Waiting for receiver to accept...'}
+                  {isOpeningRoom
+                    ? 'Opening secure room...'
+                    : connectedPeers.length === 0
+                      ? 'Waiting for connection...'
+                      : 'Waiting for receiver to accept...'}
                 </p>
               )}
             </div>
