@@ -82,6 +82,16 @@ describe('ReceiverService signaling', () => {
     peerHandlers.get('data')?.forEach(handler => handler(controlFrame));
 
     await vi.waitFor(() => expect(metadata).toHaveBeenCalledWith(manifest));
+    const errors = vi.fn();
+    service.on('error', errors);
+    (service as unknown as { completionEmitted: boolean }).completionEmitted =
+      true;
+    peerHandlers
+      .get('error')
+      ?.forEach(handler => handler(new Error('late peer failure')));
+    peerHandlers.get('close')?.forEach(handler => handler(undefined));
+
+    expect(errors).not.toHaveBeenCalled();
     service.cleanup();
   });
 });

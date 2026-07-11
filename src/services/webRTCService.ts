@@ -636,11 +636,13 @@ export class ReceiverService {
     peer.on('data', this.handleData.bind(this));
 
     peer.on<Error>('error', err => {
+      if (this.completionEmitted) return;
       logError('[Receiver]', 'Peer error:', err);
       this.emit('error', getErrorMessage(err, 'Peer error'));
     });
 
     peer.on('close', () => {
+      if (this.completionEmitted) return;
       logInfo('[Receiver]', 'Peer connection closed');
       if (this.shouldAttemptReconnect()) {
         this.scheduleReconnect();
