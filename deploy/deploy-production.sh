@@ -171,7 +171,7 @@ if [[ "$MODE" == deploy ]]; then
     while IFS= read -r line; do
       [[ "$line" == *=* ]] || continue
       key="${line%%=*}"
-      if [[ "$key" == TURN_SERVER_URL ]]; then
+      if [[ "$key" == TURN_SERVER_URL || "$key" == TURN_FALLBACK_SERVERS ]]; then
         [[ -n "${merged_env_values[$key]+set}" ]] || merged_env_order+=("$key")
         merged_env_values["$key"]="$line"
       elif [[ -z "${merged_env_values[$key]+set}" ]]; then
