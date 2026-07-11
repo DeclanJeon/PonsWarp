@@ -33,6 +33,21 @@ trap cleanup_local EXIT
 
 if [[ "$MODE" == deploy ]]; then
   [[ -f "$PRODUCTION_ENV" ]] || { echo "Missing production backend env file: $PRODUCTION_ENV" >&2; exit 1; }
+  turn_server_url=''
+  while IFS= read -r line; do
+    case "$line" in
+      TURN_SERVER_URL=*) turn_server_url="${line#TURN_SERVER_URL=}" ;;
+    esac
+  done < "$PRODUCTION_ENV"
+  turn_endpoint="${turn_server_url#turn:}"
+  turn_endpoint="${turn_endpoint#turns:}"
+  turn_endpoint="${turn_endpoint#//}"
+  turn_host="${turn_endpoint%%\?*}"
+  turn_host="${turn_host%%:*}"
+  [[ "$turn_host" == 'turn.ponslink.com' ]] || {
+    echo "TURN_SERVER_URL must target the DNS-only TURN origin turn.ponslink.com (got host: ${turn_host:-<empty>})" >&2
+    exit 1
+  }
   pnpm run wasm:build
   pnpm run verify:wasm-provenance
   ( cd "$FRONTEND_DIR"; npm run build; tar -C dist -czf "$FRONTEND_ARCHIVE" . )
