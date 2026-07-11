@@ -27,6 +27,7 @@ import {
   BATCH_SIZE_INITIAL,
   PARTITION_ACK_POLL_INTERVAL_MS,
   SEND_WINDOW_POLL_INTERVAL_MS,
+  CONNECTION_TIMEOUT_MS,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
@@ -49,7 +50,7 @@ import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
-const CONNECTION_TIMEOUT = 30000; // 30초
+const CONNECTION_TIMEOUT = CONNECTION_TIMEOUT_MS;
 const READY_WAIT_TIME_1N = 10000; // 1:N 상황에서 대기 시간 (10초)
 
 export interface SwarmState {
