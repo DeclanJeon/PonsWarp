@@ -156,20 +156,28 @@ if [[ "$MODE" == deploy ]]; then
     env_source_container='ponswarp-signaling'
   fi
   if [[ -n "$env_source_container" ]] && docker container inspect "$env_source_container" >/dev/null 2>&1; then
-    declare -A existing_env_keys=()
+    declare -A merged_env_values=()
+    declare -a merged_env_order=()
     merged_env="$release/.env.production.merged"
-    : > "$merged_env"
     while IFS= read -r line; do
       [[ "$line" == *=* ]] || continue
       key="${line%%=*}"
-      existing_env_keys["$key"]=1
-      printf '%s\n' "$line" >> "$merged_env"
-    done < <(docker inspect "$env_source_container" --format '{{range .Config.Env}}{{println .}}{{end}}')
-    while IFS= read -r line; do
-      [[ "$line" == *=* ]] || continue
-      key="${line%%=*}"
-      [[ -n "${existing_env_keys[$key]:-}" ]] || printf '%s\n' "$line" >> "$merged_env"
+      [[ -n "${merged_env_values[$key]+set}" ]] || merged_env_order+=("$key")
+      merged_env_values["$key"]="$line"
     done < "$release/.env.production"
+    while IFS= read -r line; do
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"
+      case "$key" in PATH|HOSTNAME|HOME|TERM) continue ;; esac
+      if [[ -z "${merged_env_values[$key]+set}" ]]; then
+        merged_env_order+=("$key")
+        merged_env_values["$key"]="$line"
+      fi
+    done < <(docker inspect "$env_source_container" --format '{{range .Config.Env}}{{println .}}{{end}}')
+    : > "$merged_env"
+    for key in "${merged_env_order[@]}"; do
+      printf '%s\n' "${merged_env_values[$key]}" >> "$merged_env"
+    done
     install -m 0600 "$merged_env" "$release/.env.production"
     rm -f "$merged_env"
   fi
