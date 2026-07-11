@@ -85,6 +85,7 @@ type SignalingPeerMessage = {
   answer?: PeerSignalData;
   candidate?: PeerSignalData;
 };
+type RoomUsersMessage = { users?: string[] } | string[];
 type OutgoingSignalMessage = PeerSignalData & {
   type?: 'offer' | 'answer';
   candidate?: unknown;
@@ -128,6 +129,7 @@ export class SwarmManager {
   private roomId: string | null = null;
   private signalingHandlersAttached = false;
   private worker: Worker | null = null;
+  private signalingRecoveryPromise: Promise<void> | null = null;
   private isTransferring: boolean = false;
   private pendingManifest: TransferManifest | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -221,6 +223,19 @@ export class SwarmManager {
   private boundHandleAnswer = this.handleAnswer.bind(this);
   private boundHandleIceCandidate = this.handleIceCandidate.bind(this);
   private boundHandleUserLeft = this.handleUserLeft.bind(this);
+  private boundHandleRoomUsers = this.handleRoomUsers.bind(this);
+  private boundHandleSignalingConnected =
+    this.handleSignalingConnected.bind(this);
+  private boundHandleSignalingDisconnect =
+    this.handleSignalingDisconnect.bind(this);
+  private boundHandleOnline = () => {
+    if (!this.roomId) return;
+    const signaling = this.getSignalingService();
+    const reconnect = signaling.reconnect?.bind(signaling);
+    void (reconnect ? reconnect() : signaling.connect()).catch(error => {
+      logError('[SwarmManager]', 'Signaling reconnect failed:', error);
+    });
+  };
   private boundHandleRoomFull = () => {
     this.emit('room-full', 'Room is at maximum capacity');
   };
@@ -232,6 +247,9 @@ export class SwarmManager {
       options.peerFactory ??
       ((peerId, initiator, config) =>
         new SinglePeerConnection(peerId, initiator, config));
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', this.boundHandleOnline);
+    }
   }
   private getSignalingService(): ISignalingService {
     return (this.signalingService ??= getSignalingService());
@@ -311,6 +329,9 @@ export class SwarmManager {
     signaling.on('answer', this.boundHandleAnswer);
     signaling.on('ice-candidate', this.boundHandleIceCandidate);
     signaling.on('user-left', this.boundHandleUserLeft);
+    signaling.on('room-users', this.boundHandleRoomUsers);
+    signaling.on('connected', this.boundHandleSignalingConnected);
+    signaling.on('disconnect', this.boundHandleSignalingDisconnect);
     signaling.on('room-full', this.boundHandleRoomFull);
   }
 
@@ -322,6 +343,9 @@ export class SwarmManager {
     signaling.off('answer', this.boundHandleAnswer);
     signaling.off('ice-candidate', this.boundHandleIceCandidate);
     signaling.off('user-left', this.boundHandleUserLeft);
+    signaling.off('room-users', this.boundHandleRoomUsers);
+    signaling.off('connected', this.boundHandleSignalingConnected);
+    signaling.off('disconnect', this.boundHandleSignalingDisconnect);
     signaling.off('room-full', this.boundHandleRoomFull);
     this.signalingHandlersAttached = false;
   }
@@ -538,6 +562,52 @@ export class SwarmManager {
     // Sender로서 새 피어에게 연결 시작 (initiator = true)
     this.addPeer(peerId, true);
   }
+  private handleRoomUsers(data: RoomUsersMessage): void {
+    if (!this.roomId) return;
+
+    const users = Array.isArray(data) ? data : data?.users;
+    if (!Array.isArray(users)) return;
+
+    const socketId = this.getSignalingService().getSocketId();
+    for (const peerId of users) {
+      if (peerId && peerId !== socketId) {
+        this.addPeer(peerId, true);
+      }
+    }
+  }
+
+  private handleSignalingDisconnect(): void {
+    if (!this.roomId) return;
+
+    for (const peerId of Array.from(this.peers.keys())) {
+      this.removePeer(peerId, 'signaling-disconnected');
+    }
+  }
+
+  private handleSignalingConnected(): void {
+    const roomId = this.roomId;
+    if (!roomId || this.signalingRecoveryPromise) return;
+
+    this.signalingRecoveryPromise = (async () => {
+      await this.fetchTurnConfig(roomId);
+      if (this.roomId !== roomId) return;
+
+      await this.getSignalingService().joinRoom(roomId);
+      this.emit(
+        'status',
+        this.awaitingReceiverReconnect
+          ? 'WAITING_FOR_RECONNECT'
+          : 'WAITING_FOR_PEER'
+      );
+    })()
+      .catch(error => {
+        logError('[SwarmManager]', 'Failed to restore signaling session:', error);
+      })
+      .finally(() => {
+        this.signalingRecoveryPromise = null;
+      });
+  }
+
 
   private handleOffer(data: SignalingPeerMessage): void {
     // roomId가 설정되지 않았으면 무시
@@ -2633,6 +2703,9 @@ export class SwarmManager {
     logInfo('[SwarmManager]', 'Cleaning up (Full)...');
     this.resetState();
     this.removeSignalingHandlers();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this.boundHandleOnline);
+    }
   }
 
   /**
@@ -2648,6 +2721,7 @@ export class SwarmManager {
     this.awaitingWorkerResume = false;
     this.pendingWorkerResumeOffset = null;
     this.roomId = null;
+    this.signalingRecoveryPromise = null;
     this.clearWorkerBatchTimeout();
     this.stopTransferPumpWatchdog();
     this.stopAdaptiveControl();

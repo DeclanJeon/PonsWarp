@@ -15,6 +15,7 @@ import {
 
 export interface ISignalingService {
   connect(): Promise<void>;
+  reconnect?(): Promise<void>;
   joinRoom(roomId: string): Promise<void>;
   leaveRoom(roomId: string): void;
   sendOffer(
