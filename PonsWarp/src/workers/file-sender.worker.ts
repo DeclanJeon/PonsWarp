@@ -976,11 +976,43 @@ async function processBatch(requestedCount: number) {
 
   if (state.startTime === 0) state.startTime = Date.now();
 
+  // 🚀 병렬 청크 생성: 최대 4개 동시 read+encrypt
+  const CONCURRENT_READS = Math.min(4, requestedCount);
   const chunks: ArrayBuffer[] = [];
-  for (let i = 0; i < requestedCount && !state.isCompleted; i++) {
-    const chunk = await createNextChunk();
-    if (chunk && chunk.byteLength > 0) chunks.push(chunk);
-    else break;
+  
+  // 병렬로 청크를 생성하되 순서 보장
+  const pending = new Map<number, Promise<ArrayBuffer | null>>();
+  let nextToRead = 0;
+  let nextToSend = 0;
+  
+  const scheduleReads = () => {
+    while (pending.size < CONCURRENT_READS && nextToRead < requestedCount && !state.isCompleted) {
+      const seq = nextToRead++;
+      pending.set(seq, createNextChunk());
+      const promise = pending.get(seq)!;
+      promise.then(() => {
+        pending.delete(seq);
+        scheduleReads();
+      });
+    }
+  };
+  
+  scheduleReads();
+  
+  // 순서대로 결과 수집
+  while (nextToSend < nextToRead || pending.size > 0) {
+    if (pending.has(nextToSend)) {
+      const chunk = await pending.get(nextToSend)!;
+      if (chunk && chunk.byteLength > 0) chunks.push(chunk);
+      else break;
+      nextToSend++;
+    } else if (nextToSend < nextToRead) {
+      // 이미 처리됨, 다음으로
+      nextToSend++;
+    } else {
+      // 아직 읽지 않은 청크 대기
+      await new Promise(r => setTimeout(r, 1));
+    }
   }
 
   const totalBytesSent = Number(getTotalBytesSent());

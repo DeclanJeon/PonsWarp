@@ -187,7 +187,7 @@ export class SinglePeerConnection {
       if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
         this.emitDrainOnce();
       }
-    }, 250); // 50ms → 250ms watchdog (이벤트 기반이므로 빈번한 폴링 불필요)
+    }, 100); // 100ms watchdog - 반응성과 CPU 사용량 균형
   }
 
   private emitDrainOnce(): void {
