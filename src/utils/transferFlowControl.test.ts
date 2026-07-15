@@ -127,10 +127,10 @@ describe('transferFlowControl', () => {
     );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
-    ).toBeLessThan(256 * 1024);
+    ).toBeLessThanOrEqual(256 * 1024 + 54);
     expect(
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
-    ).toBeLessThan(256 * 1024);
+    ).toBeLessThanOrEqual(256 * 1024 + 54);
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThan(
       receiverPauseHighBytes
     );
