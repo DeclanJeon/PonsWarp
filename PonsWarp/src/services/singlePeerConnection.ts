@@ -183,17 +183,17 @@ export class SinglePeerConnection {
       if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
         this.emitDrainOnce();
       }
-    }, 200);
+    }, 50);
   }
 
   private emitDrainOnce(): void {
     if (!this.drainEmitted && this.connected) {
       this.drainEmitted = true;
       this.emit('drain', this.id);
-      // 다음 drain 이벤트를 위해 리셋
-      setTimeout(() => {
+      // 다음 drain 이벤트를 위해 리셋 (즉시 리셋으로 drain 누락 방지)
+      queueMicrotask(() => {
         this.drainEmitted = false;
-      }, 0);
+      });
     }
   }
 

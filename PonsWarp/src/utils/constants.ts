@@ -30,8 +30,8 @@ export const TRANSFER_PARTITION_SIZE = 16 * 1024 * 1024;
 
 // Partitioned sender의 busy polling 지연. 25~50ms는 localhost/빠른 LAN에서
 // DataChannel을 자주 굶기므로 짧은 fallback tick과 drain/ACK wake-up을 병행한다.
-export const SEND_WINDOW_POLL_INTERVAL_MS = 5;
-export const PARTITION_ACK_POLL_INTERVAL_MS = 10;
+export const SEND_WINDOW_POLL_INTERVAL_MS = 2;
+export const PARTITION_ACK_POLL_INTERVAL_MS = 2;
 
 export const HEADER_SIZE = 22; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4) + Checksum(4)
 // DNS, authenticated TURN allocation, and relay candidate gathering can exceed 15 seconds.
@@ -39,13 +39,13 @@ export const CONNECTION_TIMEOUT_MS = 45000;
 
 // 단일-flight 배치: 성능보다 drain/receiver 안정성을 우선한다.
 export const BATCH_SIZE_MIN = 1;
-export const BATCH_SIZE_MAX = 1;
-export const BATCH_SIZE_INITIAL = 1;
+export const BATCH_SIZE_MAX = 4;
+export const BATCH_SIZE_INITIAL = 2;
 export const BATCH_REQUEST_SIZE = 1; // 레거시 호환
 
 // 🚀 프리페치 버퍼 설정
-export const PREFETCH_BUFFER_SIZE = 0;
-export const PREFETCH_LOW_THRESHOLD = 0;
+export const PREFETCH_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB 프리페치
+export const PREFETCH_LOW_THRESHOLD = 1 * 1024 * 1024; // 1MB
 
 // 🚀 [Phase 3] 네트워크 적응형 제어 설정
 export const BBR_STARTUP_GAIN = 2.89; // BBR Startup 모드 gain
