@@ -532,6 +532,35 @@ export class SwarmManager {
     }
   }
 
+  private countConnectedStripeLanes(baseId: string): number {
+    let n = 0;
+    for (const [key, peer] of this.peers) {
+      const parsed = parseStripePeerKey(key);
+      if (parsed.baseId === baseId && peer.connected) n++;
+    }
+    return n;
+  }
+
+  /**
+   * Wait briefly for bulk PeerConnections. Falls back to primary-only if
+   * not all lanes come up (e.g. TURN path / NAT).
+   */
+  private async waitForStripeLanes(
+    baseId: string,
+    timeoutMs = 2500
+  ): Promise<number> {
+    const expected = Math.max(1, Math.min(LAN_STRIPE_LANES, 6));
+    if (expected <= 1) return 1;
+    this.ensureStripeLanes(baseId);
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const n = this.countConnectedStripeLanes(baseId);
+      if (n >= expected) return n;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    return this.countConnectedStripeLanes(baseId);
+  }
+
   /**
    * 피어 제거
    */
@@ -854,16 +883,13 @@ export class SwarmManager {
     for (const [key, peer] of this.peers) {
       const parsed = parseStripePeerKey(key);
       if (parsed.baseId !== baseId || !peer.connected) continue;
-      // Avoid lanes that look empty only because the channel is not open yet.
-      if (peer.getBufferedAmount() === 0 && !peer.connected) continue;
       lanes.push(peer);
     }
-    // Prefer using all connected lanes only when every configured lane is up.
-    // Partial striping can black-hole chunks onto half-open PeerConnections.
-    const expected = Math.max(1, Math.min(LAN_STRIPE_LANES, 6));
-    if (expected > 1 && lanes.length < expected) {
+    // Only stripe when we have multiple fully-connected lanes. A single
+    // half-open bulk PC would black-hole chunks (seen as incomplete receives).
+    if (lanes.length < 2) {
       const primary = this.peers.get(stripePeerKey(baseId, 0));
-      return primary && primary.connected ? [primary] : lanes.slice(0, 1);
+      return primary && primary.connected ? [primary] : [];
     }
     return lanes;
   }
@@ -2531,6 +2557,12 @@ export class SwarmManager {
     this.totalBytesSent = startOffset;
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
+
+    // Warm bulk PeerConnection stripes for host-path bandwidth scaling.
+    for (const peerId of this.currentTransferPeers) {
+      const n = await this.waitForStripeLanes(peerId);
+      logInfo('[SwarmManager]', `Stripe lanes ready for ${peerId}: ${n}/${LAN_STRIPE_LANES}`);
+    }
     this.transferPauseCount = 0;
     this.partitionAckCount = 0;
     this.resetTransferTuning();
