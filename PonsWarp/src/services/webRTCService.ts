@@ -873,10 +873,8 @@ export class ReceiverService {
       this.writer
         .writeChunk(data)
         .then(() => {
-          // 파티션 모드에서는 per-chunk ACK 불필요 (PARTITION_ACK로 대체)
-          if (!this.isPartitionMode && this.peer && this.peer.connected) {
-            this.peer.send(JSON.stringify({ type: 'CONTROL', action: 'ACK' }));
-          }
+          // Per-chunk ACKs are disabled. Partition markers carry durability
+          // checkpoints; reliable SCTP already retransmits lost packets.
         })
         .catch(err => {
           console.error('[Receiver] Write error:', err);
@@ -917,6 +915,10 @@ export class ReceiverService {
           break;
         case 'TRANSFER_STARTED':
           logInfo('[Receiver]', 'Sender started transfer');
+          // Sender always uses partitioned binary transfer now. Disable
+          // per-chunk ACKs immediately so reverse-path control frames do not
+          // throttle the DataChannel during LAN bulk transfer.
+          this.isPartitionMode = true;
           this.emit('remote-started', true);
           break;
         case 'TRANSFER_STARTED_WITHOUT_YOU':
