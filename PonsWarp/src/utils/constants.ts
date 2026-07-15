@@ -8,18 +8,18 @@ export const USE_RUST_SIGNALING =
 export const RUST_SIGNALING_URL =
   import.meta.env.VITE_RUST_SIGNALING_URL || 'ws://localhost:5502/ws';
 
-// 청크 사이징: Chrome SCTP 256KB 한도 내 192KB (헤더 여유)
+// 청크 사이징: SCTP 256KB 한도에서 헤더(~54B) 제외한 최대 근처
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
-export const CHUNK_SIZE_INITIAL = 192 * 1024; // 192KB - LAN 처리량 우선
-export const CHUNK_SIZE_MAX = 192 * 1024;
+export const CHUNK_SIZE_INITIAL = 240 * 1024; // 240KB
+export const CHUNK_SIZE_MAX = 240 * 1024;
 
-// 🚀 [Performance] LAN 처리량 우선 워터마크
-export const MAX_BUFFERED_AMOUNT = 12 * 1024 * 1024; // 12MB
-export const LOW_WATER_MARK = 2 * 1024 * 1024; // 2MB drain 임계값
-export const HIGH_WATER_MARK = 8 * 1024 * 1024; // 8MB 상류 재개
+// 🚀 [Performance] 깊은 송신 파이프라인 (LAN host)
+export const MAX_BUFFERED_AMOUNT = 24 * 1024 * 1024; // 24MB
+export const LOW_WATER_MARK = 4 * 1024 * 1024; // 4MB drain
+export const HIGH_WATER_MARK = 16 * 1024 * 1024; // 16MB
 
 // 파티션 크기: 연속 전송 (ACK 불필요)
-export const TRANSFER_PARTITION_SIZE = 64 * 1024 * 1024;
+export const TRANSFER_PARTITION_SIZE = 128 * 1024 * 1024;
 
 // 🚀 [Performance] 이벤트 기반 드레인: bufferedamountlow 사용
 export const DRAIN_EVENT_WATCHDOG_MS = 100;

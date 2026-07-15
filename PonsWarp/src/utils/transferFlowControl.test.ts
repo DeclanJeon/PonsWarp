@@ -120,10 +120,10 @@ describe('transferFlowControl', () => {
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE
     );
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      4 * 1024 * 1024
+      8 * 1024 * 1024
     );
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      4 * 1024 * 1024
+      8 * 1024 * 1024
     );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
@@ -200,7 +200,7 @@ describe('transferFlowControl', () => {
         availableOutgoingBitrateBps: 64_000,
         rttMs: 50,
       })
-    ).toBe(RELAY_TRANSFER_TUNING_PROFILE.minInFlightBytes);
+    ).toBe(RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes);
   });
 
   it('calculates send budget without going negative and honors receiver pause', () => {
@@ -229,13 +229,13 @@ describe('transferFlowControl', () => {
 
   it('selects partition size from the active profile', () => {
     expect(selectPartitionSize(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE)).toBe(
-      64 * 1024 * 1024
+      128 * 1024 * 1024
     );
     expect(selectPartitionSize(RELAY_TRANSFER_TUNING_PROFILE)).toBe(
       32 * 1024 * 1024
     );
     expect(selectPartitionSize(UNKNOWN_TRANSFER_TUNING_PROFILE)).toBe(
-      64 * 1024 * 1024
+      128 * 1024 * 1024
     );
   });
 

@@ -178,12 +178,12 @@ const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 192 * KIB, // 192KB - Chrome SCTP 안전 마진
-  minInFlightBytes: 2 * MIB,
-  initialInFlightBytes: 4 * MIB,
-  maxInFlightBytes: 12 * MIB, // 12MB in-flight
-  lowWaterBytes: 2 * MIB, // 2MB drain
-  partitionSizeBytes: 64 * MIB,
+  chunkSizeBytes: 240 * KIB, // 240KB
+  minInFlightBytes: 4 * MIB,
+  initialInFlightBytes: 8 * MIB,
+  maxInFlightBytes: 24 * MIB, // 24MB in-flight
+  lowWaterBytes: 4 * MIB, // 4MB drain
+  partitionSizeBytes: 128 * MIB, // fewer partition barriers
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
 };
@@ -195,13 +195,15 @@ export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'relay',
   chunkSizeBytes: 192 * KIB,
+  maxInFlightBytes: 8 * MIB,
   partitionSizeBytes: 32 * MIB,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
-  chunkSizeBytes: 192 * KIB,
-  partitionSizeBytes: 64 * MIB,
+  // unknown often is still LAN host in practice
+  chunkSizeBytes: 240 * KIB,
+  partitionSizeBytes: 128 * MIB,
 };
 export function selectTransferTuningProfile(
   diagnostics?: Partial<TransferDiagnostics> | null
@@ -233,15 +235,18 @@ export function selectInFlightTargetBytes(
     typeof r === 'number' &&
     Number.isFinite(r) &&
     r > 0
-  )
+  ) {
+    // Use a generous BDP multiple. Chrome's availableOutgoingBitrate is often
+    // pessimistic on LAN and would otherwise starve the send pipeline.
+    const bdp = Math.floor((b / 8) * Math.max(r, 10) / 1000 * (direct ? 16 : 4));
     return Math.max(
       profile.minInFlightBytes,
-      Math.min(
-        profile.maxInFlightBytes,
-        Math.floor((b / 8) * (r / 1000) * (direct ? 4 : 2))
-      )
+      Math.min(profile.maxInFlightBytes, Math.max(bdp, profile.initialInFlightBytes))
     );
-  return direct ? profile.maxInFlightBytes : profile.initialInFlightBytes;
+  }
+  return direct || diagnostics?.candidatePathKind === 'unknown'
+    ? profile.maxInFlightBytes
+    : profile.initialInFlightBytes;
 }
 export function calculateSendBudget(p: {
   targetInFlightBytes: number;
