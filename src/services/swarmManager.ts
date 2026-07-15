@@ -194,6 +194,7 @@ export class SwarmManager {
   private signalingRecoveryPromise: Promise<void> | null = null;
   private isTransferring: boolean = false;
   private stripeEnabled = false;
+  private verifiedStripeKeys: Set<string> = new Set();
   private pendingManifest: TransferManifest | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
 
@@ -562,6 +563,62 @@ export class SwarmManager {
     return this.countConnectedStripeLanes(baseId);
   }
 
+  private async probeStripeLanes(baseId: string, timeoutMs = 2000): Promise<number> {
+    this.verifiedStripeKeys.clear();
+    const primaryKey = stripePeerKey(baseId, 0);
+    const primary = this.peers.get(primaryKey);
+    if (primary?.connected) this.verifiedStripeKeys.add(primaryKey);
+
+    const pending = new Map<string, SinglePeerConnection>();
+    for (const [key, peer] of this.peers) {
+      const parsed = parseStripePeerKey(key);
+      if (parsed.baseId !== baseId || !peer.connected || parsed.lane === 0) continue;
+      pending.set(key, peer);
+    }
+    if (pending.size === 0) return this.verifiedStripeKeys.size;
+
+    await Promise.all(
+      Array.from(pending.entries()).map(
+        ([key, peer]) =>
+          new Promise<void>(resolve => {
+            const timer = setTimeout(() => {
+              peer.off('data', onData as any);
+              resolve();
+            }, timeoutMs);
+            const onData = (data: unknown) => {
+              try {
+                const text =
+                  typeof data === 'string'
+                    ? data
+                    : data instanceof ArrayBuffer
+                      ? new TextDecoder().decode(data)
+                      : '';
+                if (!text.startsWith('{')) return;
+                const msg = JSON.parse(text);
+                if (msg?.type === 'STRIPE_PONG') {
+                  this.verifiedStripeKeys.add(key);
+                  clearTimeout(timer);
+                  peer.off('data', onData as any);
+                  resolve();
+                }
+              } catch {
+                /* ignore */
+              }
+            };
+            peer.on('data', onData);
+            try {
+              peer.send(JSON.stringify({ type: 'STRIPE_PING', lane: parseStripePeerKey(key).lane }));
+            } catch {
+              clearTimeout(timer);
+              peer.off('data', onData as any);
+              resolve();
+            }
+          })
+      )
+    );
+    return this.verifiedStripeKeys.size;
+  }
+
   /**
    * 피어 제거
    */
@@ -885,12 +942,10 @@ export class SwarmManager {
     for (const [key, peer] of this.peers) {
       const parsed = parseStripePeerKey(key);
       if (parsed.baseId !== baseId || !peer.connected) continue;
+      if (!this.verifiedStripeKeys.has(key) && parsed.lane !== 0) continue;
       lanes.push(peer);
     }
-    // Require all configured lanes before striping so partial sets cannot
-    // absorb traffic without a working association.
-    const expected = Math.max(1, Math.min(LAN_STRIPE_LANES, 6));
-    if (lanes.length < expected) {
+    if (lanes.length < 2) {
       return primary && primary.connected ? [primary] : [];
     }
     return lanes;
@@ -2567,17 +2622,19 @@ export class SwarmManager {
     // complete on the control lane first.
     if (LAN_STRIPE_LANES > 1) {
       for (const peerId of this.currentTransferPeers) {
-        const n = await this.waitForStripeLanes(peerId, 3000);
-        if (n >= Math.min(LAN_STRIPE_LANES, 6)) {
+        await this.waitForStripeLanes(peerId, 3000);
+        const verified = await this.probeStripeLanes(peerId, 1500);
+        if (verified >= 2) {
           this.stripeEnabled = true;
           logInfo(
             '[SwarmManager]',
-            `Stripe armed for ${peerId}: ${n}/${LAN_STRIPE_LANES}`
+            `Stripe armed for ${peerId}: verified ${verified}/${LAN_STRIPE_LANES}`
           );
         } else {
+          this.stripeEnabled = false;
           logInfo(
             '[SwarmManager]',
-            `Stripe not ready for ${peerId}: ${n}/${LAN_STRIPE_LANES} — primary only`
+            `Stripe probe failed for ${peerId}: verified ${verified} — primary only`
           );
         }
       }
