@@ -106,7 +106,7 @@ export class DirectFileWriter {
   private currentBatchSize = 0;
   // 🚀 [최적화] 디스크 I/O 배치 크기 상향
   // 송신 측의 HIGH_WATER_MARK(12MB)에 맞춰 효율적인 쓰기 수행 (Context Switch 최소화)
-  private readonly BATCH_THRESHOLD = 8 * 1024 * 1024; // 8MB
+  private readonly BATCH_THRESHOLD = 2 * 1024 * 1024; // 2MB - 더 자주 플러시하여 파이프라인 유지
 
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
   private pendingBytesInBuffer = 0;
@@ -1011,13 +1011,25 @@ export class DirectFileWriter {
       this.checkBackpressure();
     }
 
+    // 🚀 [성능 핵심] 복호화를 큐 밖에서 먼저 수행 (네트워크 수신과 병렬)
+    let normalizedPacket: ArrayBuffer;
+    try {
+      normalizedPacket = await this.normalizePacket(packet);
+    } catch (error: unknown) {
+      const writeError = error instanceof Error ? error : new Error('Decryption failed');
+      this.writeFailure = writeError;
+      this.onErrorCallback?.(`Decrypt failed: ${writeError.message}`);
+      throw writeError;
+    }
+
+    // 큐에는 이미 복호화된 패킷만 전달 (가벼운 연산)
     const writeTask = this.writeQueue.then(async () => {
       if (this.writeFailure) {
         throw this.writeFailure;
       }
 
       try {
-        await this.processChunkInternal(packet);
+        await this.processDecodedChunk(normalizedPacket);
       } catch (error: unknown) {
         const writeError =
           error instanceof Error ? error : new Error('Unknown write failure');
@@ -1084,6 +1096,75 @@ export class DirectFileWriter {
   /**
    * 🚀 [신규] 실제 쓰기 로직을 분리 (내부용)
    */
+  /**
+   * 🚀 [성능] 이미 복호화된 패킷 처리 (processChunkInternal에서 normalizePacket 분리)
+   * writeChunk에서 복호화를 먼저 수행한 후 호출됨.
+   */
+  private async processDecodedChunk(normalizedPacket: ArrayBuffer): Promise<void> {
+    if (this.isFinalized) return;
+
+    if (normalizedPacket.byteLength < HEADER_SIZE) {
+      throw new Error('Packet too short');
+    }
+
+    const view = new DataView(normalizedPacket);
+    const fileId = view.getUint16(0, true);
+
+    if (fileId === 0xffff) {
+      logInfo('[DirectFileWriter]', 'EOS received signal.');
+      await this.finalize();
+      return;
+    }
+
+    this.awaitingResume = false;
+
+    const size = view.getUint32(14, true);
+    const offset = Number(view.getBigUint64(6, true));
+
+    const totalReceived =
+      this.totalBytesWritten +
+      this.pendingBytesInBuffer -
+      this.queuedAcceptedBytesInBuffer;
+
+    const isSizeStrict = this.manifest && !this.manifest.isSizeEstimated;
+    if (isSizeStrict && this.totalSize > 0 && totalReceived >= this.totalSize) {
+      return;
+    }
+
+    if (normalizedPacket.byteLength !== HEADER_SIZE + size) {
+      throw new Error('Corrupt packet');
+    }
+
+    const hasWriter =
+      this.writerMode === 'opfs-fallback'
+        ? !!this.opfsWriter
+        : this.writerMode === 'blob-fallback'
+          ? true
+          : !!this.writer;
+
+    if (!hasWriter || !this.reorderingBuffer) {
+      throw new Error(`No writer available (mode: ${this.writerMode})`);
+    }
+
+    const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
+    const chunksToWrite = this.reorderingBuffer.push(
+      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+      offset
+    );
+
+    for (const chunk of chunksToWrite) {
+      this.writeBuffer.push(new Uint8Array(chunk));
+      this.currentBatchSize += chunk.byteLength;
+      this.pendingBytesInBuffer += chunk.byteLength;
+    }
+
+    this.checkBackpressure();
+    this.reportProgress();
+
+    if (this.currentBatchSize >= this.BATCH_THRESHOLD) {
+      await this.flushBuffer();
+    }
+  }
   private async processChunkInternal(packet: ArrayBuffer): Promise<void> {
     if (this.isFinalized) return;
 
