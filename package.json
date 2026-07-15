@@ -13,5 +13,8 @@
     "benchmark:verify": "node benchmarks/v1/run.mjs",
     "verify:wasm-provenance": "node scripts/verify-wasm-provenance.mjs",
     "verify": "pnpm run wasm:test && pnpm run wasm:build && pnpm run verify:wasm-provenance && pnpm run benchmark:verify && pnpm run frontend:type-check && pnpm run frontend:test && pnpm run frontend:build && pnpm run backend:test && pnpm run backend:build"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
   }
 }

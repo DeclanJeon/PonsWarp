@@ -2600,71 +2600,107 @@ export class SwarmManager {
         if (fOff >= f.size) return null;
         return readChunk(fIdx, fOff, Math.min(size, f.size - fOff));
       };
-      let prefetchPromise: Promise<ArrayBuffer> | null = null;
-      let chunksSinceLastProgress = 0;
-      for (
-        let fileIndex = cursor.fileIndex;
-        fileIndex < this.files.length;
-        fileIndex++
-      ) {
-        const file = this.files[fileIndex];
-        let fileOffset = fileIndex === cursor.fileIndex ? cursor.fileOffset : 0;
-
-        // 첫 청크 prefetch 시작
-        if (!prefetchPromise) {
-          const cs = this.getCurrentChunkSizeBytes();
-          prefetchPromise = prefetchNext(fileIndex, fileOffset, cs);
-        }
-
-        while (fileOffset < file.size) {
-          this.ensureActiveTransferRun(runId);
-          const chunkSize = this.getCurrentChunkSizeBytes();
-          const chunkEnd = Math.min(fileOffset + chunkSize, file.size);
-          // 🚀 [파이프라인] 파일 읽기 + 다음 청크 prefetch 병렬
-          // 🚀 [파이프라인] 파일 읽기 (캐시 또는 디스크)
-          const payload = prefetchPromise
-            ? await prefetchPromise
-            : await readChunk(fileIndex, fileOffset, chunkSize);
-          prefetchPromise = null;
-
-          // 다음 청크 미리 시작 (await하지 않음 - 백그라운드 prefetch)
-          const nextOff = fileOffset + chunkSize;
-          if (nextOff < file.size) {
-            prefetchPromise = readChunk(fileIndex, nextOff, chunkSize);
-          } else if (fileIndex + 1 < this.files.length) {
-            prefetchPromise = readChunk(fileIndex + 1, 0, chunkSize);
+      // 🚀 [Performance] 병렬 암호화 파이프라인
+      // 읽기 + 암호화를 병렬로 수행하여 처리량 극대화
+      const MAX_CONCURRENT_ENCRYPT = 4; // 최대 병렬 암호화 작업 수
+      const MAX_READY_BYTES = 16 * 1024 * 1024; // 최대 준비된 암호화 데이터 (16MB)
+      
+      // 순서대로 전송하기 위한 큐
+      interface PreparedChunk {
+        sequence: number;
+        offset: number;
+        packet: ArrayBuffer;
+        payloadSize: number;
+      }
+      
+      const pendingEncrypt = new Map<number, Promise<PreparedChunk>>();
+      const readyQueue: PreparedChunk[] = [];
+      let nextToSchedule = 0; // 다음에 스케줄할 시퀀스
+      let nextToSend = sequence; // 다음에 전송할 시퀀스
+      let totalChunksNeeded = 0;
+      
+      // 전체 청크 수 계산
+      for (let fi = cursor.fileIndex; fi < this.files.length; fi++) {
+        const f = this.files[fi];
+        const cs = this.getCurrentChunkSizeBytes();
+        totalChunksNeeded += Math.ceil(f.size / cs);
+      }
+      
+      // 파일 오프셋 → 글로벌 오프셋 매핑
+      const getChunkInfo = (seq: number): { fileIndex: number; fileOffset: number; chunkSize: number; globalOffset: number } | null => {
+        let accumulated = 0;
+        const cs = this.getCurrentChunkSizeBytes();
+        for (let fi = cursor.fileIndex; fi < this.files.length; fi++) {
+          const f = this.files[fi];
+          const fileStart = fi === cursor.fileIndex ? cursor.fileOffset : 0;
+          const fileChunks = Math.ceil((f.size - fileStart) / cs);
+          if (seq < accumulated + fileChunks) {
+            const chunkIndex = seq - accumulated;
+            const fileOffset = fileStart + chunkIndex * cs;
+            return { fileIndex: fi, fileOffset, chunkSize: Math.min(cs, f.size - fileOffset), globalOffset: cursor.globalOffset + seq * cs };
           }
-
-          // 암호화 (다음 청크 읽기와 병렬 가능)
-          const packet = await this.createPartitionDataPacket({
-            payload,
-            sequence: sequence++,
-            offset: globalOffset,
+          accumulated += fileChunks;
+        }
+        return null;
+      };
+      
+      // 병렬 암호화 스케줄러
+      const scheduleNext = () => {
+        while (
+          pendingEncrypt.size < MAX_CONCURRENT_ENCRYPT &&
+          nextToSchedule < totalChunksNeeded &&
+          readyQueue.length * this.getCurrentChunkSizeBytes() < MAX_READY_BYTES
+        ) {
+          const info = getChunkInfo(nextToSchedule);
+          if (!info) break;
+          
+          const seq = nextToSchedule++;
+          const promise = (async (): Promise<PreparedChunk> => {
+            const payload = await readChunk(info.fileIndex, info.fileOffset, info.chunkSize);
+            const packet = await this.createPartitionDataPacket({
+              payload,
+              sequence: seq,
+              offset: info.globalOffset,
+            });
+            return { sequence: seq, offset: info.globalOffset, packet, payloadSize: payload.byteLength };
+          })();
+          
+          pendingEncrypt.set(seq, promise);
+          promise.then(() => {
+            pendingEncrypt.delete(seq);
+            scheduleNext(); // 다음 암호화 시작
+          }).catch(() => {
+            pendingEncrypt.delete(seq);
           });
-
-          // 버퍼가 찼을 때만 대기 (빠른 경로에서는 스킵)
+        }
+      };
+      
+      // 큐에서 순서대로 전송
+      const drainReadyQueue = async () => {
+        while (readyQueue.length > 0) {
+          const chunk = readyQueue[0];
+          if (chunk.sequence !== nextToSend) break; // 순서 보장
+          
+          this.ensureActiveTransferRun(runId);
+          
+          // 버퍼가 찼을 때만 대기
           if (this.getHighestBufferedAmount() > this.getCurrentInFlightTargetBytes()) {
             await this.waitUntilSendWindowOpen(runId);
           }
-
-          const result = this.broadcastChunk(packet);
+          
+          readyQueue.shift();
+          const result = this.broadcastChunk(chunk.packet);
           for (const failedPeerId of result.failedPeers) {
             this.removePeer(failedPeerId, 'partitioned-send-failed');
           }
           if (result.successCount === 0)
             throw new Error('No connected receivers available');
-          fileOffset += payload.byteLength;
-          globalOffset += payload.byteLength;
+          
+          globalOffset = chunk.offset + chunk.payloadSize;
           this.totalBytesSent = globalOffset;
-          networkController.recordSend(packet.byteLength);
-
-          // 진행률 스로틀링 (4청크마다)
-          chunksSinceLastProgress++;
-          if (chunksSinceLastProgress >= 4) {
-            this.emitProgress();
-            chunksSinceLastProgress = 0;
-          }
-
+          networkController.recordSend(chunk.packet.byteLength);
+          nextToSend++;
+          
           if (
             globalOffset >= partitionEnd &&
             globalOffset < manifest.totalSize
@@ -2672,13 +2708,60 @@ export class SwarmManager {
             this.emitProgress();
             await this.sendPartitionMarkerAndWait(globalOffset, runId);
             partitionEnd = Math.min(
-              globalOffset +
-                selectPartitionSize(this.currentTransferTuningProfile),
+              globalOffset + selectPartitionSize(this.currentTransferTuningProfile),
               manifest.totalSize
             );
           }
         }
+      };
+      
+      // 메인 루프: 스케줄 → 완료된 작업 수집 → 전송
+      let chunksSinceLastProgress = 0;
+      scheduleNext(); // 첫 스케줄 시작
+      
+      while (nextToSend < totalChunksNeeded + sequence) {
+        this.ensureActiveTransferRun(runId);
+        
+        // 완료된 암호화 작업 수집 (순서대로)
+        for (let s = nextToSend; s < nextToSchedule; s++) {
+          const promise = pendingEncrypt.get(s);
+          if (promise) {
+            const chunk = await promise;
+            // 순서대로 readyQueue에 삽입
+            let inserted = false;
+            for (let i = 0; i < readyQueue.length; i++) {
+              if (readyQueue[i].sequence > chunk.sequence) {
+                readyQueue.splice(i, 0, chunk);
+                inserted = true;
+                break;
+              }
+            }
+            if (!inserted) readyQueue.push(chunk);
+          }
+        }
+        
+        // 순서대로 전송
+        await drainReadyQueue();
+        
+        // 새로운 암호화 작업 스케줄
+        scheduleNext();
+        
+        // 진행률 업데이트
+        chunksSinceLastProgress++;
+        if (chunksSinceLastProgress >= 8) {
+          this.emitProgress();
+          chunksSinceLastProgress = 0;
+        }
+        
+        // 잠시 대기 (CPU 과부하 방지)
+        if (pendingEncrypt.size >= MAX_CONCURRENT_ENCRYPT) {
+          await new Promise(r => setTimeout(r, 0));
+        }
       }
+      
+      // 남은 모든 암호화 작업 완료 대기
+      await Promise.all(pendingEncrypt.values());
+      await drainReadyQueue();
     } else {
       type Descriptor = {
         file: File;
@@ -2884,7 +2967,9 @@ export class SwarmManager {
       if (performance.now() - started > 120_000) {
         throw new Error('Timed out waiting for receiver/backpressure window');
       }
-      await this.waitForSendWindowSignal(SEND_WINDOW_POLL_INTERVAL_MS);
+      // 🚀 [Performance] 이벤트 기반 대기: busy polling 제거
+      // drain 이벤트 또는 watchdog(250ms) 대기
+      await this.waitForSendWindowSignal(250); // watchdog 간격
     }
     throw new Error('Transfer stopped');
   }

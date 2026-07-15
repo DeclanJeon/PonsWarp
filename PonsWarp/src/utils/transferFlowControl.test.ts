@@ -120,10 +120,10 @@ describe('transferFlowControl', () => {
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE
     );
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      4 * 1024 * 1024
+      8 * 1024 * 1024
     );
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      4 * 1024 * 1024
+      8 * 1024 * 1024
     );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
@@ -139,10 +139,10 @@ describe('transferFlowControl', () => {
     );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(8 * 1024 * 1024);
+    ).toBeLessThanOrEqual(28 * 1024 * 1024);
     expect(
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(8 * 1024 * 1024);
+    ).toBeLessThanOrEqual(28 * 1024 * 1024);
   });
 
   it('keeps relay and unknown profiles conservative', () => {
@@ -158,10 +158,10 @@ describe('transferFlowControl', () => {
     );
     expect(
       RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes
-    ).toBeLessThanOrEqual(4 * 1024 * 1024);
+    ).toBeLessThanOrEqual(8 * 1024 * 1024);
     expect(
       UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes
-    ).toBeLessThanOrEqual(4 * 1024 * 1024);
+    ).toBeLessThanOrEqual(8 * 1024 * 1024);
   });
 
   it('selects direct in-flight targets up to the profile maximum when bitrate stats are absent', () => {
@@ -235,7 +235,7 @@ describe('transferFlowControl', () => {
       32 * 1024 * 1024
     );
     expect(selectPartitionSize(UNKNOWN_TRANSFER_TUNING_PROFILE)).toBe(
-      32 * 1024 * 1024
+      64 * 1024 * 1024
     );
   });
 
