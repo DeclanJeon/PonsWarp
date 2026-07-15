@@ -114,6 +114,7 @@ export class ReceiverService {
   private pendingIceCandidates: PeerSignalData[] = [];
   private writerCleanup: Promise<void> = Promise.resolve();
   private completionEmitted = false;
+  private isPartitionMode = false; // 파티션 모드 감지 (per-chunk ACK 불필요)
 
   // 🔐 [E2E Encryption]
   private cryptoService: CryptoService | null = null;
@@ -486,6 +487,7 @@ export class ReceiverService {
     this.pendingIceCandidates = [];
     this.currentManifest = null;
     this.isTransferActive = false;
+    this.isPartitionMode = false;
     this.isReconnecting = false;
     this.reconnectAttempts = 0;
 
@@ -846,7 +848,8 @@ export class ReceiverService {
       this.writer
         .writeChunk(data)
         .then(() => {
-          if (this.peer && this.peer.connected) {
+          // 파티션 모드에서는 per-chunk ACK 불필요 (PARTITION_ACK로 대체)
+          if (!this.isPartitionMode && this.peer && this.peer.connected) {
             this.peer.send(JSON.stringify({ type: 'CONTROL', action: 'ACK' }));
           }
         })
@@ -909,7 +912,9 @@ export class ReceiverService {
           break;
         case 'PARTITION':
           {
+            this.isPartitionMode = true; // 파티션 모드 감지
             if (
+
               typeof msg.offset !== 'number' ||
               !Number.isFinite(msg.offset) ||
               typeof msg.runId !== 'number' ||
