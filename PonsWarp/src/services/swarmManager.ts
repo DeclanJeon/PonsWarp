@@ -26,6 +26,7 @@ import {
   HEADER_SIZE,
   BATCH_SIZE_INITIAL,
   PARTITION_ACK_POLL_INTERVAL_MS,
+  LAN_STRIPE_LANES,
   SEND_WINDOW_POLL_INTERVAL_MS,
   CONNECTION_TIMEOUT_MS,
 } from '../utils/constants';
@@ -55,6 +56,56 @@ import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
 export const MAX_DIRECT_PEERS = 3;
 const CONNECTION_TIMEOUT = CONNECTION_TIMEOUT_MS;
 const READY_WAIT_TIME_1N = 10000; // 1:N 상황에서 대기 시간 (10초)
+const STRIPE_SEP = '::stripe::';
+
+function stripePeerKey(baseId: string, lane: number): string {
+  return lane <= 0 ? baseId : `${baseId}${STRIPE_SEP}${lane}`;
+}
+
+function parseStripePeerKey(peerKey: string): { baseId: string; lane: number } {
+  const idx = peerKey.indexOf(STRIPE_SEP);
+  if (idx < 0) return { baseId: peerKey, lane: 0 };
+  const lane = Number(peerKey.slice(idx + STRIPE_SEP.length));
+  return {
+    baseId: peerKey.slice(0, idx),
+    lane: Number.isFinite(lane) ? lane : 0,
+  };
+}
+
+function normalizeSignalPayload(raw: unknown): {
+  signal: Record<string, unknown> | string | unknown;
+  lane: number;
+} {
+  let value: unknown = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return { signal: raw, lane: 0 };
+    }
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const lane = Number(obj.lane ?? 0);
+    if ('lane' in obj) {
+      const { lane: _lane, ...rest } = obj;
+      return {
+        signal: rest,
+        lane: Number.isFinite(lane) ? lane : 0,
+      };
+    }
+    return { signal: obj, lane: Number.isFinite(lane) ? lane : 0 };
+  }
+  return { signal: raw, lane: 0 };
+}
+
+function basePeerCount(peers: Map<string, SinglePeerConnection>): number {
+  let n = 0;
+  for (const key of peers.keys()) {
+    if (parseStripePeerKey(key).lane === 0) n++;
+  }
+  return n;
+}
 
 export interface SwarmState {
   roomId: string | null;
@@ -437,50 +488,70 @@ export class SwarmManager {
    */
   public addPeer(
     peerId: string,
-    initiator: boolean
+    initiator: boolean,
+    lane = 0
   ): SinglePeerConnection | null {
-    // 핵심 안전 검사: 슬롯 제한
-    if (this.peers.size >= MAX_DIRECT_PEERS) {
+    const peerKey = stripePeerKey(peerId, lane);
+    const { baseId } = parseStripePeerKey(peerKey);
+
+    // Slot limit counts logical receivers only (lane 0)
+    if (lane === 0 && !this.peers.has(peerKey) && basePeerCount(this.peers) >= MAX_DIRECT_PEERS) {
       logError(
         '[SwarmManager]',
-        `Slot limit reached (${MAX_DIRECT_PEERS}). Rejecting peer: ${peerId}`
+        `Slot limit reached (${MAX_DIRECT_PEERS}). Rejecting peer: ${baseId}`
       );
-      this.emit('peer-rejected', { peerId, reason: 'slot-limit' });
+      this.emit('peer-rejected', { peerId: baseId, reason: 'slot-limit' });
       return null;
     }
 
-    // 이미 존재하는 피어 확인
-    if (this.peers.has(peerId)) {
-      logInfo('[SwarmManager]', `Peer already exists: ${peerId}`);
-      return this.peers.get(peerId)!;
+    if (this.peers.has(peerKey)) {
+      logInfo('[SwarmManager]', `Peer already exists: ${peerKey}`);
+      return this.peers.get(peerKey)!;
     }
 
     const config: PeerConfig = {
       iceServers: this.iceServers,
     };
 
-    const peer = this.peerFactory(peerId, initiator, config);
-    this.setupPeerEventHandlers(peer);
-    this.peers.set(peerId, peer);
-    this.setupConnectionTimeout(peerId);
+    const peer = this.peerFactory(peerKey, initiator, config);
+    this.setupPeerEventHandlers(peer, baseId, lane);
+    this.peers.set(peerKey, peer);
+    this.setupConnectionTimeout(peerKey);
 
     logInfo(
       '[SwarmManager]',
-      `Peer added: ${peerId} (${this.peers.size}/${MAX_DIRECT_PEERS})`
+      `Peer added: ${peerKey} (logical ${basePeerCount(this.peers)}/${MAX_DIRECT_PEERS})`
     );
     return peer;
+  }
+
+  private ensureStripeLanes(baseId: string): void {
+    const lanes = Math.max(1, Math.min(LAN_STRIPE_LANES, 6));
+    for (let lane = 1; lane < lanes; lane++) {
+      this.addPeer(baseId, true, lane);
+    }
   }
 
   /**
    * 피어 제거
    */
   public removePeer(peerId: string, reason: string = 'unknown'): void {
-    const peer = this.peers.get(peerId);
-    if (!peer) return;
+    const { baseId, lane } = parseStripePeerKey(peerId);
+    // Removing a logical peer tears down all stripe lanes.
+    const keys = lane === 0
+      ? Array.from(this.peers.keys()).filter(k => parseStripePeerKey(k).baseId === baseId)
+      : [peerId];
+    if (keys.length === 0) return;
 
-    this.clearConnectionTimeout(peerId);
-    peer.destroy();
-    this.peers.delete(peerId);
+    for (const key of keys) {
+      const peer = this.peers.get(key);
+      if (!peer) continue;
+      this.clearConnectionTimeout(key);
+      peer.destroy();
+      this.peers.delete(key);
+    }
+    // Normalize to base id for state sets below
+    peerId = baseId;
 
     // 🚀 [중요] 상태 정리
     this.pausedPeers.delete(peerId);
@@ -548,34 +619,46 @@ export class SwarmManager {
    * 연결된 피어 목록 조회
    */
   public getConnectedPeers(): SinglePeerConnection[] {
-    return Array.from(this.peers.values()).filter(p => p.connected);
+    // Logical receivers only (exclude bulk stripe PeerConnections)
+    return Array.from(this.peers.entries())
+      .filter(([key, peer]) => peer.connected && parseStripePeerKey(key).lane === 0)
+      .map(([, peer]) => peer);
   }
 
   /**
    * Ready 상태인 피어 수 조회
    */
   public getReadyPeerCount(): number {
-    return Array.from(this.peers.values()).filter(p => p.ready).length;
+    return this.getConnectedPeers().filter(p => p.ready).length;
   }
 
-  private setupPeerEventHandlers(peer: SinglePeerConnection): void {
+  private setupPeerEventHandlers(
+    peer: SinglePeerConnection,
+    baseId: string,
+    lane: number
+  ): void {
     peer.on<OutgoingSignalMessage>('signal', data => {
-      this.forwardSignal(peer.id, data);
+      this.forwardSignal(baseId, data, lane);
     });
 
     peer.on<string>('connected', peerId => {
       this.clearConnectionTimeout(peerId);
-      logInfo('[SwarmManager]', `Peer connected: ${peerId}`);
-      this.emit('peer-connected', peerId);
+      logInfo('[SwarmManager]', `Peer connected: ${peerId} (lane ${lane})`);
+      if (lane === 0) {
+        this.emit('peer-connected', baseId);
 
-      // Sender인 경우 Manifest 전송
-      if (this.pendingManifest) {
-        this.sendCryptoSessionToPeer(peer);
-        this.sendManifestToPeer(peer);
+        // Sender인 경우 Manifest 전송 (control lane only)
+        if (this.pendingManifest) {
+          this.sendCryptoSessionToPeer(peer);
+          this.sendManifestToPeer(peer);
+        }
+
+        // Open additional bulk PeerConnections for host-path striping
+        this.ensureStripeLanes(baseId);
+
+        // Keep-alive 시작
+        this.startKeepAlive();
       }
-
-      // Keep-alive 시작
-      this.startKeepAlive();
     });
 
     peer.on<ArrayBuffer | string>('data', data => {
@@ -693,42 +776,34 @@ export class SwarmManager {
   }
 
   private handleOffer(data: SignalingPeerMessage): void {
-    // roomId가 설정되지 않았으면 무시
     if (!this.roomId) return;
-
     const peerId = data.from;
-    if (!peerId) return;
+    if (!peerId || !data.offer) return;
 
-    let peer = this.peers.get(peerId);
-    if (!peer) {
-      // 새 피어 생성 (Receiver로서, initiator = false)
-      peer = this.addPeer(peerId, false);
-      if (!peer) return; // 슬롯 제한으로 거부됨
-    }
-
-    if (data.offer) peer.signal(data.offer);
+    const { signal, lane } = normalizeSignalPayload(data.offer);
+    const peer =
+      this.peers.get(stripePeerKey(peerId, lane)) ||
+      this.addPeer(peerId, false, lane);
+    if (!peer) return;
+    peer.signal(signal as any);
   }
 
   private handleAnswer(data: SignalingPeerMessage): void {
-    // roomId가 설정되지 않았으면 무시
     if (!this.roomId) return;
-
     const peerId = data.from;
-    const peer = this.peers.get(peerId);
-    if (peer && data.answer) {
-      peer.signal(data.answer);
-    }
+    if (!peerId || !data.answer) return;
+    const { signal, lane } = normalizeSignalPayload(data.answer);
+    const peer = this.peers.get(stripePeerKey(peerId, lane));
+    if (peer) peer.signal(signal as any);
   }
 
   private handleIceCandidate(data: SignalingPeerMessage): void {
-    // roomId가 설정되지 않았으면 무시
     if (!this.roomId) return;
-
     const peerId = data.from;
-    const peer = this.peers.get(peerId);
-    if (peer && data.candidate) {
-      peer.signal(data.candidate);
-    }
+    if (!peerId || !data.candidate) return;
+    const { signal, lane } = normalizeSignalPayload(data.candidate);
+    const peer = this.peers.get(stripePeerKey(peerId, lane));
+    if (peer) peer.signal(signal as any);
   }
 
   private handleUserLeft(data: SignalingPeerMessage): void {
@@ -745,16 +820,27 @@ export class SwarmManager {
    * 🚀 [Multi-Receiver] 시그널링 메시지를 특정 피어에게 전달
    * peerId를 target으로 지정하여 해당 피어에게만 메시지 전송
    */
-  private forwardSignal(peerId: string, data: OutgoingSignalMessage): void {
+  private forwardSignal(
+    baseId: string,
+    data: OutgoingSignalMessage,
+    lane = 0
+  ): void {
     if (!this.roomId) return;
 
-    // 🚀 [핵심] peerId를 target으로 지정하여 특정 피어에게만 전달
+    // Embed lane in the opaque signal payload so bulk PeerConnections can be
+    // demuxed without signaling-server schema changes.
+    const payload = { ...(data as object), lane } as OutgoingSignalMessage;
+
     if (data.type === 'offer') {
-      this.getSignalingService().sendOffer(this.roomId, data, peerId);
+      this.getSignalingService().sendOffer(this.roomId, payload as any, baseId);
     } else if (data.type === 'answer') {
-      this.getSignalingService().sendAnswer(this.roomId, data, peerId);
+      this.getSignalingService().sendAnswer(this.roomId, payload as any, baseId);
     } else if (data.candidate) {
-      this.getSignalingService().sendCandidate(this.roomId, data, peerId);
+      this.getSignalingService().sendCandidate(
+        this.roomId,
+        payload as any,
+        baseId
+      );
     }
   }
 
@@ -763,14 +849,40 @@ export class SwarmManager {
   /**
    * 🚀 [대기열] 청크를 현재 전송 대상 피어에게만 전송
    */
+  private getStripeSendPeers(baseId: string): SinglePeerConnection[] {
+    const lanes: SinglePeerConnection[] = [];
+    for (const [key, peer] of this.peers) {
+      const parsed = parseStripePeerKey(key);
+      if (parsed.baseId === baseId && peer.connected) lanes.push(peer);
+    }
+    return lanes;
+  }
+
+  private pickLeastBufferedPeer(
+    peers: SinglePeerConnection[]
+  ): SinglePeerConnection | null {
+    if (peers.length === 0) return null;
+    let best = peers[0];
+    let bestBuf = best.getBufferedAmount();
+    for (let i = 1; i < peers.length; i++) {
+      const buf = peers[i].getBufferedAmount();
+      if (buf < bestBuf) {
+        best = peers[i];
+        bestBuf = buf;
+      }
+    }
+    return best;
+  }
+
   public broadcastChunk(chunk: ArrayBuffer): BroadcastResult {
     const failedPeers: string[] = [];
     const sentPeers: string[] = [];
     let successCount = 0;
 
-    // 현재 전송 대상 피어에게만 전송
+    // currentTransferPeers holds logical (lane-0) peer ids
     for (const peerId of this.currentTransferPeers) {
-      const peer = this.peers.get(peerId);
+      const lanes = this.getStripeSendPeers(peerId);
+      const peer = this.pickLeastBufferedPeer(lanes) || this.peers.get(peerId);
       if (!peer || !peer.connected) {
         failedPeers.push(peerId);
         continue;
@@ -836,12 +948,19 @@ export class SwarmManager {
    */
   public getHighestBufferedAmount(): number {
     let highest = 0;
-    for (const peer of this.peers.values()) {
-      if (peer.connected) {
+    // Prefer active transfer peers' stripe lanes when transferring
+    const ids =
+      this.currentTransferPeers.size > 0
+        ? Array.from(this.currentTransferPeers)
+        : Array.from(
+            new Set(
+              Array.from(this.peers.keys()).map(k => parseStripePeerKey(k).baseId)
+            )
+          );
+    for (const baseId of ids) {
+      for (const peer of this.getStripeSendPeers(baseId)) {
         const buffered = peer.getBufferedAmount();
-        if (buffered > highest) {
-          highest = buffered;
-        }
+        if (buffered > highest) highest = buffered;
       }
     }
     return highest;
