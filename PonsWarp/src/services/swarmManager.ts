@@ -2630,7 +2630,7 @@ export class SwarmManager {
       let chunksSinceProgress = 0;
       let lastProgressAt = performance.now();
       // 암호화/읽기를 충분히 앞서 돌려 DataChannel을 굶기지 않는다.
-      const PREPARE_AHEAD = 32;
+      const PREPARE_AHEAD = 16;
 
       const nextDescriptor = (): Descriptor | null => {
         while (
@@ -2694,16 +2694,19 @@ export class SwarmManager {
             break;
           }
           const seq = d.sequence;
-          const promise = prepare(d).then(chunk => {
-            ready.set(seq, chunk);
-            inFlight.delete(seq);
-            return chunk;
-          });
+          const promise = prepare(d)
+            .then(chunk => {
+              ready.set(seq, chunk);
+              inFlight.delete(seq);
+              return chunk;
+            })
+            .catch(error => {
+              inFlight.delete(seq);
+              // Surface failure so the transfer aborts instead of deadlocking
+              // on a missing sequence forever.
+              throw error;
+            });
           inFlight.set(seq, promise);
-          // prevent unhandled rejection
-          promise.catch(() => {
-            inFlight.delete(seq);
-          });
         }
       };
 
@@ -2725,11 +2728,12 @@ export class SwarmManager {
 
         // 버퍼가 허용하는 동안 연속 버스트 전송
         while (ready.has(nextToSend)) {
-          if (
-            this.getHighestBufferedAmount() >
-            this.getCurrentInFlightTargetBytes()
-          ) {
-            await this.waitUntilSendWindowOpen(runId);
+          const sendCap = Math.min(
+            this.getCurrentInFlightTargetBytes(),
+            4 * 1024 * 1024 // never overfill SCTP app queue
+          );
+          if (this.getHighestBufferedAmount() > sendCap) {
+            await this.waitUntilSendWindowOpen(runId, sendCap);
           }
 
           const chunk = ready.get(nextToSend)!;
@@ -2958,8 +2962,12 @@ export class SwarmManager {
     }
   }
 
-  private async waitUntilSendWindowOpen(runId: number): Promise<void> {
+  private async waitUntilSendWindowOpen(
+    runId: number,
+    targetInFlightBytes = this.getCurrentInFlightTargetBytes()
+  ): Promise<void> {
     const started = performance.now();
+    const target = Math.max(64 * 1024, Math.floor(targetInFlightBytes));
     while (runId === this.transferRunId && this.isTransferring) {
       const activePeerIds = this.getActiveTransferPeerIds();
       if (activePeerIds.length === 0) {
@@ -2970,11 +2978,12 @@ export class SwarmManager {
         this.pausedPeers.has(peerId)
       );
       const sendBudget = calculateSendBudget({
-        targetInFlightBytes: this.getCurrentInFlightTargetBytes(),
+        targetInFlightBytes: target,
         bufferedAmountBytes: this.getHighestBufferedAmount(),
         paused: hasPausedPeer,
       });
-      if (sendBudget > 0) {
+      // Resume a bit under the cap to avoid 1-byte thrash.
+      if (sendBudget > target * 0.25) {
         return;
       }
 

@@ -8,15 +8,16 @@ export const USE_RUST_SIGNALING =
 export const RUST_SIGNALING_URL =
   import.meta.env.VITE_RUST_SIGNALING_URL || 'ws://localhost:5502/ws';
 
-// 청크 사이징: SCTP 256KB 한도에서 헤더(~54B) 제외한 최대 근처
+// 청크 사이징: 192KB keeps ciphertext+header safely under SCTP 256KB
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
-export const CHUNK_SIZE_INITIAL = 240 * 1024; // 240KB
-export const CHUNK_SIZE_MAX = 240 * 1024;
+export const CHUNK_SIZE_INITIAL = 192 * 1024; // 192KB
+export const CHUNK_SIZE_MAX = 192 * 1024;
 
-// 🚀 [Performance] 깊은 송신 파이프라인 (LAN host)
-export const MAX_BUFFERED_AMOUNT = 24 * 1024 * 1024; // 24MB
-export const LOW_WATER_MARK = 4 * 1024 * 1024; // 4MB drain
-export const HIGH_WATER_MARK = 16 * 1024 * 1024; // 16MB
+// 🚀 [Performance] Keep bufferedAmount modest — huge queues inflate sender
+// speed while starving the real SCTP congestion window.
+export const MAX_BUFFERED_AMOUNT = 6 * 1024 * 1024; // 6MB
+export const LOW_WATER_MARK = 1 * 1024 * 1024; // 1MB drain
+export const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4MB
 
 // 파티션 크기: 연속 전송 (ACK 불필요)
 export const TRANSFER_PARTITION_SIZE = 128 * 1024 * 1024;
