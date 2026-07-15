@@ -78,3 +78,18 @@ Notes:
 - `PonsWarp/src/services/webRTCService.ts`
 - `PonsWarp/src/utils/constants.ts`
 - `benchmarks/v1/results/hybrid-transport-qa-report.md`
+
+
+## Cross-network QA (local LTE hotspot ↔ ssh home)
+
+Network note: local PC on **LTE hotspot**, home remote on different network.
+
+| Run | Status | elapsed | peak MB/s | overall MB/s | overall Mbps |
+|-----|--------|---------|-----------|--------------|--------------|
+| 1 | COMPLETE | 19.32s | 1.11 | 1.035 | 8.3 |
+| 2 | COMPLETE | 31.68 | 0.667 | 0.631 | 5.1 |
+
+Interpretation:
+- Transfers **COMPLETE** across different networks (LTE ↔ home).
+- Observed ~**1.0–1.1 MB/s** effective (~8 Mbps), lower than same-LAN host path (~2–2.9 MB/s) as expected under LTE/NAT/TURN constraints.
+- Current hybrid upload still finalizes **after** WebRTC packet tee completes, so this cohort is effectively a **cross-network WebRTC baseline**. Streaming hybrid overlap is the next lever for real assist gain on relay paths.
