@@ -2620,25 +2620,6 @@ export class SwarmManager {
     // Partition ACKs are too coarse (128MB) for small files, so arm here
     // after a short settle delay that lets CRYPTO/MANIFEST/TRANSFER_STARTED
     // complete on the control lane first.
-    if (LAN_STRIPE_LANES > 1) {
-      for (const peerId of this.currentTransferPeers) {
-        await this.waitForStripeLanes(peerId, 3000);
-        const verified = await this.probeStripeLanes(peerId, 1500);
-        if (verified >= 2) {
-          this.stripeEnabled = true;
-          logInfo(
-            '[SwarmManager]',
-            `Stripe armed for ${peerId}: verified ${verified}/${LAN_STRIPE_LANES}`
-          );
-        } else {
-          this.stripeEnabled = false;
-          logInfo(
-            '[SwarmManager]',
-            `Stripe probe failed for ${peerId}: verified ${verified} — primary only`
-          );
-        }
-      }
-    }
 
     this.transferPauseCount = 0;
     this.partitionAckCount = 0;
