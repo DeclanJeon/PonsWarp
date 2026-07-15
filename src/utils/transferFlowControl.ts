@@ -178,12 +178,12 @@ const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 240 * KIB, // 240KB
-  minInFlightBytes: 4 * MIB,
-  initialInFlightBytes: 8 * MIB,
-  maxInFlightBytes: 24 * MIB, // 24MB in-flight
-  lowWaterBytes: 4 * MIB, // 4MB drain
-  partitionSizeBytes: 128 * MIB, // fewer partition barriers
+  chunkSizeBytes: 192 * KIB,
+  minInFlightBytes: 2 * MIB,
+  initialInFlightBytes: 4 * MIB,
+  maxInFlightBytes: 6 * MIB, // match practical SCTP queue depth
+  lowWaterBytes: 1 * MIB,
+  partitionSizeBytes: 128 * MIB,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
 };
@@ -194,15 +194,17 @@ export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'relay',
-  chunkSizeBytes: 192 * KIB,
-  maxInFlightBytes: 8 * MIB,
+  chunkSizeBytes: 128 * KIB,
+  minInFlightBytes: 1 * MIB,
+  initialInFlightBytes: 2 * MIB,
+  maxInFlightBytes: 3 * MIB,
+  lowWaterBytes: 512 * KIB,
   partitionSizeBytes: 32 * MIB,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
-  // unknown often is still LAN host in practice
-  chunkSizeBytes: 240 * KIB,
+  chunkSizeBytes: 192 * KIB,
   partitionSizeBytes: 128 * MIB,
 };
 export function selectTransferTuningProfile(
