@@ -682,9 +682,6 @@ export class SwarmManager {
           this.sendManifestToPeer(peer);
         }
 
-        // Open additional bulk PeerConnections for host-path striping
-        this.ensureStripeLanes(baseId);
-
         // Keep-alive 시작
         this.startKeepAlive();
       }
@@ -2558,11 +2555,6 @@ export class SwarmManager {
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
 
-    // Warm bulk PeerConnection stripes for host-path bandwidth scaling.
-    for (const peerId of this.currentTransferPeers) {
-      const n = await this.waitForStripeLanes(peerId);
-      logInfo('[SwarmManager]', `Stripe lanes ready for ${peerId}: ${n}/${LAN_STRIPE_LANES}`);
-    }
     this.transferPauseCount = 0;
     this.partitionAckCount = 0;
     this.resetTransferTuning();

@@ -59,4 +59,4 @@ export const DATA_CHANNEL_COUNT = 4; // legacy constant
 export const PRODUCER_CONCURRENCY = 12;
 export const READY_QUEUE_MAX_CHUNKS = 32;
 // Parallel RTCPeerConnections for host LAN bulk transfer (separate SCTP associations)
-export const LAN_STRIPE_LANES = 4;
+export const LAN_STRIPE_LANES = 1; // multi-PC striping disabled: black-hole risk until per-lane ACK
