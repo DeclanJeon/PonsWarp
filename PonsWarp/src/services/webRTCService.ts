@@ -746,7 +746,27 @@ export class ReceiverService {
     peer.on('connected', () => {
       logInfo('[Receiver]', `Stripe lane ${lane} connected`);
     });
-    peer.on('data', this.handleData.bind(this));
+    peer.on('data', (data: ArrayBuffer | string) => {
+      // Answer probe pings on the same bulk lane that received them.
+      if (typeof data === 'string' || (data instanceof ArrayBuffer && data.byteLength < 256)) {
+        try {
+          const text =
+            typeof data === 'string'
+              ? data
+              : new TextDecoder().decode(data);
+          if (text.startsWith('{')) {
+            const msg = JSON.parse(text);
+            if (msg?.type === 'STRIPE_PING') {
+              peer.send(JSON.stringify({ type: 'STRIPE_PONG', lane }));
+              return;
+            }
+          }
+        } catch {
+          /* fall through to bulk handler */
+        }
+      }
+      this.handleData(data);
+    });
     peer.on('error', (err: Error) => {
       logError('[Receiver]', `Stripe lane ${lane} error:`, err);
     });
