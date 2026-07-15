@@ -91,6 +91,29 @@ export class ReceiverService {
   private writer: IFileWriter | null = null;
   private currentManifest: TransferManifest | null = null;
   private isTransferActive = false;
+  // 🚀 [Mobile] Wake Lock (화면 꺼짐 방지)
+  private wakeLockSentinel: any = null;
+
+  private async requestWakeLock(): Promise<void> {
+    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+    try {
+      this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+      logInfo('[Receiver]', '🔒 Wake Lock acquired');
+      this.wakeLockSentinel.addEventListener('release', () => {
+        this.wakeLockSentinel = null;
+        if (this.isTransferActive) this.requestWakeLock();
+      });
+    } catch (e) {
+      logDebug('[Receiver]', 'Wake Lock not available:', e);
+    }
+  }
+
+  private releaseWakeLock(): void {
+    if (this.wakeLockSentinel) {
+      this.wakeLockSentinel.release().catch(() => {});
+      this.wakeLockSentinel = null;
+    }
+  }
   private isReconnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -440,6 +463,7 @@ export class ReceiverService {
       this.emit('storage-ready', true);
       this.emit('status', 'RECEIVING');
       this.isTransferActive = true;
+      this.requestWakeLock(); // 📱 화면 꺼짐 방지
       this.isReconnecting = false;
       this.reconnectAttempts = 0;
 
@@ -482,6 +506,7 @@ export class ReceiverService {
 
   private async resetState() {
     logInfo('[Receiver]', 'Resetting state...');
+    this.releaseWakeLock();
     this.roomId = null;
     this.connectedPeerId = null;
     this.pendingIceCandidates = [];
