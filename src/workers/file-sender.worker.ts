@@ -976,9 +976,10 @@ async function processBatch(requestedCount: number) {
 
   if (state.startTime === 0) state.startTime = Date.now();
 
-  // 🚀 병렬 청크 생성: 최대 4개 동시 read+encrypt
+  // 🚀 스트리밍 청크 생성: 청크가 준비되는 즉시 전송
+  // DataChannel이 청크를 기다리지 않고 즉시 전송 시작
   const CONCURRENT_READS = Math.min(4, requestedCount);
-  const chunks: ArrayBuffer[] = [];
+  let chunksSent = 0;
   
   // 병렬로 청크를 생성하되 순서 보장
   const pending = new Map<number, Promise<ArrayBuffer | null>>();
@@ -999,54 +1000,44 @@ async function processBatch(requestedCount: number) {
   
   scheduleReads();
   
-  // 순서대로 결과 수집
+  // 청크가 준비되는 즉시 전송 (스트리밍)
   while (nextToSend < nextToRead || pending.size > 0) {
     if (pending.has(nextToSend)) {
       const chunk = await pending.get(nextToSend)!;
-      if (chunk && chunk.byteLength > 0) chunks.push(chunk);
-      else break;
+      if (chunk && chunk.byteLength > 0) {
+        // 청크가 준비되는 즉시 메인 스레드로 전송
+        const totalBytesSent = Number(getTotalBytesSent());
+        const elapsed = (Date.now() - state.startTime) / 1000;
+        const speed = elapsed > 0 ? totalBytesSent / elapsed : 0;
+        const totalSize = state.manifest?.totalSize || 0;
+        const progress = totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
+        
+        self.postMessage(
+          {
+            type: 'chunk-batch',
+            payload: {
+              chunks: [chunk],
+              progressData: {
+                bytesTransferred: totalBytesSent,
+                totalBytes: totalSize,
+                speed,
+                progress,
+                encrypted: encryptionEnabled,
+              },
+            },
+          },
+          [chunk]
+        );
+        chunksSent++;
+      } else {
+        break;
+      }
       nextToSend++;
     } else if (nextToSend < nextToRead) {
-      // 이미 처리됨, 다음으로
       nextToSend++;
     } else {
-      // 아직 읽지 않은 청크 대기
       await new Promise(r => setTimeout(r, 1));
     }
-  }
-
-  const totalBytesSent = Number(getTotalBytesSent());
-
-  const elapsed = (Date.now() - state.startTime) / 1000;
-  const speed = elapsed > 0 ? totalBytesSent / elapsed : 0;
-  const totalSize = state.manifest?.totalSize || 0;
-
-  let progress = 0;
-  if (state.mode === 'zip') {
-    progress =
-      totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
-  } else {
-    progress =
-      totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
-  }
-
-  if (chunks.length > 0) {
-    self.postMessage(
-      {
-        type: 'chunk-batch',
-        payload: {
-          chunks,
-          progressData: {
-            bytesTransferred: totalBytesSent,
-            totalBytes: totalSize,
-            speed,
-            progress,
-            encrypted: encryptionEnabled,
-          },
-        },
-      },
-      chunks
-    );
   }
 
   if (state.isCompleted) {
