@@ -265,6 +265,59 @@ export class SwarmManager {
   private boundHandleRoomFull = () => {
     this.emit('room-full', 'Room is at maximum capacity');
   };
+  // 🚀 [Mobile] Wake Lock + 가시성 변경 처리
+  private wakeLockSentinel: any = null;
+  private boundHandleVisibilityChange = this.handleVisibilityChange.bind(this);
+
+  private handleVisibilityChange(): void {
+    if (typeof document === 'undefined') return;
+
+    if (document.visibilityState === 'visible') {
+      logInfo('[SwarmManager]', '📱 Page became visible');
+      this.requestWakeLock();
+      if (this.isTransferring) {
+        this.checkConnectionAfterResume();
+      }
+    } else {
+      logInfo('[SwarmManager]', '📱 Page hidden');
+    }
+  }
+
+  private async requestWakeLock(): Promise<void> {
+    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+    try {
+      this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+      logInfo('[SwarmManager]', '🔒 Wake Lock acquired');
+      this.wakeLockSentinel.addEventListener('release', () => {
+        logInfo('[SwarmManager]', '🔓 Wake Lock released');
+        this.wakeLockSentinel = null;
+      });
+    } catch (e) {
+      logDebug('[SwarmManager]', 'Wake Lock not available:', e);
+    }
+  }
+
+  private releaseWakeLock(): void {
+    if (this.wakeLockSentinel) {
+      this.wakeLockSentinel.release().catch(() => {});
+      this.wakeLockSentinel = null;
+    }
+  }
+
+  private checkConnectionAfterResume(): void {
+    const connectedPeers = this.getConnectedPeers();
+    if (connectedPeers.length === 0 && this.currentTransferPeers.size > 0) {
+      logWarn('[SwarmManager]', '📱 All peers disconnected during background');
+      this.emit('status', 'RECONNECTING');
+      const signaling = this.getSignalingService();
+      void signaling.connect().then(() => {
+        if (this.roomId) return signaling.joinRoom(this.roomId);
+      }).catch(error => {
+        logError('[SwarmManager]', 'Reconnect failed:', error);
+        this.emit('error', 'Connection lost. Please restart the transfer.');
+      });
+    }
+  }
 
   constructor(options: SwarmManagerOptions = {}) {
     debugLog('[SwarmManager] 🆕 Initializing new instance');
@@ -275,6 +328,7 @@ export class SwarmManager {
         new SinglePeerConnection(peerId, initiator, config));
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this.boundHandleOnline);
+      document.addEventListener('visibilitychange', this.boundHandleVisibilityChange);
     }
   }
   private getSignalingService(): ISignalingService {
@@ -2335,6 +2389,7 @@ export class SwarmManager {
     const runId = generation;
 
     this.isTransferring = true;
+    this.requestWakeLock(); // 📱 화면 꺼짐 방지
     this.awaitingReceiverReconnect = false;
     this.isProcessingBatch = false;
     this.totalBytesSent = startOffset;
@@ -2985,6 +3040,7 @@ export class SwarmManager {
     }
 
     this.isTransferring = false;
+    this.releaseWakeLock();
     this.stopTransferPumpWatchdog();
     this.stopAdaptiveControl();
 
@@ -3142,10 +3198,12 @@ export class SwarmManager {
    */
   public cleanup(): void {
     logInfo('[SwarmManager]', 'Cleaning up (Full)...');
+    this.releaseWakeLock();
     this.resetState();
     this.removeSignalingHandlers();
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this.boundHandleOnline);
+      document.removeEventListener('visibilitychange', this.boundHandleVisibilityChange);
     }
   }
 
