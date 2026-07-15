@@ -178,11 +178,11 @@ const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 192 * KIB, // 192KB - SCTP 안전 마진
-  minInFlightBytes: 4 * MIB,
-  initialInFlightBytes: 8 * MIB,
-  maxInFlightBytes: 28 * MIB, // 28MB in-flight (기존 8MB) - receiver pause(32MB) 미만 - 파이프라인 깊이 확대
-  lowWaterBytes: 4 * MIB, // 4MB (기존 1MB) - 드레인 임계값 상향
+  chunkSizeBytes: 64 * KIB, // 64KB - 크로스 브라우저 안전 (ChatGPT 권장)
+  minInFlightBytes: 1 * MIB,
+  initialInFlightBytes: 2 * MIB,
+  maxInFlightBytes: 4 * MIB, // 4MB 글로벌 (채널당 1MB x 4)
+  lowWaterBytes: 256 * KIB, // 256KB - 이벤트 기반 드레인
   partitionSizeBytes: 64 * MIB,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
@@ -200,10 +200,7 @@ export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
-  // LAN에서 candidatePathKind를 탐지 못한 경우에도 공격적으로 전송
-  chunkSizeBytes: 192 * KIB,
-  initialInFlightBytes: 8 * MIB,
-  maxInFlightBytes: 28 * MIB, // 28MB in-flight (기존 8MB) - receiver pause(32MB) 미만
+  chunkSizeBytes: 64 * KIB,
   partitionSizeBytes: 64 * MIB,
 };
 export function selectTransferTuningProfile(
