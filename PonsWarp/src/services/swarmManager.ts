@@ -2519,6 +2519,16 @@ export class SwarmManager {
     let partitionEnd = cursor.nextPartitionEnd;
 
     if (!scheduler) {
+      // 다음 청크 미리 읽기 (파이프라인 prefetch)
+      let prefetchPromise: Promise<ArrayBuffer> | null = null;
+      const prefetchNext = (fIdx: number, fOff: number, size: number) => {
+        if (fIdx >= this.files.length) return null;
+        const f = this.files[fIdx];
+        if (fOff >= f.size) return null;
+        const end = Math.min(fOff + size, f.size);
+        return f.slice(fOff, end).arrayBuffer();
+      };
+
       for (
         let fileIndex = cursor.fileIndex;
         fileIndex < this.files.length;
@@ -2526,12 +2536,33 @@ export class SwarmManager {
       ) {
         const file = this.files[fileIndex];
         let fileOffset = fileIndex === cursor.fileIndex ? cursor.fileOffset : 0;
+
+        // 첫 청크 prefetch 시작
+        if (!prefetchPromise) {
+          const cs = this.getCurrentChunkSizeBytes();
+          prefetchPromise = prefetchNext(fileIndex, fileOffset, cs);
+        }
+
         while (fileOffset < file.size) {
           this.ensureActiveTransferRun(runId);
           await this.waitUntilSendWindowOpen(runId);
           const chunkSize = this.getCurrentChunkSizeBytes();
           const chunkEnd = Math.min(fileOffset + chunkSize, file.size);
-          const payload = await file.slice(fileOffset, chunkEnd).arrayBuffer();
+
+          // prefetch된 데이터 사용, 없으면 직접 읽기
+          const payload = prefetchPromise
+            ? await prefetchPromise
+            : await file.slice(fileOffset, chunkEnd).arrayBuffer();
+          prefetchPromise = null;
+
+          // 다음 청크 prefetch 시작
+          const nextOffset = fileOffset + payload.byteLength;
+          if (nextOffset < file.size) {
+            prefetchPromise = prefetchNext(fileIndex, nextOffset, chunkSize);
+          } else if (fileIndex + 1 < this.files.length) {
+            prefetchPromise = prefetchNext(fileIndex + 1, 0, chunkSize);
+          }
+
           const packet = await this.createPartitionDataPacket({
             payload,
             sequence: sequence++,
