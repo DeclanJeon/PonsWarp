@@ -911,16 +911,21 @@ export class SwarmManager {
   private selectConservativeDiagnostics(
     diagnostics: TransferDiagnostics[]
   ): TransferDiagnostics {
-    const unknown = diagnostics.find(
-      item => item.candidatePathKind === 'unknown'
-    );
-    if (unknown) return unknown;
+    // Prefer real selected path. Treating unknown first forced a conservative
+    // window even on stable host LAN and capped throughput.
+    const host = diagnostics.find(item => item.candidatePathKind === 'host');
+    if (host) return host;
+
+    const srflx = diagnostics.find(item => item.candidatePathKind === 'srflx');
+    if (srflx) return srflx;
 
     const relay = diagnostics.find(item => item.candidatePathKind === 'relay');
     if (relay) return relay;
 
-    const srflx = diagnostics.find(item => item.candidatePathKind === 'srflx');
-    if (srflx) return srflx;
+    const unknown = diagnostics.find(
+      item => item.candidatePathKind === 'unknown'
+    );
+    if (unknown) return unknown;
 
     return diagnostics[0];
   }
@@ -2518,15 +2523,11 @@ export class SwarmManager {
     const nonce = new Uint8Array(12);
     new DataView(nonce.buffer).setUint32(0, nonceCounter, true);
     nonce.set(this.randomPrefix.subarray(0, 8), 4);
-    const nonceBuffer = nonce.buffer.slice(
-      nonce.byteOffset,
-      nonce.byteOffset + nonce.byteLength
-    );
 
     const ciphertextWithTag = await crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
-        iv: nonceBuffer,
+        iv: nonce, // BufferSource; avoid extra copy
         tagLength: 128,
       },
       this.partitionCryptoKey,
@@ -2627,7 +2628,9 @@ export class SwarmManager {
       let planOffset = cursor.globalOffset;
       let planSequence = cursor.sequence;
       let chunksSinceProgress = 0;
-      const PREPARE_AHEAD = 12;
+      let lastProgressAt = performance.now();
+      // 암호화/읽기를 충분히 앞서 돌려 DataChannel을 굶기지 않는다.
+      const PREPARE_AHEAD = 32;
 
       const nextDescriptor = (): Descriptor | null => {
         while (
@@ -2677,71 +2680,98 @@ export class SwarmManager {
         };
       };
 
-      // Promise map by sequence — never delete until consumed by sender loop
+      // sequence -> Promise; delete only after successful send
       const inFlight = new Map<number, Promise<Prepared>>();
+      const ready = new Map<number, Prepared>();
       let nextToSend = cursor.sequence;
       let eofPlanned = false;
 
       const fill = () => {
-        while (!eofPlanned && inFlight.size < PREPARE_AHEAD) {
+        while (!eofPlanned && inFlight.size + ready.size < PREPARE_AHEAD) {
           const d = nextDescriptor();
           if (!d) {
             eofPlanned = true;
             break;
           }
-          inFlight.set(d.sequence, prepare(d));
+          const seq = d.sequence;
+          const promise = prepare(d).then(chunk => {
+            ready.set(seq, chunk);
+            inFlight.delete(seq);
+            return chunk;
+          });
+          inFlight.set(seq, promise);
+          // prevent unhandled rejection
+          promise.catch(() => {
+            inFlight.delete(seq);
+          });
         }
       };
 
       fill();
-      while (inFlight.size > 0 || !eofPlanned) {
+      while (!eofPlanned || inFlight.size > 0 || ready.size > 0) {
         this.ensureActiveTransferRun(runId);
         fill();
 
-        const promise = inFlight.get(nextToSend);
-        if (!promise) {
-          // Wait for the next sequential chunk to become scheduled/ready.
-          if (eofPlanned && inFlight.size === 0) break;
-          await new Promise(r => setTimeout(r, 0));
-          continue;
+        // 다음 순서 청크가 준비될 때까지 대기
+        if (!ready.has(nextToSend)) {
+          const pending = inFlight.get(nextToSend);
+          if (!pending) {
+            if (eofPlanned && inFlight.size === 0 && ready.size === 0) break;
+            await new Promise(r => setTimeout(r, 0));
+            continue;
+          }
+          await pending;
         }
 
-        const chunk = await promise;
-        inFlight.delete(nextToSend);
-        nextToSend++;
-        fill();
+        // 버퍼가 허용하는 동안 연속 버스트 전송
+        while (ready.has(nextToSend)) {
+          if (
+            this.getHighestBufferedAmount() >
+            this.getCurrentInFlightTargetBytes()
+          ) {
+            await this.waitUntilSendWindowOpen(runId);
+          }
 
-        if (
-          this.getHighestBufferedAmount() > this.getCurrentInFlightTargetBytes()
-        ) {
-          await this.waitUntilSendWindowOpen(runId);
-        }
+          const chunk = ready.get(nextToSend)!;
+          ready.delete(nextToSend);
+          nextToSend++;
+          fill();
 
-        const result = this.broadcastChunk(chunk.packet);
-        for (const failedPeerId of result.failedPeers) {
-          this.removePeer(failedPeerId, 'partitioned-send-failed');
-        }
-        if (result.successCount === 0) {
-          throw new Error('No connected receivers available');
-        }
+          const result = this.broadcastChunk(chunk.packet);
+          for (const failedPeerId of result.failedPeers) {
+            this.removePeer(failedPeerId, 'partitioned-send-failed');
+          }
+          if (result.successCount === 0) {
+            throw new Error('No connected receivers available');
+          }
 
-        globalOffset = chunk.offset + chunk.payloadSize;
-        this.totalBytesSent = globalOffset;
-        networkController.recordSend(chunk.packet.byteLength);
-        chunksSinceProgress++;
-        if (chunksSinceProgress >= 4) {
-          this.emitProgress();
-          chunksSinceProgress = 0;
-        }
+          globalOffset = chunk.offset + chunk.payloadSize;
+          this.totalBytesSent = globalOffset;
+          networkController.recordSend(chunk.packet.byteLength);
+          chunksSinceProgress++;
 
-        if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
-          this.emitProgress();
-          await this.sendPartitionMarkerAndWait(globalOffset, runId);
-          partitionEnd = Math.min(
-            globalOffset +
-              selectPartitionSize(this.currentTransferTuningProfile),
-            manifest.totalSize
-          );
+          const now = performance.now();
+          if (chunksSinceProgress >= 16 || now - lastProgressAt >= 100) {
+            this.emitProgress();
+            chunksSinceProgress = 0;
+            lastProgressAt = now;
+          }
+
+          if (
+            globalOffset >= partitionEnd &&
+            globalOffset < manifest.totalSize
+          ) {
+            this.emitProgress();
+            await this.sendPartitionMarkerAndWait(globalOffset, runId);
+            partitionEnd = Math.min(
+              globalOffset +
+                selectPartitionSize(this.currentTransferTuningProfile),
+              manifest.totalSize
+            );
+            // partition barrier 이후 파이프라인 재충전
+            fill();
+            break;
+          }
         }
       }
 
@@ -2951,9 +2981,8 @@ export class SwarmManager {
       if (performance.now() - started > 120_000) {
         throw new Error('Timed out waiting for receiver/backpressure window');
       }
-      // 🚀 [Performance] 이벤트 기반 대기: busy polling 제거
-      // drain 이벤트 또는 watchdog(250ms) 대기
-      await this.waitForSendWindowSignal(250); // watchdog 간격
+      // drain 이벤트 우선, 짧은 watchdog로 재평가
+      await this.waitForSendWindowSignal(20);
     }
     throw new Error('Transfer stopped');
   }
