@@ -2607,65 +2607,109 @@ export class SwarmManager {
         return blockData.slice(0, size);
       };
 
-      let fileIndex = cursor.fileIndex;
-      let fileOffset = cursor.fileOffset;
-      let chunksSinceProgress = 0;
-      const PREPARE_AHEAD = 4;
+      // Descriptor planning is sync; read+encrypt is async and parallel.
+      type Descriptor = {
+        fileIndex: number;
+        fileOffset: number;
+        offset: number;
+        sequence: number;
+        bytes: number;
+      };
       type Prepared = {
         sequence: number;
         offset: number;
         packet: ArrayBuffer;
         payloadSize: number;
       };
-      const prepared: Prepared[] = [];
 
-      const prepareOne = async (): Promise<Prepared | null> => {
+      let planFileIndex = cursor.fileIndex;
+      let planFileOffset = cursor.fileOffset;
+      let planOffset = cursor.globalOffset;
+      let planSequence = cursor.sequence;
+      let chunksSinceProgress = 0;
+      const PREPARE_AHEAD = 12;
+
+      const nextDescriptor = (): Descriptor | null => {
         while (
-          fileIndex < this.files.length &&
-          fileOffset >= this.files[fileIndex].size
+          planFileIndex < this.files.length &&
+          planFileOffset >= this.files[planFileIndex].size
         ) {
-          fileIndex++;
-          fileOffset = 0;
+          planFileIndex++;
+          planFileOffset = 0;
         }
-        if (fileIndex >= this.files.length || globalOffset >= manifest.totalSize) {
+        if (
+          planFileIndex >= this.files.length ||
+          planOffset >= manifest.totalSize
+        ) {
           return null;
         }
-        const file = this.files[fileIndex];
-        const chunkSize = Math.min(
+        const file = this.files[planFileIndex];
+        const bytes = Math.min(
           this.getCurrentChunkSizeBytes(),
-          file.size - fileOffset,
-          manifest.totalSize - globalOffset
+          file.size - planFileOffset,
+          manifest.totalSize - planOffset
         );
-        if (chunkSize <= 0) return null;
-        const offset = globalOffset;
-        const seq = sequence;
-        const payload = await readChunk(fileIndex, fileOffset, chunkSize);
+        if (bytes <= 0) return null;
+        const d: Descriptor = {
+          fileIndex: planFileIndex,
+          fileOffset: planFileOffset,
+          offset: planOffset,
+          sequence: planSequence++,
+          bytes,
+        };
+        planFileOffset += bytes;
+        planOffset += bytes;
+        return d;
+      };
+
+      const prepare = async (d: Descriptor): Promise<Prepared> => {
+        const payload = await readChunk(d.fileIndex, d.fileOffset, d.bytes);
         const packet = await this.createPartitionDataPacket({
           payload,
-          sequence: seq,
-          offset,
+          sequence: d.sequence,
+          offset: d.offset,
         });
-        fileOffset += chunkSize;
-        globalOffset += chunkSize;
-        sequence += 1;
         return {
-          sequence: seq,
-          offset,
+          sequence: d.sequence,
+          offset: d.offset,
           packet,
           payloadSize: payload.byteLength,
         };
       };
 
-      // Fill initial pipeline
-      while (prepared.length < PREPARE_AHEAD) {
-        const item = await prepareOne();
-        if (!item) break;
-        prepared.push(item);
-      }
+      // Promise map by sequence — never delete until consumed by sender loop
+      const inFlight = new Map<number, Promise<Prepared>>();
+      let nextToSend = cursor.sequence;
+      let eofPlanned = false;
 
-      while (prepared.length > 0) {
+      const fill = () => {
+        while (!eofPlanned && inFlight.size < PREPARE_AHEAD) {
+          const d = nextDescriptor();
+          if (!d) {
+            eofPlanned = true;
+            break;
+          }
+          inFlight.set(d.sequence, prepare(d));
+        }
+      };
+
+      fill();
+      while (inFlight.size > 0 || !eofPlanned) {
         this.ensureActiveTransferRun(runId);
-        const chunk = prepared.shift()!;
+        fill();
+
+        const promise = inFlight.get(nextToSend);
+        if (!promise) {
+          // Wait for the next sequential chunk to become scheduled/ready.
+          if (eofPlanned && inFlight.size === 0) break;
+          await new Promise(r => setTimeout(r, 0));
+          continue;
+        }
+
+        const chunk = await promise;
+        inFlight.delete(nextToSend);
+        nextToSend++;
+        fill();
 
         if (
           this.getHighestBufferedAmount() > this.getCurrentInFlightTargetBytes()
@@ -2681,7 +2725,8 @@ export class SwarmManager {
           throw new Error('No connected receivers available');
         }
 
-        this.totalBytesSent = chunk.offset + chunk.payloadSize;
+        globalOffset = chunk.offset + chunk.payloadSize;
+        this.totalBytesSent = globalOffset;
         networkController.recordSend(chunk.packet.byteLength);
         chunksSinceProgress++;
         if (chunksSinceProgress >= 4) {
@@ -2689,21 +2734,14 @@ export class SwarmManager {
           chunksSinceProgress = 0;
         }
 
-        const sentEnd = chunk.offset + chunk.payloadSize;
-        if (sentEnd >= partitionEnd && sentEnd < manifest.totalSize) {
+        if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
           this.emitProgress();
-          await this.sendPartitionMarkerAndWait(sentEnd, runId);
+          await this.sendPartitionMarkerAndWait(globalOffset, runId);
           partitionEnd = Math.min(
-            sentEnd + selectPartitionSize(this.currentTransferTuningProfile),
+            globalOffset +
+              selectPartitionSize(this.currentTransferTuningProfile),
             manifest.totalSize
           );
-        }
-
-        // Keep pipeline full
-        while (prepared.length < PREPARE_AHEAD) {
-          const item = await prepareOne();
-          if (!item) break;
-          prepared.push(item);
         }
       }
 
