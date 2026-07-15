@@ -2158,9 +2158,8 @@ export class SwarmManager {
         );
 
         const result = this.broadcastChunk(chunk);
-        if (result.successCount > 0) {
-          this.pendingAckPeers = new Set(result.sentPeers);
-        }
+        // 🚀 [Performance] 청크별 ACK 대기 제거: SCTP가 전송 보장
+        // 연속 전송으로 파이프라인 포화 유지
         networkController.recordSend(chunk.byteLength);
         this.totalBytesSent += getPacketPayloadSize(chunk);
 
