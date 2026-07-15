@@ -2567,11 +2567,7 @@ export class SwarmManager {
     // complete on the control lane first.
     if (LAN_STRIPE_LANES > 1) {
       for (const peerId of this.currentTransferPeers) {
-        this.ensureStripeLanes(peerId);
-      }
-      await new Promise(r => setTimeout(r, 400));
-      for (const peerId of this.currentTransferPeers) {
-        const n = this.countConnectedStripeLanes(peerId);
+        const n = await this.waitForStripeLanes(peerId, 3000);
         if (n >= Math.min(LAN_STRIPE_LANES, 6)) {
           this.stripeEnabled = true;
           logInfo(

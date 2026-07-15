@@ -5,7 +5,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const APP = `https://warp.ponslink.com/?automation=1&v=${Date.now()}`;
-const TEST_FILE = '/tmp/ponswarp-lan-test-20mb.bin';
+const TEST_FILE = '/tmp/ponswarp-lan-test-50mb.bin';
 const REMOTE_DL = '/tmp/chrome-downloads';
 const TUNNEL_PORT = 9223;
 const REMOTE_PORT = 9222;
