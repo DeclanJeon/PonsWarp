@@ -211,6 +211,7 @@ export class SwarmManager {
   private hybridArmed = false;
   private hybridArmReason = 'init';
   private hybridPackets: ArrayBuffer[] = [];
+  private hybridPrebuilt = false;
 
 
   private stripeRrCounter = 0;
@@ -1004,7 +1005,7 @@ export class SwarmManager {
     const sentPeers: string[] = [];
     let successCount = 0;
 
-    if (this.hybridArmed && this.isTransferring) {
+    if (this.hybridArmed && this.isTransferring && !this.hybridPrebuilt) {
       // Tee exact ciphertext for hybrid HTTP assist (no re-encrypt / nonce drift).
       this.hybridPackets.push(chunk.slice(0));
     }
@@ -2744,6 +2745,7 @@ export class SwarmManager {
     this.hybridManifest = null;
     this.hybridBytesUploaded = 0;
     this.hybridPackets = [];
+    this.hybridPrebuilt = false;
     if (!this.remoteHybridCaps) {
       const waitStart = Date.now();
       while (!this.remoteHybridCaps && Date.now() - waitStart < 1000) {
@@ -2760,7 +2762,7 @@ export class SwarmManager {
     if (arm.armed) {
       logInfo(
         '[SwarmManager]',
-        `Hybrid HTTP assist ARMED (${arm.reason}); will tee ciphertext packets`
+        `Hybrid HTTP assist ARMED (${arm.reason}); prebuild+parallel upload`
       );
     } else {
       logInfo('[SwarmManager]', `Hybrid HTTP assist OFF (${arm.reason})`);
@@ -2779,7 +2781,7 @@ export class SwarmManager {
     await this.sampleAdaptiveStats();
 
     // Host LAN path is already SCTP-bound; hybrid HTTP only helps constrained
-    // cross-network (relay/srflx) paths and would add end-to-end latency on host.
+    // cross-network (relay/srflx/unknown) paths and would add latency on host.
     if (
       this.hybridArmed &&
       this.currentTransferDiagnostics.candidatePathKind === 'host'
@@ -2787,31 +2789,58 @@ export class SwarmManager {
       this.hybridArmed = false;
       this.hybridArmReason = 'host-path-skip';
       this.hybridPackets = [];
+      this.hybridPrebuilt = false;
       logInfo('[SwarmManager]', 'Hybrid HTTP assist skipped on host path');
     }
 
     try {
-      await this.sendFilesPartitioned(manifest, startOffset, runId);
-      if (runId !== this.transferRunId) {
-        return;
-      }
-      if (this.hybridArmed && this.hybridPackets.length > 0) {
-        this.hybridUploadPromise = this.runHybridUpload(
-          runId,
-          manifest.totalSize
-        ).catch(error => {
+      // Cross-network hybrid-primary:
+      // 1) prebuild ciphertext once
+      // 2) upload with full uplink to cloud (no dual saturation with WebRTC bulk)
+      // 3) announce READY so receiver HTTP-downloads
+      // 4) wait for DOWNLOAD_COMPLETE; WebRTC bulk only as fallback
+      if (this.hybridArmed) {
+        await this.prebuildHybridPackets(runId, startOffset);
+        try {
+          await this.runHybridUpload(runId, manifest.totalSize);
+          const completedViaHybrid = await this.waitForHybridReceiverComplete(
+            runId,
+            120_000
+          );
+          if (!completedViaHybrid) {
+            logWarn(
+              '[SwarmManager]',
+              'Hybrid receiver did not complete in time; falling back to WebRTC bulk'
+            );
+            this.hybridArmReason = 'webrtc-fallback';
+            await this.sendPrebuiltHybridPackets(runId, manifest);
+          } else {
+            logInfo(
+              '[SwarmManager]',
+              'Transfer completed via hybrid HTTP assist (WebRTC bulk skipped)'
+            );
+            this.hybridArmReason = 'hybrid-primary-complete';
+            this.totalBytesSent = manifest.totalSize;
+            this.emitProgress();
+          }
+        } catch (error) {
           logWarn(
             '[SwarmManager]',
-            'Hybrid upload failed; continuing WebRTC-only',
+            'Hybrid primary failed; falling back to WebRTC bulk',
             error
           );
-          this.hybridArmReason = 'upload-failed';
-        });
-        // Bound wait so a slow cloud path cannot stall EOS forever.
-        await Promise.race([
-          this.hybridUploadPromise,
-          new Promise<void>(resolve => setTimeout(resolve, 60_000)),
-        ]);
+          this.hybridArmReason = 'upload-failed-fallback';
+          if (!this.hybridPrebuilt || this.hybridPackets.length === 0) {
+            await this.sendFilesPartitioned(manifest, startOffset, runId);
+          } else {
+            await this.sendPrebuiltHybridPackets(runId, manifest);
+          }
+        }
+      } else {
+        await this.sendFilesPartitioned(manifest, startOffset, runId);
+      }
+      if (runId !== this.transferRunId) {
+        return;
       }
       await this.finishTransfer();
     } catch (error) {
@@ -2847,8 +2876,40 @@ export class SwarmManager {
   }
 
 
+  private async waitForHybridReceiverComplete(
+    runId: number,
+    timeoutMs: number
+  ): Promise<boolean> {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      this.ensureActiveTransferRun(runId);
+      if (
+        this.currentTransferPeers.size > 0 &&
+        Array.from(this.currentTransferPeers).every(id =>
+          this.completedPeersInSession.has(id)
+        )
+      ) {
+        return true;
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return (
+      this.currentTransferPeers.size > 0 &&
+      Array.from(this.currentTransferPeers).every(id =>
+        this.completedPeersInSession.has(id)
+      )
+    );
+  }
+
   private async runHybridUpload(runId: number, totalPayloadBytes: number): Promise<void> {
     const teed = this.hybridPackets.slice();
+    if (teed.length === 0) {
+      throw new Error('No hybrid packets prebuilt');
+    }
+    logInfo(
+      '[SwarmManager]',
+      `Hybrid upload starting packets=${teed.length} (parallel with WebRTC)`
+    );
     const result = await uploadHybridAssistObject({
       runId,
       totalPayloadBytes,
@@ -2870,6 +2931,150 @@ export class SwarmManager {
       }
     }
     this.emit('hybrid-ready', result.manifest);
+    logInfo('[SwarmManager]', 'Hybrid READY announced to peers');
+  }
+
+  private async prebuildHybridPackets(
+    runId: number,
+    startOffset: number
+  ): Promise<void> {
+    this.hybridPackets = [];
+    this.hybridPrebuilt = false;
+    let sequence = 0;
+    let globalOffset = 0;
+    const chunkSize = this.getCurrentChunkSizeBytes();
+
+    // Resume: skip bytes before startOffset
+    let skip = startOffset;
+    for (let fileIndex = 0; fileIndex < this.files.length; fileIndex++) {
+      const file = this.files[fileIndex];
+      let fileOffset = 0;
+      if (skip >= file.size) {
+        skip -= file.size;
+        globalOffset += file.size;
+        continue;
+      }
+      if (skip > 0) {
+        fileOffset = skip;
+        globalOffset += skip;
+        skip = 0;
+      }
+      while (fileOffset < file.size) {
+        this.ensureActiveTransferRun(runId);
+        const end = Math.min(fileOffset + chunkSize, file.size);
+        const payload = await file.slice(fileOffset, end).arrayBuffer();
+        const packet = await this.createPartitionDataPacket({
+          payload,
+          sequence: sequence++,
+          offset: globalOffset,
+        });
+        this.hybridPackets.push(packet);
+        fileOffset += payload.byteLength;
+        globalOffset += payload.byteLength;
+      }
+    }
+    this.hybridPrebuilt = true;
+    logInfo(
+      '[SwarmManager]',
+      `Hybrid prebuilt ${this.hybridPackets.length} packets (${globalOffset} payload bytes)`
+    );
+  }
+
+  private async sendPrebuiltHybridPackets(
+    runId: number,
+    manifest: TransferManifest
+  ): Promise<void> {
+    if (!this.hybridPrebuilt || this.hybridPackets.length === 0) {
+      throw new Error('Hybrid prebuild missing');
+    }
+    let partitionEnd = Math.min(
+      this.getActivePartitionSize(),
+      manifest.totalSize
+    );
+    // If resuming mid-file, partitionEnd should be past start
+    const first = this.hybridPackets[0];
+    const firstOffset = this.readPacketOffset(first);
+    if (firstOffset > 0) {
+      partitionEnd = Math.min(
+        firstOffset + this.getActivePartitionSize(),
+        manifest.totalSize
+      );
+    }
+
+    let chunksSinceProgress = 0;
+    let lastProgressAt = performance.now();
+
+    for (let i = 0; i < this.hybridPackets.length; i++) {
+      this.ensureActiveTransferRun(runId);
+      const packet = this.hybridPackets[i];
+      const offset = this.readPacketOffset(packet);
+      const payloadSize = this.readPacketPayloadSize(packet);
+
+      const sendCap = Math.min(
+        this.getCurrentInFlightTargetBytes(),
+        4 * 1024 * 1024
+      );
+      if (this.getHighestBufferedAmount() > sendCap) {
+        await this.waitUntilSendWindowOpen(runId, sendCap);
+      }
+
+      const result = this.broadcastChunk(packet);
+      for (const failedPeerId of result.failedPeers) {
+        this.removePeer(failedPeerId, 'partitioned-send-failed');
+      }
+      if (result.successCount === 0) {
+        throw new Error('No connected receivers available');
+      }
+
+      const globalOffset = offset + payloadSize;
+      this.totalBytesSent = globalOffset;
+      networkController.recordSend(packet.byteLength);
+      chunksSinceProgress++;
+
+      const now = performance.now();
+      if (chunksSinceProgress >= 16 || now - lastProgressAt >= 100) {
+        this.emitProgress();
+        chunksSinceProgress = 0;
+        lastProgressAt = now;
+      }
+
+      if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
+        this.emitProgress();
+        await this.sendPartitionMarkerAndWait(globalOffset, runId);
+        partitionEnd = Math.min(
+          globalOffset + this.getActivePartitionSize(),
+          manifest.totalSize
+        );
+      }
+    }
+
+    if (this.totalBytesSent !== manifest.totalSize) {
+      // Allow small mismatch only if resume path; otherwise fail hard
+      if (this.totalBytesSent < manifest.totalSize) {
+        throw new Error(
+          `Hybrid prebuilt send incomplete: ${this.totalBytesSent}/${manifest.totalSize}`
+        );
+      }
+    }
+    this.emitProgress();
+  }
+
+  private readPacketOffset(packet: ArrayBuffer): number {
+    const bytes = new Uint8Array(packet);
+    const view = new DataView(packet);
+    if (bytes[0] === 0x02 && bytes[1] === 0x01) {
+      return Number(view.getBigUint64(8, true));
+    }
+    return Number(view.getBigUint64(6, true));
+  }
+
+  private readPacketPayloadSize(packet: ArrayBuffer): number {
+    const bytes = new Uint8Array(packet);
+    const view = new DataView(packet);
+    if (bytes[0] === 0x02 && bytes[1] === 0x01) {
+      return view.getUint32(16, true);
+    }
+    return view.getUint32(14, true);
   }
 
 

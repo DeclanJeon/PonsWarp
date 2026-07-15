@@ -93,3 +93,28 @@ Interpretation:
 - Transfers **COMPLETE** across different networks (LTE ↔ home).
 - Observed ~**1.0–1.1 MB/s** effective (~8 Mbps), lower than same-LAN host path (~2–2.9 MB/s) as expected under LTE/NAT/TURN constraints.
 - Current hybrid upload still finalizes **after** WebRTC packet tee completes, so this cohort is effectively a **cross-network WebRTC baseline**. Streaming hybrid overlap is the next lever for real assist gain on relay paths.
+
+
+## Streaming / hybrid-primary update
+
+### Code change
+- Prebuild exact ciphertext packets once
+- **Hybrid-primary on non-host paths**: upload ciphertext with full uplink, announce READY, wait for receiver HTTP completion + EOS inject
+- WebRTC bulk only as fallback if hybrid receiver does not complete in 120s
+- Host path still skips hybrid
+
+### Cross-net LTE hotspot ↔ home (20MB) after hybrid-primary
+
+| Run | Status | elapsed | peak MB/s | overall MB/s | Mbps |
+|-----|--------|---------|-----------|--------------|------|
+| 1 | COMPLETE | 22.6s | 0.96 | 0.89 | 7.1 |
+| 2 | COMPLETE | 33.1s | 0.62 | 0.60 | 4.8 |
+
+### LTE → R2 raw PUT probe (same local network path)
+- 10MB PUT to Cloudflare R2: **~1.45 MB/s** (~11.6 Mbps effective application goodput from curl speed_upload)
+
+### Conclusion
+- Cross-network completeness: **pass**
+- Bottleneck on this LTE hotspot is **sender uplink (~1–1.5 MB/s to R2)**, not only WebRTC/SCTP framing
+- Hybrid-primary cannot exceed that uplink ceiling; 10 MB/s needs ~80+ Mbps sustained upload (or a sender on better uplink)
+- Next levers: better sender network, multi-receiver CDN fanout, or receiver-side path optimizations when sender has high upload

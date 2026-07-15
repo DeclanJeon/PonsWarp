@@ -13,6 +13,7 @@ import {
   localHybridCaps,
   type HybridManifestMsg,
 } from './hybridBulkTransport';
+import { createEosPacket } from '../utils/plainPacket';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
 import { base64ToBytes, CryptoService } from './cryptoService';
 import { TransferManifest } from '../types/types';
@@ -1038,6 +1039,18 @@ export class ReceiverService {
         hybridBytesReceived: this.hybridBytesReceived,
         hybridPacketsReceived: this.hybridPacketsReceived,
       });
+      // Hybrid-primary path: if contiguous payload is complete, inject EOS so
+      // the writer finalizes without waiting for WebRTC bulk.
+      const frontier = this.writer?.getContiguousReceivedOffset?.() ?? 0;
+      const expected =
+        manifest.totalPayloadBytes || this.currentManifest?.totalSize || 0;
+      if (expected > 0 && frontier >= expected) {
+        logInfo(
+          '[Receiver]',
+          `Hybrid filled payload (${frontier}/${expected}); injecting EOS`
+        );
+        await this.writer.writeChunk(createEosPacket());
+      }
     } catch (error) {
       if ((error as Error)?.name === 'AbortError') return;
       logWarn(
