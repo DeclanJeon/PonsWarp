@@ -8,6 +8,11 @@ import {
   logDebug,
   debugLog,
 } from '../utils/logger';
+import {
+  downloadHybridAssistPackets,
+  localHybridCaps,
+  type HybridManifestMsg,
+} from './hybridBulkTransport';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
 import { base64ToBytes, CryptoService } from './cryptoService';
 import { TransferManifest } from '../types/types';
@@ -99,6 +104,11 @@ export class ReceiverService {
   private peer: SinglePeerConnection | null = null;
   /** Additional bulk PeerConnections keyed by lane (>0) */
   private stripePeers: Map<number, SinglePeerConnection> = new Map();
+  private hybridManifest: HybridManifestMsg | null = null;
+  private hybridDownloadAbort: AbortController | null = null;
+  private hybridBytesReceived = 0;
+  private hybridPacketsReceived = 0;
+
 
   private signalingService: ISignalingService | null = null;
   private readonly peerFactory: (
@@ -835,6 +845,12 @@ export class ReceiverService {
     peer.on('connected', () => {
       logInfo('[Receiver]', 'P2P Channel Connected!');
       this.emit('connected', true);
+      try {
+        const caps = localHybridCaps();
+        peer.send(JSON.stringify({ type: 'PEER_CAPS', ...caps }));
+      } catch (error) {
+        logWarn('[Receiver]', 'Failed to send PEER_CAPS', error);
+      }
 
       if (this.isReconnecting) {
         this.isReconnecting = false;
@@ -990,6 +1006,48 @@ export class ReceiverService {
     this.peer = null;
   }
 
+
+  private async consumeHybridObject(manifest: HybridManifestMsg): Promise<void> {
+    if (!this.writer) {
+      logWarn('[Receiver]', 'Hybrid ready but writer not initialized yet');
+      setTimeout(() => {
+        if (this.writer && this.hybridManifest?.shareId === manifest.shareId) {
+          void this.consumeHybridObject(manifest);
+        }
+      }, 250);
+      return;
+    }
+    this.hybridDownloadAbort?.abort();
+    this.hybridDownloadAbort = new AbortController();
+    try {
+      const result = await downloadHybridAssistPackets(
+        manifest,
+        async packet => {
+          if (!this.writer) return;
+          await this.writer.writeChunk(packet);
+          this.hybridPacketsReceived += 1;
+          this.hybridBytesReceived += packet.byteLength;
+        },
+        { signal: this.hybridDownloadAbort.signal }
+      );
+      logInfo(
+        '[Receiver]',
+        `Hybrid download complete packets=${result.packetCount} bytes=${result.bytes}`
+      );
+      this.emit('hybrid-progress', {
+        hybridBytesReceived: this.hybridBytesReceived,
+        hybridPacketsReceived: this.hybridPacketsReceived,
+      });
+    } catch (error) {
+      if ((error as Error)?.name === 'AbortError') return;
+      logWarn(
+        '[Receiver]',
+        'Hybrid download failed; WebRTC path continues',
+        error
+      );
+    }
+  }
+
   private handleData(data: ArrayBuffer | string) {
     // 1. 제어 메시지 (JSON 문자열)
     if (this.isControlMessage(data)) {
@@ -1071,6 +1129,58 @@ export class ReceiverService {
         case 'KEEP_ALIVE':
           // 무시
           break;
+        case 'HYBRID_MANIFEST': {
+          if (
+            typeof msg.runId !== 'number' ||
+            typeof msg.shareId !== 'string' ||
+            typeof msg.fileId !== 'string'
+          ) {
+            break;
+          }
+          this.hybridManifest = msg as HybridManifestMsg;
+          logInfo(
+            '[Receiver]',
+            `Hybrid manifest received share=${msg.shareId}`
+          );
+          break;
+        }
+        case 'HYBRID_READY': {
+          if (
+            typeof msg.runId !== 'number' ||
+            typeof msg.shareId !== 'string' ||
+            typeof msg.fileId !== 'string'
+          ) {
+            break;
+          }
+          const manifest =
+            this.hybridManifest &&
+            this.hybridManifest.shareId === msg.shareId &&
+            this.hybridManifest.fileId === msg.fileId
+              ? this.hybridManifest
+              : (msg as HybridManifestMsg);
+          // Fill required fields if READY arrives with full payload
+          const full: HybridManifestMsg = {
+            type: 'HYBRID_MANIFEST',
+            runId: manifest.runId ?? msg.runId,
+            shareId: msg.shareId,
+            fileId: msg.fileId,
+            objectBytes: (manifest as HybridManifestMsg).objectBytes ?? 0,
+            packetCount: (manifest as HybridManifestMsg).packetCount ?? 0,
+            totalPayloadBytes:
+              (manifest as HybridManifestMsg).totalPayloadBytes ?? 0,
+            downloadSessionToken: (manifest as HybridManifestMsg)
+              .downloadSessionToken,
+          };
+          this.hybridManifest = full;
+          void this.consumeHybridObject(full);
+          break;
+        }
+        case 'HYBRID_ABORT': {
+          this.hybridDownloadAbort?.abort();
+          this.hybridDownloadAbort = null;
+          logWarn('[Receiver]', 'Hybrid assist aborted by peer');
+          break;
+        }
         case 'PARTITION':
           {
             this.isPartitionMode = true; // 파티션 모드 감지

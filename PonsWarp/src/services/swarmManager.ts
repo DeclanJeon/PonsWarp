@@ -36,6 +36,15 @@ import { bytesToBase64, CryptoService } from './cryptoService';
 import { networkController, AdaptiveParams } from './networkAdaptiveController';
 import { calculateProgressPercent } from '../utils/transferProgress';
 import {
+  cloudApiConfigured,
+  localHybridCaps,
+  shouldArmHybrid,
+  uploadHybridAssistObject,
+  type HybridManifestMsg,
+  type HybridPeerCaps,
+  type HybridReadyMsg,
+} from './hybridBulkTransport';
+import {
   calculateSafeBatchRequestSize,
   calculateSendBudget,
   getPacketPayloadSize,
@@ -195,6 +204,15 @@ export class SwarmManager {
   private signalingRecoveryPromise: Promise<void> | null = null;
   private isTransferring: boolean = false;
   private stripeEnabled = false;
+  private remoteHybridCaps: HybridPeerCaps | null = null;
+  private hybridUploadPromise: Promise<void> | null = null;
+  private hybridManifest: HybridManifestMsg | null = null;
+  private hybridBytesUploaded = 0;
+  private hybridArmed = false;
+  private hybridArmReason = 'init';
+  private hybridPackets: ArrayBuffer[] = [];
+
+
   private stripeRrCounter = 0;
   private verifiedStripeKeys: Set<string> = new Set();
   private pendingManifest: TransferManifest | null = null;
@@ -986,6 +1004,11 @@ export class SwarmManager {
     const sentPeers: string[] = [];
     let successCount = 0;
 
+    if (this.hybridArmed && this.isTransferring) {
+      // Tee exact ciphertext for hybrid HTTP assist (no re-encrypt / nonce drift).
+      this.hybridPackets.push(chunk.slice(0));
+    }
+
     // currentTransferPeers holds logical (lane-0) peer ids
     for (const peerId of this.currentTransferPeers) {
       const lanes = this.getStripeSendPeers(peerId);
@@ -1439,6 +1462,18 @@ export class SwarmManager {
       case 'KEEP_ALIVE':
         // Keep-alive 메시지는 무시 (연결 유지 목적)
         return;
+
+      case 'PEER_CAPS': {
+        this.remoteHybridCaps = {
+          hybridHttp: (msg as { hybridHttp?: boolean }).hybridHttp === true,
+          version: 1,
+        };
+        logInfo(
+          '[SwarmManager]',
+          `Remote PEER_CAPS hybridHttp=${this.remoteHybridCaps.hybridHttp}`
+        );
+        return;
+      }
 
       case 'PARTITION_ACK': {
         if (
@@ -2690,16 +2725,45 @@ export class SwarmManager {
     // partition marker, then wait until receivers ACK that partition before
     // sending more. This replaces the worker push pump that could outrun real
     // browser receiver/write queues and stall at a stable progress percentage.
+    const localCaps = localHybridCaps();
     for (const peerId of Array.from(this.currentTransferPeers)) {
       const peer = this.peers.get(peerId);
       if (peer && peer.connected) {
         try {
+          peer.send(JSON.stringify({ type: 'PEER_CAPS', ...localCaps }));
           peer.send(JSON.stringify({ type: 'MANIFEST', manifest }));
           peer.send(JSON.stringify({ type: 'TRANSFER_STARTED' }));
         } catch (e) {
           this.removePeer(peerId, 'transfer-start-send-failed');
         }
       }
+    }
+
+    // Hybrid HTTP assist: encode+upload ciphertext in parallel with WebRTC.
+    this.hybridUploadPromise = null;
+    this.hybridManifest = null;
+    this.hybridBytesUploaded = 0;
+    this.hybridPackets = [];
+    if (!this.remoteHybridCaps) {
+      const waitStart = Date.now();
+      while (!this.remoteHybridCaps && Date.now() - waitStart < 1000) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+    }
+    const arm = shouldArmHybrid({
+      remoteCaps: this.remoteHybridCaps,
+      totalBytes: manifest.totalSize,
+      cloudApiConfigured: cloudApiConfigured(),
+    });
+    this.hybridArmed = arm.armed;
+    this.hybridArmReason = arm.reason;
+    if (arm.armed) {
+      logInfo(
+        '[SwarmManager]',
+        `Hybrid HTTP assist ARMED (${arm.reason}); will tee ciphertext packets`
+      );
+    } else {
+      logInfo('[SwarmManager]', `Hybrid HTTP assist OFF (${arm.reason})`);
     }
 
     this.emit('progress', {
@@ -2714,10 +2778,40 @@ export class SwarmManager {
     this.startAdaptiveControl();
     await this.sampleAdaptiveStats();
 
+    // Host LAN path is already SCTP-bound; hybrid HTTP only helps constrained
+    // cross-network (relay/srflx) paths and would add end-to-end latency on host.
+    if (
+      this.hybridArmed &&
+      this.currentTransferDiagnostics.candidatePathKind === 'host'
+    ) {
+      this.hybridArmed = false;
+      this.hybridArmReason = 'host-path-skip';
+      this.hybridPackets = [];
+      logInfo('[SwarmManager]', 'Hybrid HTTP assist skipped on host path');
+    }
+
     try {
       await this.sendFilesPartitioned(manifest, startOffset, runId);
       if (runId !== this.transferRunId) {
         return;
+      }
+      if (this.hybridArmed && this.hybridPackets.length > 0) {
+        this.hybridUploadPromise = this.runHybridUpload(
+          runId,
+          manifest.totalSize
+        ).catch(error => {
+          logWarn(
+            '[SwarmManager]',
+            'Hybrid upload failed; continuing WebRTC-only',
+            error
+          );
+          this.hybridArmReason = 'upload-failed';
+        });
+        // Bound wait so a slow cloud path cannot stall EOS forever.
+        await Promise.race([
+          this.hybridUploadPromise,
+          new Promise<void>(resolve => setTimeout(resolve, 60_000)),
+        ]);
       }
       await this.finishTransfer();
     } catch (error) {
@@ -2751,6 +2845,33 @@ export class SwarmManager {
       )
     );
   }
+
+
+  private async runHybridUpload(runId: number, totalPayloadBytes: number): Promise<void> {
+    const teed = this.hybridPackets.slice();
+    const result = await uploadHybridAssistObject({
+      runId,
+      totalPayloadBytes,
+      buildPackets: async () => teed,
+      onProgress: loaded => {
+        this.hybridBytesUploaded = loaded;
+      },
+    });
+    if (runId !== this.transferRunId) return;
+    this.hybridManifest = result.manifest;
+    for (const peerId of Array.from(this.currentTransferPeers)) {
+      const peer = this.peers.get(peerId);
+      if (!peer || !peer.connected) continue;
+      try {
+        peer.send(JSON.stringify(result.manifest));
+        peer.send(JSON.stringify(result.ready));
+      } catch (error) {
+        logWarn('[SwarmManager]', 'Failed to send hybrid manifest', error);
+      }
+    }
+    this.emit('hybrid-ready', result.manifest);
+  }
+
 
   private async createPartitionDataPacket(params: {
     payload: ArrayBuffer;
@@ -3471,6 +3592,9 @@ export class SwarmManager {
       pauseCount: this.transferPauseCount,
       pausedPeerCount: this.pausedPeers.size,
       partitionAckCount: this.partitionAckCount,
+      hybridArmed: this.hybridArmed,
+      hybridArmReason: this.hybridArmReason,
+      hybridBytesUploaded: this.hybridBytesUploaded,
     };
   }
 

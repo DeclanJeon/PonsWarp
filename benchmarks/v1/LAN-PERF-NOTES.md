@@ -21,3 +21,13 @@ Open N independent RTCPeerConnections (separate SCTP associations) to the same r
 ## Path to ~10 MB/s
 1. Replace simple-peer bulk lanes with native RTCPeerConnection + reliable credit/ACK, or
 2. Add LAN-local TCP/HTTP host path when both peers share a private network (bypass SCTP).
+
+## Hybrid transport (2026-07-16)
+
+Design: `PonsWarp/docs/design/hybrid-bulk-transport.md`  
+QA: `benchmarks/v1/results/hybrid-transport-qa-report.md`
+
+- WebRTC remains baseline.
+- Encrypted HTTP assist tees ciphertext to Cloud Drop when armed.
+- Auto-skipped on host LAN path.
+- Enable via `VITE_HYBRID_HTTP_ASSIST=true`.
