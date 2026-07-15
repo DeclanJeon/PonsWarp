@@ -1102,6 +1102,17 @@ export class DirectFileWriter {
   }
 
   /**
+   * Contiguous payload frontier (reordering next-expected).
+   * Used by PARTITION_ACK so multi-lane arrivals cannot ACK past gaps.
+   */
+  public getContiguousReceivedOffset(): number {
+    if (this.reorderingBuffer) {
+      return this.reorderingBuffer.getNextExpectedOffset();
+    }
+    return this.totalBytesWritten;
+  }
+
+  /**
    * 🚀 [신규] 실제 쓰기 로직을 분리 (내부용)
    */
   /**

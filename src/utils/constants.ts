@@ -10,8 +10,8 @@ export const RUST_SIGNALING_URL =
 
 // 청크 사이징: 192KB keeps ciphertext+header safely under SCTP 256KB
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
-export const CHUNK_SIZE_INITIAL = 192 * 1024; // 192KB
-export const CHUNK_SIZE_MAX = 192 * 1024;
+export const CHUNK_SIZE_INITIAL = 240 * 1024; // 240KB under SCTP 256KB
+export const CHUNK_SIZE_MAX = 240 * 1024;
 
 // 🚀 [Performance] Keep bufferedAmount modest — huge queues inflate sender
 // speed while starving the real SCTP congestion window.
@@ -59,4 +59,7 @@ export const DATA_CHANNEL_COUNT = 4; // legacy constant
 export const PRODUCER_CONCURRENCY = 12;
 export const READY_QUEUE_MAX_CHUNKS = 32;
 // Parallel RTCPeerConnections for host LAN bulk transfer (separate SCTP associations)
-export const LAN_STRIPE_LANES = 1; // multi-PC striping off: ICE contention + incomplete receives on this path
+export const LAN_STRIPE_LANES = 1; // multi-PC striping disabled: app-path still black-holes under simple-peer demux
+/** Partition barrier size while multi-PC striping is active (faster gap detection). */
+export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
+
