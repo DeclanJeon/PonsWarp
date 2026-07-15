@@ -405,11 +405,15 @@ export class DirectFileWriter {
 
     const isSmallFile = shouldUseBlobFallbackBeforeStreaming(fileSize);
 
+    // 🚀 Headless 브라우저 감지: FSA는 headless에서 작동 안 함
+    const isHeadless = /HeadlessChrome/.test(navigator.userAgent) || navigator.webdriver === true;
+
     // Chromium/Edge 계열은 사용자가 MATERIALIZE를 클릭한 제스처 안에서
     // File System Access API를 열 수 있다. 50MB+ 파일을 Blob에 끝까지 모으면
     // 마지막 Blob 생성/다운로드 단계에서 UI가 멈춘 것처럼 보이고 메모리 압박이 커진다.
     // 따라서 FSA가 있으면 실제 디스크 스트리밍 writer를 우선 사용한다.
-    if (hasFileSystemAccess) {
+    // 단, headless 브라우저에서는 FSA가 작동하지 않으므로 Blob/OPFS를 우선 사용한다.
+    if (hasFileSystemAccess && !isHeadless) {
       try {
         await this.initFileSystemAccess(fileName);
         logInfo(
