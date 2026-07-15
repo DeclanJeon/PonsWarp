@@ -2519,16 +2519,34 @@ export class SwarmManager {
     let partitionEnd = cursor.nextPartitionEnd;
 
     if (!scheduler) {
-      // 다음 청크 미리 읽기 (파이프라인 prefetch)
-      let prefetchPromise: Promise<ArrayBuffer> | null = null;
+      // 🚀 [성능] 대용량 블록 읽기 + 메모리 슬라이싱 (iPhone 호환)
+      const READ_BLOCK_SIZE = 1024 * 1024; // 1MB 블록으로 읽기
+      let readBlockCache: { fileIndex: number; offset: number; data: ArrayBuffer } | null = null;
+
+      const readChunk = async (fIdx: number, fOff: number, size: number): Promise<ArrayBuffer> => {
+        // 캐시된 블록에서 슬라이스 가능한 경우
+        if (readBlockCache && readBlockCache.fileIndex === fIdx &&
+            fOff >= readBlockCache.offset &&
+            fOff + size <= readBlockCache.offset + readBlockCache.data.byteLength) {
+          const relOff = fOff - readBlockCache.offset;
+          return readBlockCache.data.slice(relOff, relOff + size);
+        }
+        // 1MB 블록으로 읽기 (file.slice 호출 횟수 대폭 감소)
+        const f = this.files[fIdx];
+        const blockEnd = Math.min(fOff + READ_BLOCK_SIZE, f.size);
+        const blockData = await f.slice(fOff, blockEnd).arrayBuffer();
+        readBlockCache = { fileIndex: fIdx, offset: fOff, data: blockData };
+        return blockData.slice(0, size);
+      };
+
       const prefetchNext = (fIdx: number, fOff: number, size: number) => {
         if (fIdx >= this.files.length) return null;
         const f = this.files[fIdx];
         if (fOff >= f.size) return null;
-        const end = Math.min(fOff + size, f.size);
-        return f.slice(fOff, end).arrayBuffer();
+        return readChunk(fIdx, fOff, Math.min(size, f.size - fOff));
       };
-
+      let prefetchPromise: Promise<ArrayBuffer> | null = null;
+      let chunksSinceLastProgress = 0;
       for (
         let fileIndex = cursor.fileIndex;
         fileIndex < this.files.length;
@@ -2545,32 +2563,35 @@ export class SwarmManager {
 
         while (fileOffset < file.size) {
           this.ensureActiveTransferRun(runId);
-          await this.waitUntilSendWindowOpen(runId);
           const chunkSize = this.getCurrentChunkSizeBytes();
           const chunkEnd = Math.min(fileOffset + chunkSize, file.size);
-
-          // prefetch된 데이터 사용, 없으면 직접 읽기
+          // 🚀 [파이프라인] 파일 읽기 + 다음 청크 prefetch 병렬
+          // 🚀 [파이프라인] 파일 읽기 (캐시 또는 디스크)
           const payload = prefetchPromise
             ? await prefetchPromise
-            : await file.slice(fileOffset, chunkEnd).arrayBuffer();
+            : await readChunk(fileIndex, fileOffset, chunkSize);
           prefetchPromise = null;
 
-          // 다음 청크 prefetch 시작
-          const nextOffset = fileOffset + payload.byteLength;
-          if (nextOffset < file.size) {
-            prefetchPromise = prefetchNext(fileIndex, nextOffset, chunkSize);
+          // 다음 청크 미리 시작 (await하지 않음 - 백그라운드 prefetch)
+          const nextOff = fileOffset + chunkSize;
+          if (nextOff < file.size) {
+            prefetchPromise = readChunk(fileIndex, nextOff, chunkSize);
           } else if (fileIndex + 1 < this.files.length) {
-            prefetchPromise = prefetchNext(fileIndex + 1, 0, chunkSize);
+            prefetchPromise = readChunk(fileIndex + 1, 0, chunkSize);
           }
 
+          // 암호화 (다음 청크 읽기와 병렬 가능)
           const packet = await this.createPartitionDataPacket({
             payload,
             sequence: sequence++,
             offset: globalOffset,
           });
-          this.ensureActiveTransferRun(runId);
-          await this.waitUntilSendWindowOpen(runId);
-          this.ensureActiveTransferRun(runId);
+
+          // 버퍼가 찼을 때만 대기 (빠른 경로에서는 스킵)
+          if (this.getHighestBufferedAmount() > this.getCurrentInFlightTargetBytes()) {
+            await this.waitUntilSendWindowOpen(runId);
+          }
+
           const result = this.broadcastChunk(packet);
           for (const failedPeerId of result.failedPeers) {
             this.removePeer(failedPeerId, 'partitioned-send-failed');
@@ -2581,11 +2602,19 @@ export class SwarmManager {
           globalOffset += payload.byteLength;
           this.totalBytesSent = globalOffset;
           networkController.recordSend(packet.byteLength);
-          this.emitProgress();
+
+          // 진행률 스로틀링 (4청크마다)
+          chunksSinceLastProgress++;
+          if (chunksSinceLastProgress >= 4) {
+            this.emitProgress();
+            chunksSinceLastProgress = 0;
+          }
+
           if (
             globalOffset >= partitionEnd &&
             globalOffset < manifest.totalSize
           ) {
+            this.emitProgress();
             await this.sendPartitionMarkerAndWait(globalOffset, runId);
             partitionEnd = Math.min(
               globalOffset +
