@@ -178,11 +178,11 @@ const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 64 * KIB, // 64KB - 크로스 브라우저 안전 (ChatGPT 권장)
-  minInFlightBytes: 1 * MIB,
-  initialInFlightBytes: 2 * MIB,
-  maxInFlightBytes: 4 * MIB, // 4MB 글로벌 (채널당 1MB x 4)
-  lowWaterBytes: 256 * KIB, // 256KB - 이벤트 기반 드레인
+  chunkSizeBytes: 192 * KIB, // 192KB - Chrome SCTP 안전 마진
+  minInFlightBytes: 2 * MIB,
+  initialInFlightBytes: 4 * MIB,
+  maxInFlightBytes: 12 * MIB, // 12MB in-flight
+  lowWaterBytes: 2 * MIB, // 2MB drain
   partitionSizeBytes: 64 * MIB,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
@@ -200,7 +200,7 @@ export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
-  chunkSizeBytes: 64 * KIB,
+  chunkSizeBytes: 192 * KIB,
   partitionSizeBytes: 64 * MIB,
 };
 export function selectTransferTuningProfile(

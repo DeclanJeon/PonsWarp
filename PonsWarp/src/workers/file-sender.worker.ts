@@ -971,77 +971,66 @@ function createPacketFallback(data: Uint8Array): ArrayBuffer {
   return packet;
 }
 
+let isProcessBatchRunning = false;
+
 async function processBatch(requestedCount: number) {
-  if (!state.isInitialized) return;
+  if (!state.isInitialized || isProcessBatchRunning) return;
+  isProcessBatchRunning = true;
 
-  if (state.startTime === 0) state.startTime = Date.now();
+  try {
+    if (state.startTime === 0) state.startTime = Date.now();
 
-  // 🚀 스트리밍 청크 생성: 청크가 준비되는 즉시 전송
-  // DataChannel이 청크를 기다리지 않고 즉시 전송 시작
-  const CONCURRENT_READS = Math.min(4, requestedCount);
-  let chunksSent = 0;
-  
-  // 병렬로 청크를 생성하되 순서 보장
-  const pending = new Map<number, Promise<ArrayBuffer | null>>();
-  let nextToRead = 0;
-  let nextToSend = 0;
-  
-  const scheduleReads = () => {
-    while (pending.size < CONCURRENT_READS && nextToRead < requestedCount && !state.isCompleted) {
-      const seq = nextToRead++;
-      pending.set(seq, createNextChunk());
-      const promise = pending.get(seq)!;
-      promise.then(() => {
-        pending.delete(seq);
-        scheduleReads();
-      });
+    // createNextChunk는 파일 offset 상태를 사용하므로 순차 처리가 필수다.
+    // 대신 메인 스레드 재진입을 막고, 배치 단위로 묶어 전송 오버헤드를 줄인다.
+    const chunks: ArrayBuffer[] = [];
+    for (let i = 0; i < requestedCount && !state.isCompleted; i++) {
+      const chunk = await createNextChunk();
+      if (!chunk || chunk.byteLength === 0) break;
+      chunks.push(chunk);
     }
-  };
-  
-  scheduleReads();
-  
-  // 청크가 준비되는 즉시 전송 (스트리밍)
-  while (nextToSend < nextToRead || pending.size > 0) {
-    if (pending.has(nextToSend)) {
-      const chunk = await pending.get(nextToSend)!;
-      if (chunk && chunk.byteLength > 0) {
-        // 청크가 준비되는 즉시 메인 스레드로 전송
-        const totalBytesSent = Number(getTotalBytesSent());
-        const elapsed = (Date.now() - state.startTime) / 1000;
-        const speed = elapsed > 0 ? totalBytesSent / elapsed : 0;
-        const totalSize = state.manifest?.totalSize || 0;
-        const progress = totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
-        
-        self.postMessage(
-          {
-            type: 'chunk-batch',
-            payload: {
-              chunks: [chunk],
-              progressData: {
-                bytesTransferred: totalBytesSent,
-                totalBytes: totalSize,
-                speed,
-                progress,
-                encrypted: encryptionEnabled,
-              },
+
+    const totalBytesSent = Number(getTotalBytesSent());
+    const elapsed = (Date.now() - state.startTime) / 1000;
+    const speed = elapsed > 0 ? totalBytesSent / elapsed : 0;
+    const totalSize = state.manifest?.totalSize || 0;
+    let progress = 0;
+    if (state.mode === 'zip') {
+      progress =
+        totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
+    } else {
+      progress =
+        totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
+    }
+
+    if (chunks.length > 0) {
+      self.postMessage(
+        {
+          type: 'chunk-batch',
+          payload: {
+            chunks,
+            progressData: {
+              bytesTransferred: totalBytesSent,
+              totalBytes: totalSize,
+              speed,
+              progress,
+              encrypted: encryptionEnabled,
             },
           },
-          [chunk]
-        );
-        chunksSent++;
-      } else {
-        break;
-      }
-      nextToSend++;
-    } else if (nextToSend < nextToRead) {
-      nextToSend++;
-    } else {
-      await new Promise(r => setTimeout(r, 1));
+        },
+        chunks
+      );
     }
-  }
 
-  if (state.isCompleted) {
-    self.postMessage({ type: 'complete' });
+    self.postMessage({
+      type: 'batch-complete',
+      payload: { chunksSent: chunks.length, completed: state.isCompleted },
+    });
+
+    if (state.isCompleted) {
+      self.postMessage({ type: 'complete' });
+    }
+  } finally {
+    isProcessBatchRunning = false;
   }
 }
 
