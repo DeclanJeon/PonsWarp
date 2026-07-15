@@ -94,7 +94,7 @@ export class SinglePeerConnection {
         trickle: true,
         config: { iceServers: config.iceServers },
         channelConfig: {
-          ordered: false, // 수신측 reordering buffer가 있어서 unordered로 전송 속도 향상
+          ordered: true, // control message 순서 보장이 필수 (MANIFEST, CRYPTO_SESSION 등)
           bufferedAmountLowThreshold: LOW_WATER_MARK,
           ...config.channelConfig,
         },
