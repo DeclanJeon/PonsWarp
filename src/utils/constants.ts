@@ -63,3 +63,11 @@ export const LAN_STRIPE_LANES = 1; // multi-PC striping disabled: app-path still
 /** Partition barrier size while multi-PC striping is active (faster gap detection). */
 export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
 
+
+// Hybrid bulk assist (WebRTC + encrypted HTTP). Design:
+// docs/design/hybrid-bulk-transport.md
+export const HYBRID_HTTP_ASSIST =
+  import.meta.env.VITE_HYBRID_HTTP_ASSIST === 'true';
+export const HYBRID_MIN_BYTES = 8 * 1024 * 1024; // 8MB
+export const HYBRID_TRIGGER_MBps = 4;
+export const HYBRID_UPLOAD_CONCURRENCY = 3;
