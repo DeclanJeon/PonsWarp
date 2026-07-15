@@ -178,7 +178,7 @@ const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 192 * KIB,
+  chunkSizeBytes: 240 * KIB,
   minInFlightBytes: 2 * MIB,
   initialInFlightBytes: 4 * MIB,
   maxInFlightBytes: 6 * MIB, // match practical SCTP queue depth
@@ -204,7 +204,7 @@ export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
-  chunkSizeBytes: 192 * KIB,
+  chunkSizeBytes: 240 * KIB,
   partitionSizeBytes: 128 * MIB,
 };
 export function selectTransferTuningProfile(

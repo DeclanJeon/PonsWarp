@@ -27,6 +27,7 @@ import {
   BATCH_SIZE_INITIAL,
   PARTITION_ACK_POLL_INTERVAL_MS,
   LAN_STRIPE_LANES,
+  LAN_STRIPE_PARTITION_BYTES,
   SEND_WINDOW_POLL_INTERVAL_MS,
   CONNECTION_TIMEOUT_MS,
 } from '../utils/constants';
@@ -194,6 +195,7 @@ export class SwarmManager {
   private signalingRecoveryPromise: Promise<void> | null = null;
   private isTransferring: boolean = false;
   private stripeEnabled = false;
+  private stripeRrCounter = 0;
   private verifiedStripeKeys: Set<string> = new Set();
   private pendingManifest: TransferManifest | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -563,28 +565,34 @@ export class SwarmManager {
     return this.countConnectedStripeLanes(baseId);
   }
 
-  private async probeStripeLanes(baseId: string, timeoutMs = 2000): Promise<number> {
+  private async probeStripeLanes(baseId: string, timeoutMs = 2500): Promise<number> {
     this.verifiedStripeKeys.clear();
     const primaryKey = stripePeerKey(baseId, 0);
     const primary = this.peers.get(primaryKey);
     if (primary?.connected) this.verifiedStripeKeys.add(primaryKey);
 
-    const pending = new Map<string, SinglePeerConnection>();
+    const candidates: Array<{ key: string; peer: SinglePeerConnection; lane: number }> = [];
     for (const [key, peer] of this.peers) {
       const parsed = parseStripePeerKey(key);
       if (parsed.baseId !== baseId || !peer.connected || parsed.lane === 0) continue;
-      pending.set(key, peer);
+      candidates.push({ key, peer, lane: parsed.lane });
     }
-    if (pending.size === 0) return this.verifiedStripeKeys.size;
+    if (candidates.length === 0) return this.verifiedStripeKeys.size;
 
     await Promise.all(
-      Array.from(pending.entries()).map(
-        ([key, peer]) =>
+      candidates.map(
+        ({ key, peer, lane }) =>
           new Promise<void>(resolve => {
-            const timer = setTimeout(() => {
+            let settled = false;
+            const done = (ok: boolean) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
               peer.off('data', onData as any);
+              if (ok) this.verifiedStripeKeys.add(key);
               resolve();
-            }, timeoutMs);
+            };
+            const timer = setTimeout(() => done(false), timeoutMs);
             const onData = (data: unknown) => {
               try {
                 const text =
@@ -595,11 +603,11 @@ export class SwarmManager {
                       : '';
                 if (!text.startsWith('{')) return;
                 const msg = JSON.parse(text);
-                if (msg?.type === 'STRIPE_PONG') {
-                  this.verifiedStripeKeys.add(key);
-                  clearTimeout(timer);
-                  peer.off('data', onData as any);
-                  resolve();
+                if (
+                  (msg?.type === 'STRIPE_PONG' || msg?.type === 'STRIPE_BULK_PONG') &&
+                  Number(msg.lane) === lane
+                ) {
+                  done(true);
                 }
               } catch {
                 /* ignore */
@@ -607,11 +615,22 @@ export class SwarmManager {
             };
             peer.on('data', onData);
             try {
-              peer.send(JSON.stringify({ type: 'STRIPE_PING', lane: parseStripePeerKey(key).lane }));
+              // Large binary probe (~64KiB) to prove the association can carry bulk.
+              const payload = new Uint8Array(64 * 1024);
+              payload[0] = 0x53; // S
+              payload[1] = 0x50; // P
+              payload[2] = 0x49; // I
+              payload[3] = 0x4e; // N
+              payload[4] = 0x47; // G
+              payload[5] = lane & 0xff;
+              payload[6] = 1;
+              crypto.getRandomValues(payload.subarray(8));
+              if (!peer.send(payload.buffer)) {
+                // fall back to small JSON ping
+                peer.send(JSON.stringify({ type: 'STRIPE_PING', lane, n: 1 }));
+              }
             } catch {
-              clearTimeout(timer);
-              peer.off('data', onData as any);
-              resolve();
+              done(false);
             }
           })
       )
@@ -619,9 +638,6 @@ export class SwarmManager {
     return this.verifiedStripeKeys.size;
   }
 
-  /**
-   * 피어 제거
-   */
   public removePeer(peerId: string, reason: string = 'unknown'): void {
     const { baseId, lane } = parseStripePeerKey(peerId);
     // Removing a logical peer tears down all stripe lanes.
@@ -951,20 +967,18 @@ export class SwarmManager {
     return lanes;
   }
 
-  private pickLeastBufferedPeer(
-    peers: SinglePeerConnection[]
-  ): SinglePeerConnection | null {
+  private pickStripePeer(peers: SinglePeerConnection[]): SinglePeerConnection | null {
     if (peers.length === 0) return null;
-    let best = peers[0];
-    let bestBuf = best.getBufferedAmount();
-    for (let i = 1; i < peers.length; i++) {
-      const buf = peers[i].getBufferedAmount();
-      if (buf < bestBuf) {
-        best = peers[i];
-        bestBuf = buf;
-      }
-    }
-    return best;
+    if (peers.length === 1) return peers[0];
+
+    // Prefer lanes with room in their SCTP app buffer. Among those, round-robin
+    // so a dead lane stuck at bufferedAmount=0 cannot attract ALL traffic.
+    const softCap = 3 * 1024 * 1024;
+    const withRoom = peers.filter(p => p.getBufferedAmount() < softCap);
+    const pool = withRoom.length > 0 ? withRoom : peers;
+    const idx = this.stripeRrCounter % pool.length;
+    this.stripeRrCounter += 1;
+    return pool[idx];
   }
 
   public broadcastChunk(chunk: ArrayBuffer): BroadcastResult {
@@ -975,7 +989,7 @@ export class SwarmManager {
     // currentTransferPeers holds logical (lane-0) peer ids
     for (const peerId of this.currentTransferPeers) {
       const lanes = this.getStripeSendPeers(peerId);
-      const peer = this.pickLeastBufferedPeer(lanes) || this.peers.get(peerId);
+      const peer = this.pickStripePeer(lanes) || this.peers.get(peerId);
       if (!peer || !peer.connected) {
         failedPeers.push(peerId);
         continue;
@@ -1082,7 +1096,11 @@ export class SwarmManager {
     });
   }
   private getCurrentInFlightTargetBytes(): number {
-    return this.currentInFlightTargetBytes;
+    const base = this.currentInFlightTargetBytes;
+    if (!this.stripeEnabled || LAN_STRIPE_LANES <= 1) return base;
+    // Each verified bulk PC has its own SCTP buffer; scale the app window.
+    const lanes = Math.max(1, this.verifiedStripeKeys.size || 1);
+    return Math.min(base * lanes, 24 * 1024 * 1024);
   }
 
   private resetTransferTuning(): void {
@@ -2609,6 +2627,8 @@ export class SwarmManager {
 
     this.isTransferring = true;
     this.stripeEnabled = false;
+    this.verifiedStripeKeys.clear();
+    this.stripeRrCounter = 0;
     this.requestWakeLock(); // 📱 화면 꺼짐 방지
     this.awaitingReceiverReconnect = false;
     this.isProcessingBatch = false;
@@ -2616,10 +2636,29 @@ export class SwarmManager {
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
 
-    // Open bulk PeerConnections and arm striping once they are all up.
-    // Partition ACKs are too coarse (128MB) for small files, so arm here
-    // after a short settle delay that lets CRYPTO/MANIFEST/TRANSFER_STARTED
-    // complete on the control lane first.
+    // Multi-PC striping: open bulk associations, probe, then arm.
+    // PARTITION_ACK now waits for contiguous reordering frontier, so
+    // out-of-order multi-lane delivery cannot false-ACK past gaps.
+    if (LAN_STRIPE_LANES > 1) {
+      for (const peerId of this.currentTransferPeers) {
+        await this.waitForStripeLanes(peerId, 4000);
+        const verified = await this.probeStripeLanes(peerId, 2000);
+        if (verified >= 2) {
+          this.stripeEnabled = true;
+          // Primary is always verified in probeStripeLanes
+          logInfo(
+            '[SwarmManager]',
+            `Stripe ARMED for ${peerId}: verified ${verified}/${LAN_STRIPE_LANES}`
+          );
+        } else {
+          this.stripeEnabled = false;
+          logInfo(
+            '[SwarmManager]',
+            `Stripe NOT armed for ${peerId}: verified ${verified} — primary only`
+          );
+        }
+      }
+    }
 
     this.transferPauseCount = 0;
     this.partitionAckCount = 0;
@@ -2780,9 +2819,7 @@ export class SwarmManager {
         ))
       : null;
     if (scheduler) scheduler.enable();
-    const partitionSize = selectPartitionSize(
-      this.currentTransferTuningProfile
-    );
+    const partitionSize = this.getActivePartitionSize();
     const initialChunkSize = this.getCurrentChunkSizeBytes();
     const cursor = getPartitionedResumeCursor({
       fileSizes: this.files.map(file => file.size),
@@ -2947,9 +2984,13 @@ export class SwarmManager {
 
         // 버퍼가 허용하는 동안 연속 버스트 전송
         while (ready.has(nextToSend)) {
+          const laneFactor =
+            this.stripeEnabled && LAN_STRIPE_LANES > 1
+              ? Math.max(1, this.verifiedStripeKeys.size || 1)
+              : 1;
           const sendCap = Math.min(
             this.getCurrentInFlightTargetBytes(),
-            4 * 1024 * 1024 // never overfill SCTP app queue
+            laneFactor * 4 * 1024 * 1024 // per-association queue cap
           );
           if (this.getHighestBufferedAmount() > sendCap) {
             await this.waitUntilSendWindowOpen(runId, sendCap);
@@ -2987,8 +3028,7 @@ export class SwarmManager {
             this.emitProgress();
             await this.sendPartitionMarkerAndWait(globalOffset, runId);
             partitionEnd = Math.min(
-              globalOffset +
-                selectPartitionSize(this.currentTransferTuningProfile),
+              globalOffset + this.getActivePartitionSize(),
               manifest.totalSize
             );
             // partition barrier 이후 파이프라인 재충전
@@ -3108,10 +3148,9 @@ export class SwarmManager {
         if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
           await this.sendPartitionMarkerAndWait(globalOffset, runId);
           partitionEnd = Math.min(
-            globalOffset +
-              selectPartitionSize(this.currentTransferTuningProfile),
-            manifest.totalSize
-          );
+              globalOffset + this.getActivePartitionSize(),
+              manifest.totalSize
+            );
         }
       }
       if (!acceptReservations) {
@@ -3157,10 +3196,9 @@ export class SwarmManager {
             ) {
               await this.sendPartitionMarkerAndWait(globalOffset, runId);
               partitionEnd = Math.min(
-                globalOffset +
-                  selectPartitionSize(this.currentTransferTuningProfile),
-                manifest.totalSize
-              );
+              globalOffset + this.getActivePartitionSize(),
+              manifest.totalSize
+            );
             }
           }
         }
@@ -3179,6 +3217,16 @@ export class SwarmManager {
     if (runId !== this.transferRunId || !this.isTransferring) {
       throw new Error('Transfer stopped');
     }
+  }
+
+  private getActivePartitionSize(): number {
+    if (this.stripeEnabled && LAN_STRIPE_LANES > 1) {
+      return Math.min(
+        LAN_STRIPE_PARTITION_BYTES,
+        selectPartitionSize(this.currentTransferTuningProfile)
+      );
+    }
+    return selectPartitionSize(this.currentTransferTuningProfile);
   }
 
   private async waitUntilSendWindowOpen(

@@ -63,6 +63,7 @@ export interface IFileWriter {
   onResumeRequest?(cb: (offset: number, reason: string) => void): void;
   requestResumeFromCurrentOffset?(reason: string): boolean;
   waitForIdle?(): Promise<void>;
+  getContiguousReceivedOffset?(): number;
   // 🔐 [E2E] 암호화 키 설정
   setEncryptionKey?(sessionKey: Uint8Array, randomPrefix: Uint8Array): void;
 }
@@ -748,21 +749,63 @@ export class ReceiverService {
     });
     peer.on('data', (data: ArrayBuffer | string) => {
       // Answer probe pings on the same bulk lane that received them.
-      if (typeof data === 'string' || (data instanceof ArrayBuffer && data.byteLength < 256)) {
+      if (typeof data === 'string') {
         try {
-          const text =
-            typeof data === 'string'
-              ? data
-              : new TextDecoder().decode(data);
-          if (text.startsWith('{')) {
-            const msg = JSON.parse(text);
-            if (msg?.type === 'STRIPE_PING') {
-              peer.send(JSON.stringify({ type: 'STRIPE_PONG', lane }));
+          if (data.startsWith('{')) {
+            const msg = JSON.parse(data);
+            if (msg?.type === 'STRIPE_PING' || msg?.type === 'STRIPE_BULK_PING') {
+              peer.send(
+                JSON.stringify({
+                  type: msg.type === 'STRIPE_BULK_PING' ? 'STRIPE_BULK_PONG' : 'STRIPE_PONG',
+                  lane,
+                  n: msg.n ?? 0,
+                })
+              );
               return;
             }
           }
         } catch {
-          /* fall through to bulk handler */
+          /* fall through */
+        }
+      } else if (data instanceof ArrayBuffer && data.byteLength > 0) {
+        const u8 = new Uint8Array(data);
+        // Binary bulk probe: magic 'SPING' (0x53 50 49 4e 47) + lane + n
+        if (
+          data.byteLength >= 8 &&
+          u8[0] === 0x53 &&
+          u8[1] === 0x50 &&
+          u8[2] === 0x49 &&
+          u8[3] === 0x4e &&
+          u8[4] === 0x47
+        ) {
+          peer.send(
+            JSON.stringify({
+              type: 'STRIPE_BULK_PONG',
+              lane: u8[5],
+              n: u8[6],
+            })
+          );
+          return;
+        }
+        if (data.byteLength < 256 && u8[0] === 123) {
+          try {
+            const msg = JSON.parse(new TextDecoder().decode(data));
+            if (msg?.type === 'STRIPE_PING' || msg?.type === 'STRIPE_BULK_PING') {
+              peer.send(
+                JSON.stringify({
+                  type:
+                    msg.type === 'STRIPE_BULK_PING'
+                      ? 'STRIPE_BULK_PONG'
+                      : 'STRIPE_PONG',
+                  lane,
+                  n: msg.n ?? 0,
+                })
+              );
+              return;
+            }
+          } catch {
+            /* fall through */
+          }
         }
       }
       this.handleData(data);
@@ -1032,7 +1075,6 @@ export class ReceiverService {
           {
             this.isPartitionMode = true; // 파티션 모드 감지
             if (
-
               typeof msg.offset !== 'number' ||
               !Number.isFinite(msg.offset) ||
               typeof msg.runId !== 'number' ||
@@ -1043,7 +1085,23 @@ export class ReceiverService {
 
             this.lastPartitionOffsetNeedingAck = msg.offset;
             this.lastPartitionRunIdNeedingAck = msg.runId;
-            await this.writer?.waitForIdle?.();
+
+            // Multi-PC striping delivers chunks out-of-order across associations.
+            // Never ACK until the contiguous reordering frontier reaches offset.
+            const deadline = Date.now() + 120_000;
+            while (true) {
+              await this.writer?.waitForIdle?.();
+              const frontier =
+                this.writer?.getContiguousReceivedOffset?.() ?? 0;
+              if (frontier >= msg.offset) break;
+              if (Date.now() > deadline) {
+                throw new Error(
+                  `Partition wait timed out at offset ${msg.offset} (frontier ${frontier})`
+                );
+              }
+              await new Promise(r => setTimeout(r, 10));
+            }
+
             if (this.peer && this.peer.connected) {
               this.peer.send(
                 JSON.stringify({
