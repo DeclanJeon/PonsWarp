@@ -24,13 +24,25 @@ export function isHeadlessBrowser(): boolean {
   );
 }
 
+/** Force Blob/OPFS path for automated QA (URL ?automation=1 or ?dl=blob). */
+export function isAutomationDownloadMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const flag = (params.get('automation') || params.get('dl') || '').toLowerCase();
+    return flag === '1' || flag === 'true' || flag === 'blob' || flag === 'opfs';
+  } catch {
+    return false;
+  }
+}
+
 export function getPreferredDownloadStrategies(
   capability: DownloadCapability
 ): DownloadStrategy[] {
   const strategies: DownloadStrategy[] = [];
 
-  // 🚀 Headless 브라우저: Blob/OPFS 우선 (StreamSaver는 headless에서 작동 안 함)
-  if (isHeadlessBrowser()) {
+  // 🚀 Headless/자동화: Blob/OPFS 우선 (StreamSaver/FSA 대화상자 회피)
+  if (isHeadlessBrowser() || isAutomationDownloadMode()) {
     if (shouldUseBlobFallbackBeforeStreaming(capability.fileSize)) {
       strategies.push('blob-fallback');
     }

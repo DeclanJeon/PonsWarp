@@ -28,7 +28,11 @@ import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
 import { calculateReceiverBufferedProgress } from '../utils/transferProgress';
-import { shouldUseBlobFallbackBeforeStreaming } from '../utils/downloadStrategy';
+import {
+  shouldUseBlobFallbackBeforeStreaming,
+  isHeadlessBrowser,
+  isAutomationDownloadMode,
+} from '../utils/downloadStrategy';
 
 // StreamSaver MITM 설정 (필수)
 if (typeof window !== 'undefined') {
@@ -261,8 +265,8 @@ export class DirectFileWriter {
         '🦊 Firefox detected - avoiding StreamSaver (Service Worker blocked by Enhanced Tracking Protection)'
       );
 
-      // 1. File System Access API 우선 시도 (Firefox)
-      if (hasFileSystemAccess) {
+      // 1. File System Access API 우선 시도 (Firefox, 자동화 제외)
+      if (hasFileSystemAccess && !isHeadlessBrowser() && !isAutomationDownloadMode()) {
         try {
           await this.initFileSystemAccess(fileName);
           logInfo(
@@ -405,15 +409,15 @@ export class DirectFileWriter {
 
     const isSmallFile = shouldUseBlobFallbackBeforeStreaming(fileSize);
 
-    // 🚀 Headless 브라우저 감지: FSA는 headless에서 작동 안 함
-    const isHeadless = /HeadlessChrome/.test(navigator.userAgent) || navigator.webdriver === true;
+    // 🚀 Headless/자동화 감지: FSA 대화상자 회피
+    const skipFsa = isHeadlessBrowser() || isAutomationDownloadMode();
 
     // Chromium/Edge 계열은 사용자가 MATERIALIZE를 클릭한 제스처 안에서
     // File System Access API를 열 수 있다. 50MB+ 파일을 Blob에 끝까지 모으면
     // 마지막 Blob 생성/다운로드 단계에서 UI가 멈춘 것처럼 보이고 메모리 압박이 커진다.
     // 따라서 FSA가 있으면 실제 디스크 스트리밍 writer를 우선 사용한다.
-    // 단, headless 브라우저에서는 FSA가 작동하지 않으므로 Blob/OPFS를 우선 사용한다.
-    if (hasFileSystemAccess && !isHeadless) {
+    // 단, headless/자동화 모드에서는 FSA를 건너뛰고 Blob/OPFS를 사용한다.
+    if (hasFileSystemAccess && !skipFsa) {
       try {
         await this.initFileSystemAccess(fileName);
         logInfo(
