@@ -2561,11 +2561,29 @@ export class SwarmManager {
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
 
-    // Pre-open bulk lanes; do not use them until first partition ACK proves
-    // the receiver writer is live (prevents early black-hole drops).
+    // Open bulk PeerConnections and arm striping once they are all up.
+    // Partition ACKs are too coarse (128MB) for small files, so arm here
+    // after a short settle delay that lets CRYPTO/MANIFEST/TRANSFER_STARTED
+    // complete on the control lane first.
     if (LAN_STRIPE_LANES > 1) {
       for (const peerId of this.currentTransferPeers) {
         this.ensureStripeLanes(peerId);
+      }
+      await new Promise(r => setTimeout(r, 400));
+      for (const peerId of this.currentTransferPeers) {
+        const n = this.countConnectedStripeLanes(peerId);
+        if (n >= Math.min(LAN_STRIPE_LANES, 6)) {
+          this.stripeEnabled = true;
+          logInfo(
+            '[SwarmManager]',
+            `Stripe armed for ${peerId}: ${n}/${LAN_STRIPE_LANES}`
+          );
+        } else {
+          logInfo(
+            '[SwarmManager]',
+            `Stripe not ready for ${peerId}: ${n}/${LAN_STRIPE_LANES} — primary only`
+          );
+        }
       }
     }
 
