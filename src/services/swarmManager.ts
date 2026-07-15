@@ -193,6 +193,7 @@ export class SwarmManager {
   private worker: Worker | null = null;
   private signalingRecoveryPromise: Promise<void> | null = null;
   private isTransferring: boolean = false;
+  private stripeEnabled = false;
   private pendingManifest: TransferManifest | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
 
@@ -876,16 +877,20 @@ export class SwarmManager {
    * 🚀 [대기열] 청크를 현재 전송 대상 피어에게만 전송
    */
   private getStripeSendPeers(baseId: string): SinglePeerConnection[] {
+    const primary = this.peers.get(stripePeerKey(baseId, 0));
+    if (!this.stripeEnabled || LAN_STRIPE_LANES <= 1) {
+      return primary && primary.connected ? [primary] : [];
+    }
     const lanes: SinglePeerConnection[] = [];
     for (const [key, peer] of this.peers) {
       const parsed = parseStripePeerKey(key);
       if (parsed.baseId !== baseId || !peer.connected) continue;
       lanes.push(peer);
     }
-    // Only stripe when we have multiple fully-connected lanes. A single
-    // half-open bulk PC would black-hole chunks (seen as incomplete receives).
-    if (lanes.length < 2) {
-      const primary = this.peers.get(stripePeerKey(baseId, 0));
+    // Require all configured lanes before striping so partial sets cannot
+    // absorb traffic without a working association.
+    const expected = Math.max(1, Math.min(LAN_STRIPE_LANES, 6));
+    if (lanes.length < expected) {
       return primary && primary.connected ? [primary] : [];
     }
     return lanes;
@@ -2548,12 +2553,21 @@ export class SwarmManager {
     const runId = generation;
 
     this.isTransferring = true;
+    this.stripeEnabled = false;
     this.requestWakeLock(); // 📱 화면 꺼짐 방지
     this.awaitingReceiverReconnect = false;
     this.isProcessingBatch = false;
     this.totalBytesSent = startOffset;
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
+
+    // Pre-open bulk lanes; do not use them until first partition ACK proves
+    // the receiver writer is live (prevents early black-hole drops).
+    if (LAN_STRIPE_LANES > 1) {
+      for (const peerId of this.currentTransferPeers) {
+        this.ensureStripeLanes(peerId);
+      }
+    }
 
     this.transferPauseCount = 0;
     this.partitionAckCount = 0;
@@ -3194,6 +3208,10 @@ export class SwarmManager {
       if (waiter.peers.size === 0) {
         if (this.partitionAckWaiters.get(offset) === waiter) {
           this.partitionAckWaiters.delete(offset);
+        }
+        if (!this.stripeEnabled && LAN_STRIPE_LANES > 1) {
+          this.stripeEnabled = true;
+          logInfo('[SwarmManager]', 'Stripe lanes armed after first partition ACK');
         }
         return;
       }
