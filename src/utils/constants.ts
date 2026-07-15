@@ -55,6 +55,8 @@ export const LOSS_RATE_WARNING = 0.01;
 export const LOSS_RATE_CRITICAL = 0.05;
 
 // 🚀 [Multi-Channel] 데이터 채널 설정
-export const DATA_CHANNEL_COUNT = 4; // 4 parallel SCTP streams
-export const PRODUCER_CONCURRENCY = 12; // concurrent read+encrypt operations
-export const READY_QUEUE_MAX_CHUNKS = 32; // bounded ready queue
+export const DATA_CHANNEL_COUNT = 4; // legacy constant
+export const PRODUCER_CONCURRENCY = 12;
+export const READY_QUEUE_MAX_CHUNKS = 32;
+// Parallel RTCPeerConnections for host LAN bulk transfer (separate SCTP associations)
+export const LAN_STRIPE_LANES = 4;

@@ -70,9 +70,35 @@ export interface IFileWriter {
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
 
+
+const STRIPE_SEP = '::stripe::';
+function normalizeLaneSignal(raw: unknown): { signal: any; lane: number } {
+  let value: unknown = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return { signal: raw, lane: 0 };
+    }
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const lane = Number(obj.lane ?? 0);
+    if ('lane' in obj) {
+      const { lane: _l, ...rest } = obj;
+      return { signal: rest, lane: Number.isFinite(lane) ? lane : 0 };
+    }
+    return { signal: obj, lane: Number.isFinite(lane) ? lane : 0 };
+  }
+  return { signal: raw, lane: 0 };
+}
+
 export class ReceiverService {
   // 연결 관리
   private peer: SinglePeerConnection | null = null;
+  /** Additional bulk PeerConnections keyed by lane (>0) */
+  private stripePeers: Map<number, SinglePeerConnection> = new Map();
+
   private signalingService: ISignalingService | null = null;
   private readonly peerFactory: (
     peerId: string,
@@ -526,6 +552,14 @@ export class ReceiverService {
       this.peer.destroy();
       this.peer = null;
     }
+    for (const stripe of this.stripePeers.values()) {
+      try {
+        stripe.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.stripePeers.clear();
 
     if (this.writer) {
       await this.writer.cleanup();
@@ -619,56 +653,57 @@ export class ReceiverService {
    * Sender로부터 Offer 수신 시 처리
    */
   private handleOffer = async (d: ReceiverSignalMessage) => {
-    // 🔍 [DEBUG] SDP 매핑 확인
-    debugLog('[Receiver] 🚨 [DEBUG] Offer data received:', {
-      from: d.from,
-      hasOffer: !!d.offer,
-      hasSdp: !!d.sdp,
-      offerType: typeof d.offer,
-      sdpType: typeof d.sdp,
-      fullData: d,
-    });
+    debugLog('[Receiver] Offer received from:', d.from);
 
-    // 이미 연결된 Sender가 있다면 다른 요청 무시 (1:1 연결 유지)
     if (this.connectedPeerId && d.from !== this.connectedPeerId) {
       logWarn('[Receiver]', `Ignoring offer from unknown peer: ${d.from}`);
       return;
     }
 
-    // 첫 연결인 경우 ID 기록
     if (!this.connectedPeerId) {
       this.connectedPeerId = d.from;
     }
 
-    logInfo('[Receiver]', `Received offer from ${d.from}`);
-
-    // 🚨 [추가] TURN 설정이 아직 로딩 중이라면 확실하게 기다립니다.
     if (this.turnConfigPromise) {
-      debugLog('[Receiver] Waiting for TURN config before accepting offer...');
       try {
         await this.turnConfigPromise;
-      } catch (e) {
+      } catch {
         console.warn(
           '[Receiver] TURN config failed, proceeding with default STUN'
         );
       }
     }
 
-    // 기존 Peer가 있다면 정리 (재연결 시나리오)
+    const { signal, lane } = normalizeLaneSignal(d.offer ?? d.sdp);
+    const config: PeerConfig = { iceServers: this.iceServers };
+
+    if (lane > 0) {
+      // Bulk stripe PeerConnection — do not tear down primary
+      let stripe = this.stripePeers.get(lane);
+      if (stripe) {
+        stripe.destroy();
+      }
+      stripe = this.peerFactory(`${d.from}::stripe::${lane}`, false, config);
+      this.stripePeers.set(lane, stripe);
+      this.setupStripePeerEvents(stripe, lane);
+      stripe.signal(signal);
+      return;
+    }
+
+    // Primary control/data connection
     if (this.peer) {
       this.peer.destroy();
     }
-
-    // SinglePeerConnection 생성 (이제 this.iceServers에는 443 TURN 정보가 들어있음)
-    const config: PeerConfig = { iceServers: this.iceServers };
     this.peer = this.peerFactory(d.from, false, config);
-
     this.setupPeerEvents(this.peer);
-
-    // 시그널링 처리
-    if (d.offer) this.peer.signal(d.offer);
+    this.peer.signal(signal);
     for (const candidate of this.pendingIceCandidates.splice(0)) {
-      this.peer.signal(candidate);
+      const normalized = normalizeLaneSignal(candidate);
+      if (normalized.lane === 0) this.peer.signal(normalized.signal);
+      else {
+        const stripe = this.stripePeers.get(normalized.lane);
+        stripe?.signal(normalized.signal);
+      }
     }
   };
 
@@ -676,13 +711,49 @@ export class ReceiverService {
     if (this.connectedPeerId && d.from !== this.connectedPeerId) return;
     if (!d.candidate) return;
 
+    const { signal, lane } = normalizeLaneSignal(d.candidate);
+    if (lane > 0) {
+      const stripe = this.stripePeers.get(lane);
+      if (stripe && !stripe.isDestroyed()) stripe.signal(signal);
+      else this.pendingIceCandidates.push(d.candidate);
+      return;
+    }
+
     if (!this.peer || this.peer.isDestroyed()) {
       this.pendingIceCandidates.push(d.candidate);
       return;
     }
 
-    this.peer.signal(d.candidate);
+    this.peer.signal(signal);
   };
+
+  private setupStripePeerEvents(peer: SinglePeerConnection, lane: number): void {
+    peer.on('signal', (data: any) => {
+      if (data?.type === 'answer') {
+        this.ensureSignalingService().sendAnswer(
+          this.roomId!,
+          { ...data, lane },
+          this.connectedPeerId || peer.id
+        );
+      } else if (data?.candidate) {
+        this.ensureSignalingService().sendCandidate(
+          this.roomId!,
+          { ...data, lane } as any,
+          this.connectedPeerId || peer.id
+        );
+      }
+    });
+    peer.on('connected', () => {
+      logInfo('[Receiver]', `Stripe lane ${lane} connected`);
+    });
+    peer.on('data', this.handleData.bind(this));
+    peer.on('error', (err: Error) => {
+      logError('[Receiver]', `Stripe lane ${lane} error:`, err);
+    });
+    peer.on('close', () => {
+      this.stripePeers.delete(lane);
+    });
+  }
 
   private setupPeerEvents(peer: SinglePeerConnection) {
     peer.on<PeerSignalData>('signal', data => {
