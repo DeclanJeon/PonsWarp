@@ -235,7 +235,7 @@ describe('transferFlowControl', () => {
       32 * 1024 * 1024
     );
     expect(selectPartitionSize(UNKNOWN_TRANSFER_TUNING_PROFILE)).toBe(
-      16 * 1024 * 1024
+      32 * 1024 * 1024
     );
   });
 

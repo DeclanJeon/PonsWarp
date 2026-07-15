@@ -38,9 +38,9 @@ export interface TransferMetrics {
 export class NetworkAdaptiveController {
   // 상태 변수
   private congestionState: CongestionState = {
-    cwnd: 128 * 1024, // conservative start: one small DataChannel queue
+    cwnd: 4 * 1024 * 1024, // LAN: 4MB 초기값으로 빠른 시작
     estimatedBw: 0,
-    estimatedRtt: 50,
+    estimatedRtt: 10,
     rttVar: 0,
   };
 
@@ -57,7 +57,7 @@ export class NetworkAdaptiveController {
   private lastBytesSent = 0;
 
   // 상수 설정
-  private readonly MIN_CWND = 128 * 1024;
+  private readonly MIN_CWND = 512 * 1024; // 512KB 최소
   private readonly MAX_CWND = MAX_BUFFERED_AMOUNT;
   private readonly RTT_WINDOW = 20; // 최근 20개 샘플만 유지
 
@@ -112,11 +112,10 @@ export class NetworkAdaptiveController {
     // 2. 혼잡 제어 (Congestion Control) - Delay-based approach
     // RTT가 최소 RTT보다 많이 커지면 혼잡으로 간주
 
-    const rttRatio = this.congestionState.estimatedRtt / (this.minRtt || 50);
+    const rttRatio = this.congestionState.estimatedRtt / (this.minRtt || 10);
 
     if (rttRatio > 2.0 || currentBufferedAmount > this.congestionState.cwnd) {
       // [Congestion Detected] Multiplicative Decrease
-      // 윈도우 크기를 줄여서 네트워크 부하 감소
       this.congestionState.cwnd = Math.max(
         this.MIN_CWND,
         this.congestionState.cwnd * 0.7
@@ -126,16 +125,20 @@ export class NetworkAdaptiveController {
         `Congestion! Reducing cwnd to ${(this.congestionState.cwnd / 1024).toFixed(0)}KB (RTT: ${this.congestionState.estimatedRtt.toFixed(0)}ms)`
       );
     } else if (
-      rttRatio < 1.2 &&
+      rttRatio < 1.5 &&
       currentBufferedAmount < this.congestionState.cwnd * 0.8
     ) {
-      // [Network Clear] Additive Increase
-      // 여유가 있으면 윈도우 크기 증가
+      // [Network Clear] Additive Increase - LAN에서는 더 공격적으로
+      const increase = this.congestionState.estimatedRtt < 10
+        ? 256 * 1024  // LAN: 256KB 증가
+        : 64 * 1024;  // WAN: 64KB 증가
       this.congestionState.cwnd = Math.min(
         this.MAX_CWND,
-        this.congestionState.cwnd + 16 * 1024
+        this.congestionState.cwnd + increase
       );
     }
+
+
 
     // 3. 배치 크기 조정
     // 윈도우 크기에 비례하여 한 번에 가져올 배치 크기 결정
@@ -187,9 +190,9 @@ export class NetworkAdaptiveController {
 
   public reset(): void {
     this.congestionState = {
-      cwnd: 128 * 1024,
+      cwnd: 4 * 1024 * 1024,
       estimatedBw: 0,
-      estimatedRtt: 50,
+      estimatedRtt: 10,
       rttVar: 0,
     };
     this.adaptiveParams = {

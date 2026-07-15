@@ -198,9 +198,13 @@ export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   partitionSizeBytes: 32 * MIB,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
-  ...RELAY_TRANSFER_TUNING_PROFILE,
+  ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
-  partitionSizeBytes: 16 * MIB,
+  // LAN에서 candidatePathKind를 탐지 못한 경우에도 공격적으로 전송
+  chunkSizeBytes: 192 * KIB,
+  initialInFlightBytes: 4 * MIB,
+  maxInFlightBytes: 8 * MIB,
+  partitionSizeBytes: 32 * MIB,
 };
 export function selectTransferTuningProfile(
   diagnostics?: Partial<TransferDiagnostics> | null

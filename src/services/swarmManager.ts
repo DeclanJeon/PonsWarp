@@ -1083,7 +1083,7 @@ export class SwarmManager {
       if (this.canRequestMoreChunks()) {
         this.requestMoreChunks();
       }
-    }, 250);
+    }, 50);
   }
 
   private stopTransferPumpWatchdog(): void {
