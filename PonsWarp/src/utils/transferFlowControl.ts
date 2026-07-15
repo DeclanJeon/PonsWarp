@@ -178,7 +178,7 @@ const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 192 * KIB,
+  chunkSizeBytes: 256 * KIB,
   minInFlightBytes: 2 * MIB,
   initialInFlightBytes: 4 * MIB,
   maxInFlightBytes: 8 * MIB,
@@ -194,14 +194,14 @@ export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'relay',
-  chunkSizeBytes: 128 * KIB,
+  chunkSizeBytes: 192 * KIB,
   partitionSizeBytes: 32 * MIB,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
   // LAN에서 candidatePathKind를 탐지 못한 경우에도 공격적으로 전송
-  chunkSizeBytes: 192 * KIB,
+  chunkSizeBytes: 256 * KIB,
   initialInFlightBytes: 4 * MIB,
   maxInFlightBytes: 8 * MIB,
   partitionSizeBytes: 32 * MIB,

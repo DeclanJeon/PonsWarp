@@ -2520,7 +2520,7 @@ export class SwarmManager {
 
     if (!scheduler) {
       // 🚀 [성능] 대용량 블록 읽기 + 메모리 슬라이싱 (iPhone 호환)
-      const READ_BLOCK_SIZE = 1024 * 1024; // 1MB 블록으로 읽기
+      const READ_BLOCK_SIZE = 2 * 1024 * 1024; // 2MB 블록으로 읽기
       let readBlockCache: { fileIndex: number; offset: number; data: ArrayBuffer } | null = null;
 
       const readChunk = async (fIdx: number, fOff: number, size: number): Promise<ArrayBuffer> => {
