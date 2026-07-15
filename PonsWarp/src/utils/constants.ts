@@ -24,7 +24,7 @@ export const TRANSFER_PARTITION_SIZE = 64 * 1024 * 1024;
 // 🚀 [Performance] 이벤트 기반 드레인: bufferedamountlow 사용
 export const DRAIN_EVENT_WATCHDOG_MS = 100;
 export const SEND_WINDOW_POLL_INTERVAL_MS = 0;
-export const PARTITION_ACK_POLL_INTERVAL_MS = 0;
+export const PARTITION_ACK_POLL_INTERVAL_MS = 10;
 
 export const HEADER_SIZE = 22; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4) + Checksum(4)
 // DNS, authenticated TURN allocation, and relay candidate gathering can exceed 15 seconds.
