@@ -12,8 +12,8 @@ export const RUST_SIGNALING_URL =
 // 같은 브라우저/같은 탭에서도 64KB x 다중 배치가 실제 DataChannel drain보다
 // 빠르게 쌓이면 40% 부근에서 receiver close/finalize가 멈출 수 있다.
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
-export const CHUNK_SIZE_INITIAL = 256 * 1024; // 256KB - 브라우저 SCTP 최대 메시지 크기 활용
-export const CHUNK_SIZE_MAX = 256 * 1024;
+export const CHUNK_SIZE_INITIAL = 240 * 1024; // 240KB - SCTP 256KB 한도에서 암호화 헤더(54B) 제외
+export const CHUNK_SIZE_MAX = 240 * 1024;
 
 // 🚀 [안정성 우선] WebRTC 버퍼 설정
 // DataChannel bufferedAmount는 sender 로컬 큐일 뿐 receiver 저장 완료를 의미하지 않는다.

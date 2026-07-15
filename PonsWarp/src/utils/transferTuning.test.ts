@@ -10,8 +10,8 @@ import {
 
 describe('transfer tuning constants', () => {
   it('uses a larger but browser-safe chunk and bounded multi-megabyte send queue', () => {
-    expect(CHUNK_SIZE_INITIAL).toBe(256 * 1024);
-    expect(CHUNK_SIZE_INITIAL).toBeLessThanOrEqual(256 * 1024);
+    expect(CHUNK_SIZE_INITIAL).toBe(240 * 1024);
+    expect(CHUNK_SIZE_INITIAL).toBeLessThanOrEqual(256 * 1024 - 54);
     expect(HIGH_WATER_MARK).toBe(8 * 1024 * 1024);
     expect(LOW_WATER_MARK).toBe(2 * 1024 * 1024);
   });
