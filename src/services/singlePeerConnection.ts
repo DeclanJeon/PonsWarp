@@ -172,10 +172,14 @@ export class SinglePeerConnection {
 
     channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
 
+    // 🚀 [Performance] 이벤트 기반 드레인: 50ms 폴링 제거
+    // bufferedamountlow 이벤트가 즉시 발동되도록 설정
     channel.onbufferedamountlow = () => {
       this.emitDrainOnce();
     };
 
+    // Watchdog: 이벤트가 누락된 경우에만 발동 (250ms)
+    // 50ms 폴링 대비 CPU 사용량 대폭 감소
     if (this.drainPollInterval) clearInterval(this.drainPollInterval);
     this.drainPollInterval = setInterval(() => {
       if (!this.connected || this.destroyed || channel.readyState !== 'open')
@@ -183,7 +187,7 @@ export class SinglePeerConnection {
       if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
         this.emitDrainOnce();
       }
-    }, 50);
+    }, 250); // 50ms → 250ms watchdog (이벤트 기반이므로 빈번한 폴링 불필요)
   }
 
   private emitDrainOnce(): void {

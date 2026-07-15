@@ -178,11 +178,11 @@ const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 240 * KIB, // SCTP 256KB 한도에서 암호화 헤더(54B) 제외
-  minInFlightBytes: 2 * MIB,
-  initialInFlightBytes: 4 * MIB,
-  maxInFlightBytes: 8 * MIB,
-  lowWaterBytes: 1024 * KIB,
+  chunkSizeBytes: 192 * KIB, // 192KB - SCTP 안전 마진
+  minInFlightBytes: 4 * MIB,
+  initialInFlightBytes: 8 * MIB,
+  maxInFlightBytes: 28 * MIB, // 28MB in-flight (기존 8MB) - receiver pause(32MB) 미만 - 파이프라인 깊이 확대
+  lowWaterBytes: 4 * MIB, // 4MB (기존 1MB) - 드레인 임계값 상향
   partitionSizeBytes: 64 * MIB,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
@@ -201,10 +201,10 @@ export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
   // LAN에서 candidatePathKind를 탐지 못한 경우에도 공격적으로 전송
-  chunkSizeBytes: 240 * KIB,
-  initialInFlightBytes: 4 * MIB,
-  maxInFlightBytes: 8 * MIB,
-  partitionSizeBytes: 32 * MIB,
+  chunkSizeBytes: 192 * KIB,
+  initialInFlightBytes: 8 * MIB,
+  maxInFlightBytes: 28 * MIB, // 28MB in-flight (기존 8MB) - receiver pause(32MB) 미만
+  partitionSizeBytes: 64 * MIB,
 };
 export function selectTransferTuningProfile(
   diagnostics?: Partial<TransferDiagnostics> | null

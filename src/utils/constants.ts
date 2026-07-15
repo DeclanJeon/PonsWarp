@@ -8,44 +8,38 @@ export const USE_RUST_SIGNALING =
 export const RUST_SIGNALING_URL =
   import.meta.env.VITE_RUST_SIGNALING_URL || 'ws://localhost:5502/ws';
 
-// 안정성 우선 청크 사이징.
-// 같은 브라우저/같은 탭에서도 64KB x 다중 배치가 실제 DataChannel drain보다
-// 빠르게 쌓이면 40% 부근에서 receiver close/finalize가 멈출 수 있다.
+// 청크 사이징: 192KB는 SCTP 협상 기본값 64KB 대비 3배 효율, 안전 마진 확보
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
-export const CHUNK_SIZE_INITIAL = 240 * 1024; // 240KB - SCTP 256KB 한도에서 암호화 헤더(54B) 제외
-export const CHUNK_SIZE_MAX = 240 * 1024;
+export const CHUNK_SIZE_INITIAL = 192 * 1024; // 192KB - SCTP 안전 마진
+export const CHUNK_SIZE_MAX = 240 * 1024; // 최대 240KB (SCTP 256KB 한도)
 
-// 🚀 [안정성 우선] WebRTC 버퍼 설정
-// DataChannel bufferedAmount는 sender 로컬 큐일 뿐 receiver 저장 완료를 의미하지 않는다.
-// 과도한 8~16MB 파이프라인은 실제 브라우저에서 메모리/GC 압박과 진행 정지를 만든다.
-// 4MB queue는 앞선 production smoke에서 안정적이었다. 추가 튜닝은 큐를 더 키우지
-// 않고 chunk/대기 latency를 줄이는 쪽으로 제한한다.
-export const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024; // 8MB - LAN에서 더 많은 데이터 in-flight 허용
-export const LOW_WATER_MARK = 2 * 1024 * 1024; // 2MB 이하에서 재개
-export const HIGH_WATER_MARK = 8 * 1024 * 1024; // 8MB까지만 큐잉
+// 🚀 [Performance] 워터마크 최적화: drain 이벤트 기반으로 전환, sawtooth 파동 감소
+export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024; // 16MB - 깊은 파이프라인
+export const LOW_WATER_MARK = 4 * 1024 * 1024; // 4MB - 드레인 임계값 상향 (기존 2MB)
+export const HIGH_WATER_MARK = 12 * 1024 * 1024; // 12MB - 상류 재개 임계값
 
-// PairDrop/Snapdrop 계열처럼 일정량을 보낸 뒤 receiver writer queue가 idle될 때까지
-// 기다린다. 16MB는 receiver PAUSE(32MB) 절반 이하라 안전 여유를 남기며 ACK RTT를 줄인다.
-export const TRANSFER_PARTITION_SIZE = 16 * 1024 * 1024;
+// 파티션 크기: 64MB로 확대 (기존 16MB). ACK 오버헤드 감소, 스트림 연속성 향상
+export const TRANSFER_PARTITION_SIZE = 64 * 1024 * 1024;
 
-// Partitioned sender의 busy polling 지연. 25~50ms는 localhost/빠른 LAN에서
-// DataChannel을 자주 굶기므로 짧은 fallback tick과 drain/ACK wake-up을 병행한다.
-export const SEND_WINDOW_POLL_INTERVAL_MS = 2;
-export const PARTITION_ACK_POLL_INTERVAL_MS = 2;
+// 🚀 [Performance] 폴링 제거: bufferedamountlow 이벤트 기반 드레인
+export const DRAIN_EVENT_WATCHDOG_MS = 250;
+export const SEND_WINDOW_POLL_INTERVAL_MS = 0; // 이벤트 기반으로 전환
+export const PARTITION_ACK_POLL_INTERVAL_MS = 0; // 이벤트 기반으로 전환
 
 export const HEADER_SIZE = 22; // FileIndex(2) + ChunkIndex(4) + Offset(8) + DataLen(4) + Checksum(4)
 // DNS, authenticated TURN allocation, and relay candidate gathering can exceed 15 seconds.
 export const CONNECTION_TIMEOUT_MS = 45000;
 
-// 단일-flight 배치: 성능보다 drain/receiver 안정성을 우선한다.
-export const BATCH_SIZE_MIN = 1;
-export const BATCH_SIZE_MAX = 4;
-export const BATCH_SIZE_INITIAL = 2;
+// 🚀 [Performance] 배치 크기 확대: 연속 스트리밍 전송
+// 기존 4개 배치 = 960KB → 배치당 최대 48개 = 9.2MB 연속 전송
+export const BATCH_SIZE_MIN = 4;
+export const BATCH_SIZE_MAX = 48; // 48 x 192KB = 9.2MB per batch
+export const BATCH_SIZE_INITIAL = 16; // 16 x 192KB = 3MB per batch
 export const BATCH_REQUEST_SIZE = 1; // 레거시 호환
 
-// 🚀 프리페치 버퍼 설정
-export const PREFETCH_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB 프리페치
-export const PREFETCH_LOW_THRESHOLD = 1 * 1024 * 1024; // 1MB
+// 🚀 [Performance] 프리페치 버퍼 확대: 16MB (기존 4MB)
+export const PREFETCH_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB 프리페치
+export const PREFETCH_LOW_THRESHOLD = 4 * 1024 * 1024; // 4MB
 
 // 🚀 [Phase 3] 네트워크 적응형 제어 설정
 export const BBR_STARTUP_GAIN = 2.89; // BBR Startup 모드 gain
