@@ -2576,19 +2576,30 @@ export class SwarmManager {
     let partitionEnd = cursor.nextPartitionEnd;
 
     if (!scheduler) {
-      // 🚀 [성능] 대용량 블록 읽기 + 메모리 슬라이싱 (iPhone 호환)
-      const READ_BLOCK_SIZE = 2 * 1024 * 1024; // 2MB 블록으로 읽기
-      let readBlockCache: { fileIndex: number; offset: number; data: ArrayBuffer } | null = null;
+      // 🚀 [Performance] 올바른 윈도우 전송 파이프라인
+      // 이전 병렬 구현은 암호화 Promise 완료 시 pending map에서 먼저 삭제되어
+      // readyQueue에 들어가지 못하고 0 B/s로 무한 루프에 빠질 수 있었다.
+      const READ_BLOCK_SIZE = 2 * 1024 * 1024;
+      let readBlockCache: {
+        fileIndex: number;
+        offset: number;
+        data: ArrayBuffer;
+      } | null = null;
 
-      const readChunk = async (fIdx: number, fOff: number, size: number): Promise<ArrayBuffer> => {
-        // 캐시된 블록에서 슬라이스 가능한 경우
-        if (readBlockCache && readBlockCache.fileIndex === fIdx &&
-            fOff >= readBlockCache.offset &&
-            fOff + size <= readBlockCache.offset + readBlockCache.data.byteLength) {
+      const readChunk = async (
+        fIdx: number,
+        fOff: number,
+        size: number
+      ): Promise<ArrayBuffer> => {
+        if (
+          readBlockCache &&
+          readBlockCache.fileIndex === fIdx &&
+          fOff >= readBlockCache.offset &&
+          fOff + size <= readBlockCache.offset + readBlockCache.data.byteLength
+        ) {
           const relOff = fOff - readBlockCache.offset;
           return readBlockCache.data.slice(relOff, relOff + size);
         }
-        // 1MB 블록으로 읽기 (file.slice 호출 횟수 대폭 감소)
         const f = this.files[fIdx];
         const blockEnd = Math.min(fOff + READ_BLOCK_SIZE, f.size);
         const blockData = await f.slice(fOff, blockEnd).arrayBuffer();
@@ -2596,174 +2607,107 @@ export class SwarmManager {
         return blockData.slice(0, size);
       };
 
-      const prefetchNext = (fIdx: number, fOff: number, size: number) => {
-        if (fIdx >= this.files.length) return null;
-        const f = this.files[fIdx];
-        if (fOff >= f.size) return null;
-        return readChunk(fIdx, fOff, Math.min(size, f.size - fOff));
-      };
-      // 🚀 [Performance] 병렬 암호화 파이프라인
-      // 읽기 + 암호화를 병렬로 수행하여 처리량 극대화
-      const MAX_CONCURRENT_ENCRYPT = 4; // 최대 병렬 암호화 작업 수
-      const MAX_READY_BYTES = 16 * 1024 * 1024; // 최대 준비된 암호화 데이터 (16MB)
-      
-      // 순서대로 전송하기 위한 큐
-      interface PreparedChunk {
+      let fileIndex = cursor.fileIndex;
+      let fileOffset = cursor.fileOffset;
+      let chunksSinceProgress = 0;
+      const PREPARE_AHEAD = 4;
+      type Prepared = {
         sequence: number;
         offset: number;
         packet: ArrayBuffer;
         payloadSize: number;
-      }
-      
-      const pendingEncrypt = new Map<number, Promise<PreparedChunk>>();
-      const readyQueue: PreparedChunk[] = [];
-      let nextToSchedule = 0; // 다음에 스케줄할 시퀀스
-      let nextToSend = sequence; // 다음에 전송할 시퀀스
-      let totalChunksNeeded = 0;
-      
-      // 전체 청크 수 계산
-      for (let fi = cursor.fileIndex; fi < this.files.length; fi++) {
-        const f = this.files[fi];
-        const cs = this.getCurrentChunkSizeBytes();
-        totalChunksNeeded += Math.ceil(f.size / cs);
-      }
-      
-      // 파일 오프셋 → 글로벌 오프셋 매핑
-      const getChunkInfo = (seq: number): { fileIndex: number; fileOffset: number; chunkSize: number; globalOffset: number } | null => {
-        let accumulated = 0;
-        const cs = this.getCurrentChunkSizeBytes();
-        for (let fi = cursor.fileIndex; fi < this.files.length; fi++) {
-          const f = this.files[fi];
-          const fileStart = fi === cursor.fileIndex ? cursor.fileOffset : 0;
-          const fileChunks = Math.ceil((f.size - fileStart) / cs);
-          if (seq < accumulated + fileChunks) {
-            const chunkIndex = seq - accumulated;
-            const fileOffset = fileStart + chunkIndex * cs;
-            return { fileIndex: fi, fileOffset, chunkSize: Math.min(cs, f.size - fileOffset), globalOffset: cursor.globalOffset + seq * cs };
-          }
-          accumulated += fileChunks;
-        }
-        return null;
       };
-      
-      // 병렬 암호화 스케줄러
-      const scheduleNext = () => {
+      const prepared: Prepared[] = [];
+
+      const prepareOne = async (): Promise<Prepared | null> => {
         while (
-          pendingEncrypt.size < MAX_CONCURRENT_ENCRYPT &&
-          nextToSchedule < totalChunksNeeded &&
-          readyQueue.length * this.getCurrentChunkSizeBytes() < MAX_READY_BYTES
+          fileIndex < this.files.length &&
+          fileOffset >= this.files[fileIndex].size
         ) {
-          const info = getChunkInfo(nextToSchedule);
-          if (!info) break;
-          
-          const seq = nextToSchedule++;
-          const promise = (async (): Promise<PreparedChunk> => {
-            const payload = await readChunk(info.fileIndex, info.fileOffset, info.chunkSize);
-            const packet = await this.createPartitionDataPacket({
-              payload,
-              sequence: seq,
-              offset: info.globalOffset,
-            });
-            return { sequence: seq, offset: info.globalOffset, packet, payloadSize: payload.byteLength };
-          })();
-          
-          pendingEncrypt.set(seq, promise);
-          promise.then(() => {
-            pendingEncrypt.delete(seq);
-            scheduleNext(); // 다음 암호화 시작
-          }).catch(() => {
-            pendingEncrypt.delete(seq);
-          });
+          fileIndex++;
+          fileOffset = 0;
         }
-      };
-      
-      // 큐에서 순서대로 전송
-      const drainReadyQueue = async () => {
-        while (readyQueue.length > 0) {
-          const chunk = readyQueue[0];
-          if (chunk.sequence !== nextToSend) break; // 순서 보장
-          
-          this.ensureActiveTransferRun(runId);
-          
-          // 버퍼가 찼을 때만 대기
-          if (this.getHighestBufferedAmount() > this.getCurrentInFlightTargetBytes()) {
-            await this.waitUntilSendWindowOpen(runId);
-          }
-          
-          readyQueue.shift();
-          const result = this.broadcastChunk(chunk.packet);
-          for (const failedPeerId of result.failedPeers) {
-            this.removePeer(failedPeerId, 'partitioned-send-failed');
-          }
-          if (result.successCount === 0)
-            throw new Error('No connected receivers available');
-          
-          globalOffset = chunk.offset + chunk.payloadSize;
-          this.totalBytesSent = globalOffset;
-          networkController.recordSend(chunk.packet.byteLength);
-          nextToSend++;
-          
-          if (
-            globalOffset >= partitionEnd &&
-            globalOffset < manifest.totalSize
-          ) {
-            this.emitProgress();
-            await this.sendPartitionMarkerAndWait(globalOffset, runId);
-            partitionEnd = Math.min(
-              globalOffset + selectPartitionSize(this.currentTransferTuningProfile),
-              manifest.totalSize
-            );
-          }
+        if (fileIndex >= this.files.length || globalOffset >= manifest.totalSize) {
+          return null;
         }
+        const file = this.files[fileIndex];
+        const chunkSize = Math.min(
+          this.getCurrentChunkSizeBytes(),
+          file.size - fileOffset,
+          manifest.totalSize - globalOffset
+        );
+        if (chunkSize <= 0) return null;
+        const offset = globalOffset;
+        const seq = sequence;
+        const payload = await readChunk(fileIndex, fileOffset, chunkSize);
+        const packet = await this.createPartitionDataPacket({
+          payload,
+          sequence: seq,
+          offset,
+        });
+        fileOffset += chunkSize;
+        globalOffset += chunkSize;
+        sequence += 1;
+        return {
+          sequence: seq,
+          offset,
+          packet,
+          payloadSize: payload.byteLength,
+        };
       };
-      
-      // 메인 루프: 스케줄 → 완료된 작업 수집 → 전송
-      let chunksSinceLastProgress = 0;
-      scheduleNext(); // 첫 스케줄 시작
-      
-      while (nextToSend < totalChunksNeeded + sequence) {
+
+      // Fill initial pipeline
+      while (prepared.length < PREPARE_AHEAD) {
+        const item = await prepareOne();
+        if (!item) break;
+        prepared.push(item);
+      }
+
+      while (prepared.length > 0) {
         this.ensureActiveTransferRun(runId);
-        
-        // 완료된 암호화 작업 수집 (순서대로)
-        for (let s = nextToSend; s < nextToSchedule; s++) {
-          const promise = pendingEncrypt.get(s);
-          if (promise) {
-            const chunk = await promise;
-            // 순서대로 readyQueue에 삽입
-            let inserted = false;
-            for (let i = 0; i < readyQueue.length; i++) {
-              if (readyQueue[i].sequence > chunk.sequence) {
-                readyQueue.splice(i, 0, chunk);
-                inserted = true;
-                break;
-              }
-            }
-            if (!inserted) readyQueue.push(chunk);
-          }
+        const chunk = prepared.shift()!;
+
+        if (
+          this.getHighestBufferedAmount() > this.getCurrentInFlightTargetBytes()
+        ) {
+          await this.waitUntilSendWindowOpen(runId);
         }
-        
-        // 순서대로 전송
-        await drainReadyQueue();
-        
-        // 새로운 암호화 작업 스케줄
-        scheduleNext();
-        
-        // 진행률 업데이트
-        chunksSinceLastProgress++;
-        if (chunksSinceLastProgress >= 8) {
+
+        const result = this.broadcastChunk(chunk.packet);
+        for (const failedPeerId of result.failedPeers) {
+          this.removePeer(failedPeerId, 'partitioned-send-failed');
+        }
+        if (result.successCount === 0) {
+          throw new Error('No connected receivers available');
+        }
+
+        this.totalBytesSent = chunk.offset + chunk.payloadSize;
+        networkController.recordSend(chunk.packet.byteLength);
+        chunksSinceProgress++;
+        if (chunksSinceProgress >= 4) {
           this.emitProgress();
-          chunksSinceLastProgress = 0;
+          chunksSinceProgress = 0;
         }
-        
-        // 잠시 대기 (CPU 과부하 방지)
-        if (pendingEncrypt.size >= MAX_CONCURRENT_ENCRYPT) {
-          await new Promise(r => setTimeout(r, 0));
+
+        const sentEnd = chunk.offset + chunk.payloadSize;
+        if (sentEnd >= partitionEnd && sentEnd < manifest.totalSize) {
+          this.emitProgress();
+          await this.sendPartitionMarkerAndWait(sentEnd, runId);
+          partitionEnd = Math.min(
+            sentEnd + selectPartitionSize(this.currentTransferTuningProfile),
+            manifest.totalSize
+          );
+        }
+
+        // Keep pipeline full
+        while (prepared.length < PREPARE_AHEAD) {
+          const item = await prepareOne();
+          if (!item) break;
+          prepared.push(item);
         }
       }
-      
-      // 남은 모든 암호화 작업 완료 대기
-      await Promise.all(pendingEncrypt.values());
-      await drainReadyQueue();
+
+      this.emitProgress();
     } else {
       type Descriptor = {
         file: File;
