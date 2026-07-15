@@ -853,7 +853,17 @@ export class SwarmManager {
     const lanes: SinglePeerConnection[] = [];
     for (const [key, peer] of this.peers) {
       const parsed = parseStripePeerKey(key);
-      if (parsed.baseId === baseId && peer.connected) lanes.push(peer);
+      if (parsed.baseId !== baseId || !peer.connected) continue;
+      // Avoid lanes that look empty only because the channel is not open yet.
+      if (peer.getBufferedAmount() === 0 && !peer.connected) continue;
+      lanes.push(peer);
+    }
+    // Prefer using all connected lanes only when every configured lane is up.
+    // Partial striping can black-hole chunks onto half-open PeerConnections.
+    const expected = Math.max(1, Math.min(LAN_STRIPE_LANES, 6));
+    if (expected > 1 && lanes.length < expected) {
+      const primary = this.peers.get(stripePeerKey(baseId, 0));
+      return primary && primary.connected ? [primary] : lanes.slice(0, 1);
     }
     return lanes;
   }
