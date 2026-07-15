@@ -8,15 +8,15 @@ export const USE_RUST_SIGNALING =
 export const RUST_SIGNALING_URL =
   import.meta.env.VITE_RUST_SIGNALING_URL || 'ws://localhost:5502/ws';
 
-// 청크 사이징: 64KB는 크로스 브라우저 안전 크기 (pc.sctp.maxMessageSize 준수)
+// 청크 사이징: Chrome SCTP 256KB 한도 내 192KB (헤더 여유)
 export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
-export const CHUNK_SIZE_INITIAL = 64 * 1024; // 64KB - 크로스 브라우저 안전
-export const CHUNK_SIZE_MAX = 128 * 1024; // 128KB - 최대 (negotiated 한도 내)
+export const CHUNK_SIZE_INITIAL = 192 * 1024; // 192KB - LAN 처리량 우선
+export const CHUNK_SIZE_MAX = 192 * 1024;
 
-// 🚀 [Performance] 멀티채널 워터마크: 채널당 256KB/1MB, 글로벌 4MB
-export const MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024; // 4MB 글로벌
-export const LOW_WATER_MARK = 256 * 1024; // 256KB per-channel drain 임계값
-export const HIGH_WATER_MARK = 1024 * 1024; // 1MB per-channel 상류 재개
+// 🚀 [Performance] LAN 처리량 우선 워터마크
+export const MAX_BUFFERED_AMOUNT = 12 * 1024 * 1024; // 12MB
+export const LOW_WATER_MARK = 2 * 1024 * 1024; // 2MB drain 임계값
+export const HIGH_WATER_MARK = 8 * 1024 * 1024; // 8MB 상류 재개
 
 // 파티션 크기: 연속 전송 (ACK 불필요)
 export const TRANSFER_PARTITION_SIZE = 64 * 1024 * 1024;
@@ -30,10 +30,10 @@ export const HEADER_SIZE = 22; // FileIndex(2) + ChunkIndex(4) + Offset(8) + Dat
 // DNS, authenticated TURN allocation, and relay candidate gathering can exceed 15 seconds.
 export const CONNECTION_TIMEOUT_MS = 45000;
 
-// 배치 크기: 12 concurrent producers (파이프라인 병렬화)
+// 배치 크기: 192KB x 32 = 6MB/batch
 export const BATCH_SIZE_MIN = 4;
-export const BATCH_SIZE_MAX = 12; // 12 concurrent producers
-export const BATCH_SIZE_INITIAL = 8; // 빠른 시작
+export const BATCH_SIZE_MAX = 32;
+export const BATCH_SIZE_INITIAL = 16;
 export const BATCH_REQUEST_SIZE = 1;
 
 // 프리페치 버퍼: 2MB (bounded queue)

@@ -2075,6 +2075,16 @@ export class SwarmManager {
           this.handleBatchFromWorker(payload);
           break;
 
+        case 'batch-complete':
+          // Worker 배치 처리가 완전히 끝난 뒤에만 다음 배치를 요청한다.
+          // chunk-batch 직후 재요청하면 worker re-entry 거부로 파이프라인이 멈춘다.
+          this.clearWorkerBatchTimeout();
+          this.isProcessingBatch = false;
+          if (this.isTransferring && this.canRequestMoreChunks()) {
+            this.requestMoreChunks();
+          }
+          break;
+
         case 'resume-ready':
           this.clearWorkerBatchTimeout();
           logInfo(
@@ -2125,12 +2135,14 @@ export class SwarmManager {
         '[SwarmManager]',
         '❌ [DEBUG] No connected peers, dropping batch'
       );
+      this.isProcessingBatch = false;
       return;
     }
 
     const { chunks, progressData } = payload;
+    // isProcessingBatch는 batch-complete에서만 해제한다.
+    // 여기서 해제하면 worker가 아직 배치 중인데 다음 process-batch가 유실된다.
     this.clearWorkerBatchTimeout();
-    this.isProcessingBatch = false;
 
     debugLog('[SwarmManager] 📊 [DEBUG] Processing batch from worker:', {
       chunkCount: chunks.length,
@@ -2183,22 +2195,13 @@ export class SwarmManager {
       this.emitProgress(progressData);
       this.updateAdaptiveTransferConfig();
 
-      // Backpressure 체크 후 다음 배치 요청
-      const canRequestMore = this.canRequestMoreChunks();
-      debugLog('[SwarmManager] 🔄 [DEBUG] Backpressure check:', {
-        canRequestMore,
+      // 다음 배치 요청은 batch-complete 이벤트에서 처리한다.
+      // drain 이벤트는 버퍼가 비었을 때 requestMoreChunks를 재개한다.
+      debugLog('[SwarmManager] 🔄 [DEBUG] Batch broadcast done:', {
         highestBufferedAmount: this.getHighestBufferedAmount(),
         highWaterMark: this.getCurrentInFlightTargetBytes(),
+        isProcessingBatch: this.isProcessingBatch,
       });
-
-      if (canRequestMore) {
-        debugLog('[SwarmManager] ➡️ [DEBUG] Requesting more chunks');
-        this.requestMoreChunks();
-      } else {
-        debugLog(
-          '[SwarmManager] ⏸️ [DEBUG] Buffer full, pausing chunk requests'
-        );
-      }
     } catch (error) {
       console.error(
         '[SwarmManager]',
