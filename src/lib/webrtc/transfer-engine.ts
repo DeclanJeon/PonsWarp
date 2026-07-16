@@ -860,8 +860,8 @@ export class TransferEngine {
     const channel = this.channel;
     const headerBytes = 17;
     const negotiated =
-      channel?.maxMessageSize && channel.maxMessageSize > 0
-        ? channel.maxMessageSize
+      Number((channel as any)?.maxMessageSize || 0) > 0
+        ? Number((channel as any).maxMessageSize)
         : CHUNK_SIZE + headerBytes;
     // Leave room for our binary header and a small safety margin.
     const maxPayload = Math.max(16 * 1024, Math.floor(negotiated - headerBytes - 16));
@@ -869,7 +869,7 @@ export class TransferEngine {
     if (typeof window !== "undefined") {
       const debug = ((window as Window & { __ponswarpDebug?: Record<string, unknown> }).__ponswarpDebug ??= {});
       debug.chunkSize = size;
-      debug.maxMessageSize = channel?.maxMessageSize ?? null;
+      debug.maxMessageSize = Number((channel as any)?.maxMessageSize || 0) || null;
       debug.maxBufferedAmount = MAX_BUFFERED_AMOUNT;
     }
     return size;
