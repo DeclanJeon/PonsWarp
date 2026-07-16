@@ -7,30 +7,48 @@
 ```
 
 Branch: `feature/unified-workspace`  
+Production frontend: `PonsWarp/` only  
 Remote (when pushing monorepo): `https://github.com/DeclanJeon/PonsWarp`
 
 ## Layout
 
 ```text
 ponswarp/
-├── PonsWarp/                  # Vite original frontend
+├── PonsWarp/                  # Vite production frontend (ONLY deployable UI)
 ├── ponswarp-signaling-rs/     # Rust signaling + Cloud Drop
 ├── pons-core-wasm/
-├── apps/web/                  # Next.js UI integration (current active app)
 ├── contracts/
 └── WORKSPACE.md               # this file
 ```
 
-## What to run
+## What to run (production frontend)
 
 ```bash
-cd /home/declan/Documents/Develop/ponswarp/apps/web
+cd /home/declan/Documents/Develop/ponswarp/PonsWarp
 pnpm install
 pnpm dev
 ```
 
-- Web: http://localhost:3000
-- Signaling: ws://localhost:5502/ws (via `scripts/dev-signaling.sh` → monorepo `ponswarp-signaling-rs`)
+- Web: Vite dev server (see `PonsWarp/package.json`)
+- Signaling: monorepo `ponswarp-signaling-rs` (typically `:5502`)
+
+## Experimental Next UI
+
+Next.js experimental frontend lives on branch:
+
+```text
+experiment/ponswarp-next-ui
+path: apps/web/
+```
+
+Checkout that branch only for UI experiments. Do **not** deploy it to `warp.ponslink.com`.
+
+```bash
+git switch experiment/ponswarp-next-ui
+cd apps/web
+pnpm install
+pnpm dev   # localhost:3000
+```
 
 ## Do NOT work in these (legacy / scratch)
 
@@ -44,6 +62,5 @@ Copied from `ssh home:~/Documents/Develop/Project/ponswarp` into:
 
 - `ponswarp-signaling-rs/.env*`
 - `PonsWarp/.env*`
-- `apps/web/.env.local` (Next mapping)
 
 Never commit real `.env` files.
