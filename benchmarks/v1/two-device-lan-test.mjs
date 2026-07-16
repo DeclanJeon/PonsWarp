@@ -9,6 +9,9 @@ const TEST_FILE = '/tmp/ponswarp-lan-test-20mb.bin';
 const REMOTE_DL = '/tmp/chrome-downloads';
 const TUNNEL_PORT = 9223;
 const REMOTE_PORT = 9222;
+// home has stronger Wi-Fi TX; default sender=local is the weak uplink.
+const HOME_SENDER = process.env.HOME_SENDER !== '0';
+const REMOTE_TEST_FILE = '/tmp/ponswarp-lan-test-20mb.bin';
 const CHROME_ARGS =
   '--headless=new --remote-debugging-port=9222 --no-first-run --no-sandbox --disable-gpu --user-data-dir=/tmp/chrome-hd-clean --disable-features=WebRtcHideLocalIpsWithMdns,Translate,MediaRouter --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --enable-features=NetworkServiceInProcess2';
 
@@ -90,7 +93,7 @@ async function main() {
   ensureFile(20);
   await setupRemote();
 
-  const senderBrowser = await chromium.launch({
+  const localBrowser = await chromium.launch({
     headless: true,
     args: [
       '--no-sandbox',
@@ -101,23 +104,47 @@ async function main() {
       '--disable-backgrounding-occluded-windows',
     ],
   });
-  const receiverBrowser = await chromium.connectOverCDP(
+  const remoteBrowser = await chromium.connectOverCDP(
     `http://127.0.0.1:${TUNNEL_PORT}`
   );
 
-  const sender = await (await senderBrowser.newContext()).newPage();
-  const rctx =
-    receiverBrowser.contexts()[0] || (await receiverBrowser.newContext());
-  const receiver = rctx.pages()[0] || (await rctx.newPage());
+  let sender;
+  let receiver;
+  let senderBrowser;
+  let receiverBrowser;
+  let localPage;
+  let remotePage;
+
+  const rctx = remoteBrowser.contexts()[0] || (await remoteBrowser.newContext());
+  remotePage = rctx.pages()[0] || (await rctx.newPage());
+  localPage = await (await localBrowser.newContext()).newPage();
+
+  if (HOME_SENDER) {
+    // Stronger radio (home) sends; local receives.
+    sender = remotePage;
+    receiver = localPage;
+    senderBrowser = remoteBrowser;
+    receiverBrowser = localBrowser;
+    console.log('[roles] sender=HOME receiver=LOCAL');
+  } else {
+    sender = localPage;
+    receiver = remotePage;
+    senderBrowser = localBrowser;
+    receiverBrowser = remoteBrowser;
+    console.log('[roles] sender=LOCAL receiver=HOME');
+  }
 
   try {
-    const cdp = await rctx.newCDPSession(receiver);
+    const cdp = await receiver.context().newCDPSession(receiver);
     await cdp.send('Page.setDownloadBehavior', {
       behavior: 'allow',
-      downloadPath: REMOTE_DL,
+      downloadPath: HOME_SENDER ? '/tmp/chrome-downloads-local' : REMOTE_DL,
     });
   } catch (e) {
     console.log('[warn] download behavior', e.message);
+  }
+  if (HOME_SENDER) {
+    sh0('mkdir -p /tmp/chrome-downloads-local');
   }
 
   console.log('[sender] open');
@@ -127,6 +154,8 @@ async function main() {
   await sleep(800);
   await clickButton(sender, 'SEND NOW');
   await sleep(800);
+  // Playwright uploads this local path into whichever browser owns the page
+  // (including remote CDP), so no manual scp is required.
   await sender.locator('input[type=file]').first().setInputFiles(TEST_FILE);
 
   let senderText = '';
@@ -265,10 +294,8 @@ async function main() {
   console.log('\n=== RESULT ===');
   console.log(JSON.stringify(result, null, 2));
 
-  await senderBrowser.close();
-  try {
-    await receiverBrowser.close();
-  } catch {}
+  try { await localBrowser.close(); } catch {}
+  try { await remoteBrowser.close(); } catch {}
   sh0(`pkill -f "ssh.*-L ${TUNNEL_PORT}" || true`);
   sh0(`ssh home 'pkill -f remote-debugging-port=${REMOTE_PORT} || true'`);
   if (status !== 'COMPLETE') process.exit(2);

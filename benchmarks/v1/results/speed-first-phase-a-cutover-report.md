@@ -117,3 +117,23 @@ Harness: `benchmarks/v1/raw-dc-bench.mjs` (native RTCPeerConnection, no app prot
 App complete goodput after prefetch/native-send pass: **~12–13 Mbps** (Wi‑Fi variance; earlier same day ~15–18).
 
 Implication: first target is close app complete rate to raw ~20–24 Mbps; multi-PC only buys ~1 Mbps more on this link and still lacks a gap-free app demux.
+
+
+## 8MB/s user bar (2026-07-16)
+
+User expectation: ~8 MB/s usable (≈64 Mbps) on a “100 Mbps” network.
+
+### What the physical path actually delivers right now
+| Path | Direction | Goodput |
+|------|-----------|---------|
+| SCP/TCP | home → local | **~8.4 MB/s (67 Mbps)** |
+| SCP/TCP | local → home | ~2.9 MB/s (weak local TX radio ~120 Mbps PHY, signal -70 dBm) |
+| Raw WebRTC 1 PC | home TX | ~3.9 MB/s (31 Mbps) |
+| Raw WebRTC 3 PC | home TX | ~5.0 MB/s (40 Mbps) |
+| App E2E (HOME_SENDER) | home → local | ~1.8–2.0 MB/s (14–16 Mbps) |
+
+### Implications
+1. **8 MB/s is achievable on this LAN via TCP**, so the network is not “only 15 Mbps”.
+2. **Browser WebRTC DataChannel raw ceiling is ~4–5 MB/s** here (SCTP/DTLS), even with multi-PC.
+3. App path is still below raw WebRTC; first close that gap, then add a **LAN TCP/HTTP assist** (or native helper) if product requires ≥8 MB/s.
+4. QA default should prefer **HOME as sender** (stronger radio). Harness flag: `HOME_SENDER=1` (default on).
