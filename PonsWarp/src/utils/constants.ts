@@ -95,3 +95,14 @@ export const BULK_PREPARE_AHEAD_CHUNKS = 48;
 export const BULK_PREPARE_AHEAD_BYTES = 8 * 1024 * 1024;
 /** Wait for dedicated bulk channel before first binary frame. */
 export const BULK_READY_TIMEOUT_MS = 1500;
+
+// Speed-first redesign (docs/design/speed-first-file-transfer-redesign.md)
+// Default ON in this branch: DTLS-only bulk, no app AES on default path.
+// Set VITE_SPEED_TRANSFER=false to restore app-AES hardened default.
+export const SPEED_TRANSFER =
+  import.meta.env.VITE_SPEED_TRANSFER !== 'false';
+/** App-layer AES only when speed path is off or explicit secure mode. */
+export const DEFAULT_APP_AES = !SPEED_TRANSFER;
+export const SPEED_BUFFER_HIGH = 8 * 1024 * 1024;
+export const SPEED_BUFFER_LOW = 2 * 1024 * 1024;
+export const SPEED_CHUNK_SIZE = 192 * 1024;

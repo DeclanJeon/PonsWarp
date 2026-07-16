@@ -34,8 +34,11 @@ import {
   BULK_PREPARE_AHEAD_BYTES,
   BULK_PREPARE_AHEAD_CHUNKS,
   BULK_READY_TIMEOUT_MS,
+  SPEED_TRANSFER,
+  SPEED_BUFFER_HIGH,
+  DEFAULT_APP_AES,
 } from '../utils/constants';
-import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
+import { createEosPacket, createPlainDataPacket, createPlainDataPacketFast } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
 import {
   getCryptoPlaneClient,
@@ -451,6 +454,24 @@ export class SwarmManager {
   }
 
   private ensureTransferEncryption(): void {
+    // Speed-first redesign: default path is DTLS-only bulk (no app AES).
+    // Explicit enableEncryption() still arms hardened mode.
+    if (SPEED_TRANSFER && !DEFAULT_APP_AES) {
+      if (this.encryptionEnabled && this.sessionKey && this.randomPrefix) {
+        void this.armCryptoPlane();
+        return;
+      }
+      this.encryptionEnabled = false;
+      this.sessionKey = null;
+      this.randomPrefix = null;
+      this.cryptoPlaneReady = false;
+      logInfo(
+        '[SwarmManager]',
+        '⚡ Speed transfer mode: app-AES disabled (DTLS-only bulk)'
+      );
+      return;
+    }
+
     if (this.sessionKey && this.randomPrefix) {
       this.encryptionEnabled = true;
       void this.armCryptoPlane();
@@ -3162,7 +3183,9 @@ export class SwarmManager {
     nonceCounter?: number;
   }): Promise<ArrayBuffer> {
     if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
-      return createPlainDataPacket(params);
+      return SPEED_TRANSFER
+        ? createPlainDataPacketFast(params)
+        : createPlainDataPacket(params);
     }
 
     const nonceCounter = params.nonceCounter ?? this.partitionNonceCounter++;
@@ -3423,9 +3446,11 @@ export class SwarmManager {
             this.stripeEnabled && LAN_STRIPE_LANES > 1
               ? Math.max(1, this.verifiedStripeKeys.size || 1)
               : 1;
+          const targetInFlight = this.getCurrentInFlightTargetBytes();
+          const speedCap = SPEED_TRANSFER ? SPEED_BUFFER_HIGH : 8 * 1024 * 1024;
           const sendCap = Math.min(
-            this.getCurrentInFlightTargetBytes(),
-            laneFactor * 8 * 1024 * 1024 // per-association queue cap (bulk plane host)
+            Math.max(targetInFlight, SPEED_TRANSFER ? SPEED_BUFFER_HIGH : targetInFlight),
+            laneFactor * speedCap // per-association queue cap
           );
           if (this.getHighestBufferedAmount() > sendCap) {
             await this.waitUntilSendWindowOpen(runId, sendCap);
@@ -3664,6 +3689,10 @@ export class SwarmManager {
   }
 
   private getActivePartitionSize(): number {
+    // Speed-first: one continuous stream; avoid partition boundaries entirely.
+    if (SPEED_TRANSFER) {
+      return Number.MAX_SAFE_INTEGER;
+    }
     if (this.stripeEnabled && LAN_STRIPE_LANES > 1) {
       return Math.min(
         LAN_STRIPE_PARTITION_BYTES,
@@ -3714,6 +3743,11 @@ export class SwarmManager {
     runId: number
   ): Promise<void> {
     this.ensureActiveTransferRun(runId);
+
+    // Speed-first path: never stop the firehose for partition checkpoints.
+    if (SPEED_TRANSFER) {
+      return;
+    }
 
     const peerIds = this.getActiveTransferPeerIds();
     if (peerIds.length === 0) {

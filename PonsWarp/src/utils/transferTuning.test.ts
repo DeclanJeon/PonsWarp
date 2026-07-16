@@ -6,6 +6,9 @@ import {
   BULK_PREPARE_AHEAD_BYTES,
   BULK_PREPARE_AHEAD_CHUNKS,
   BULK_READY_TIMEOUT_MS,
+  SPEED_TRANSFER,
+  DEFAULT_APP_AES,
+  SPEED_BUFFER_HIGH,
   CHUNK_SIZE_INITIAL,
   HIGH_WATER_MARK,
   LOW_WATER_MARK,
@@ -38,5 +41,11 @@ describe('transfer tuning constants', () => {
     expect(BULK_PREPARE_AHEAD_CHUNKS).toBeGreaterThanOrEqual(32);
     expect(BULK_PREPARE_AHEAD_BYTES).toBeGreaterThanOrEqual(4 * 1024 * 1024);
     expect(BULK_READY_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  it('defaults speed-first path with app AES disabled', () => {
+    expect(SPEED_TRANSFER).toBe(true);
+    expect(DEFAULT_APP_AES).toBe(false);
+    expect(SPEED_BUFFER_HIGH).toBeGreaterThanOrEqual(4 * 1024 * 1024);
   });
 });

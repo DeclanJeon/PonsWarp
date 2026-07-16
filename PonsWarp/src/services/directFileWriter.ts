@@ -26,7 +26,7 @@ import streamSaver from 'streamsaver';
 import initPonsCore, { CryptoSession, Zip64Stream } from 'pons-core-wasm';
 import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
-import { HEADER_SIZE } from '../utils/constants';
+import { HEADER_SIZE, SPEED_TRANSFER } from '../utils/constants';
 import { calculateReceiverBufferedProgress } from '../utils/transferProgress';
 import {
   shouldUseBlobFallbackBeforeStreaming,
@@ -49,8 +49,9 @@ if (typeof window !== 'undefined') {
 
 // 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
 // 32MB 이상 쌓이면 PAUSE 요청, 16MB 이하로 떨어지면 RESUME 요청
-const WRITE_BUFFER_HIGH_MARK = 32 * 1024 * 1024;
-const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
+// Speed path: avoid reverse-PAUSE flapping; only extreme memory pressure pauses.
+const WRITE_BUFFER_HIGH_MARK = SPEED_TRANSFER ? 256 * 1024 * 1024 : 32 * 1024 * 1024;
+const WRITE_BUFFER_LOW_MARK = SPEED_TRANSFER ? 128 * 1024 * 1024 : 16 * 1024 * 1024;
 const ENCRYPTED_HEADER_SIZE = 38;
 const AUTH_TAG_SIZE = 16;
 const MAX_RESUME_ATTEMPTS = 3;
