@@ -5,12 +5,18 @@
  * SwarmManager와 webRTCService 모두에서 사용하여 아키텍처를 통일합니다.
  */
 import SimplePeer from 'simple-peer/simplepeer.min.js';
-import { LOW_WATER_MARK } from '../utils/constants';
+import {
+  BULK_CHANNEL_INIT,
+  BULK_CHANNEL_LABEL,
+  BULK_PLANE_VNEXT,
+  HIGH_WATER_MARK,
+  LOW_WATER_MARK,
+} from '../utils/constants';
 import {
   TransferDiagnostics,
   CandidatePathKind,
 } from '../utils/transferFlowControl';
-import { logInfo, logError } from '../utils/logger';
+import { logInfo, logError, logWarn } from '../utils/logger';
 
 type EventHandler = (data: unknown) => void;
 type SimplePeerWithChannel = SimplePeer.Instance & {
@@ -61,9 +67,15 @@ export class SinglePeerConnection {
   private drainEmitted: boolean = false;
   private drainPollInterval: ReturnType<typeof setInterval> | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
+  private bulkChannel: RTCDataChannel | null = null;
+  private bulkReady = false;
+  private readonly enableBulkPlane: boolean;
+  private readonly isInitiator: boolean;
 
   constructor(peerId: string, initiator: boolean, config: PeerConfig) {
     this.id = peerId;
+    this.enableBulkPlane = BULK_PLANE_VNEXT;
+    this.isInitiator = initiator;
     this.initializePeer(initiator, config);
   }
 
@@ -94,7 +106,9 @@ export class SinglePeerConnection {
         trickle: true,
         config: { iceServers: config.iceServers },
         channelConfig: {
-          ordered: true, // control message 순서 보장이 필수 (MANIFEST, CRYPTO_SESSION 등)
+          // vNext: reliable-unordered default channel avoids SCTP HOL on bulk.
+          // Control remains JSON/sparse; critical control is sent before bulk.
+          ordered: this.enableBulkPlane ? false : true,
           bufferedAmountLowThreshold: LOW_WATER_MARK,
           ...config.channelConfig,
         },
@@ -131,6 +145,9 @@ export class SinglePeerConnection {
       logInfo(`[Peer ${this.id}]`, 'Connected');
       this.emit('connected', this.id);
       this.setupChannelEvents();
+      if (this.enableBulkPlane) {
+        this.setupBulkPlane();
+      }
     });
 
     this.pc.on('data', (data: unknown) => {
@@ -170,31 +187,144 @@ export class SinglePeerConnection {
     const channel = (this.pc as SimplePeerWithChannel | null)?._channel;
     if (!channel) return;
 
+    // Control channel keeps ordered semantics; bulk uses its own watermarks.
+    channel.bufferedAmountLowThreshold = this.enableBulkPlane
+      ? Math.min(LOW_WATER_MARK, 256 * 1024)
+      : LOW_WATER_MARK;
+
+    channel.onbufferedamountlow = () => {
+      if (!this.enableBulkPlane || !this.bulkReady) {
+        this.emitDrainOnce();
+      }
+    };
+
+    if (this.drainPollInterval) clearInterval(this.drainPollInterval);
+    this.drainPollInterval = setInterval(() => {
+      if (!this.connected || this.destroyed) return;
+      const bulk = this.bulkChannel;
+      if (this.enableBulkPlane && bulk && bulk.readyState === 'open') {
+        if (bulk.bufferedAmount <= bulk.bufferedAmountLowThreshold) {
+          this.emitDrainOnce();
+        }
+        return;
+      }
+      if (channel.readyState !== 'open') return;
+      if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
+        this.emitDrainOnce();
+      }
+    }, 100);
+  }
+
+  private getNativePeerConnection(): RTCPeerConnection | null {
+    const native = (this.pc as SimplePeerWithNative | null)?._pc;
+    return native ?? null;
+  }
+
+  private setupBulkPlane(): void {
+    const native = this.getNativePeerConnection();
+    if (!native) {
+      logWarn(
+        `[Peer ${this.id}]`,
+        'Bulk plane requested but native RTCPeerConnection is unavailable'
+      );
+      return;
+    }
+
+    // Answerer accepts remote bulk channel; offerer creates it.
+    native.ondatachannel = event => {
+      if (event.channel?.label === BULK_CHANNEL_LABEL) {
+        this.attachBulkChannel(event.channel);
+      }
+    };
+
+    // simple-peer initiator creates the default channel; same side opens bulk.
+    try {
+      if (this.isInitiator) {
+        const channel = native.createDataChannel(
+          BULK_CHANNEL_LABEL,
+          BULK_CHANNEL_INIT
+        );
+        this.attachBulkChannel(channel);
+      }
+      // Non-initiator attaches via ondatachannel.
+    } catch (error) {
+      logWarn(`[Peer ${this.id}]`, 'Failed to create bulk data channel', error);
+    }
+  }
+
+  private attachBulkChannel(channel: RTCDataChannel): void {
+    if (this.destroyed) {
+      try {
+        channel.close();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    this.bulkChannel = channel;
+    channel.binaryType = 'arraybuffer';
     channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
 
-    // 🚀 [Performance] 이벤트 기반 드레인: 50ms 폴링 제거
-    // bufferedamountlow 이벤트가 즉시 발동되도록 설정
+    const markReady = () => {
+      if (channel.readyState === 'open') {
+        this.bulkReady = true;
+        logInfo(
+          `[Peer ${this.id}]`,
+          `Bulk channel open (ordered=${String(channel.ordered)})`
+        );
+        this.emit('bulk-ready', this.id);
+        this.emitDrainOnce();
+      }
+    };
+
+    channel.onopen = markReady;
+    markReady();
+
     channel.onbufferedamountlow = () => {
       this.emitDrainOnce();
     };
 
-    // Watchdog: 이벤트가 누락된 경우에만 발동 (250ms)
-    // 50ms 폴링 대비 CPU 사용량 대폭 감소
-    if (this.drainPollInterval) clearInterval(this.drainPollInterval);
-    this.drainPollInterval = setInterval(() => {
-      if (!this.connected || this.destroyed || channel.readyState !== 'open')
+    channel.onmessage = event => {
+      const data = event.data;
+      if (data instanceof ArrayBuffer) {
+        this.emit('data', data);
         return;
-      if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
-        this.emitDrainOnce();
       }
-    }, 100); // 100ms watchdog - 반응성과 CPU 사용량 균형
+      if (ArrayBuffer.isView(data)) {
+        const view = data as ArrayBufferView;
+        const buffer = view.buffer.slice(
+          view.byteOffset,
+          view.byteOffset + view.byteLength
+        );
+        this.emit('data', buffer);
+        return;
+      }
+      if (data instanceof Blob) {
+        data
+          .arrayBuffer()
+          .then(buffer => this.emit('data', buffer))
+          .catch(error => this.emit('error', error));
+        return;
+      }
+      // Bulk plane is binary-only; ignore unexpected control strings.
+    };
+
+    channel.onclose = () => {
+      this.bulkReady = false;
+      if (this.bulkChannel === channel) this.bulkChannel = null;
+      logInfo(`[Peer ${this.id}]`, 'Bulk channel closed');
+    };
+
+    channel.onerror = () => {
+      logWarn(`[Peer ${this.id}]`, 'Bulk channel error');
+    };
   }
 
   private emitDrainOnce(): void {
     if (!this.drainEmitted && this.connected) {
       this.drainEmitted = true;
       this.emit('drain', this.id);
-      // 다음 drain 이벤트를 위해 리셋 (즉시 리셋으로 drain 누락 방지)
       queueMicrotask(() => {
         this.drainEmitted = false;
       });
@@ -213,7 +343,8 @@ export class SinglePeerConnection {
   }
 
   /**
-   * 데이터 전송 (connected 상태일 때만)
+   * Control-plane send (ordered simple-peer default channel).
+   * Prefer strings/JSON here. Binary bulk should use sendBulk().
    */
   public send(data: ArrayBuffer | string): boolean {
     if (!this.connected || this.destroyed || !this.pc) {
@@ -225,15 +356,66 @@ export class SinglePeerConnection {
       return false;
     }
 
+    // If bulk plane is active and payload is binary, prefer bulk channel.
+    if (
+      this.enableBulkPlane &&
+      this.bulkReady &&
+      typeof data !== 'string' &&
+      (data instanceof ArrayBuffer || ArrayBuffer.isView(data))
+    ) {
+      return this.sendBulk(data as ArrayBuffer);
+    }
+
     this.pc.send(data);
     return true;
+  }
+
+  /**
+   * Bulk-plane send: reliable-unordered channel when available.
+   * Falls back to control channel for legacy peers / flag-off.
+   */
+  public sendBulk(data: ArrayBuffer): boolean {
+    if (!this.connected || this.destroyed) return false;
+
+    if (this.enableBulkPlane && this.bulkChannel?.readyState === 'open') {
+      try {
+        // Soft high-water guard; caller also paces via getBufferedAmount().
+        if (this.bulkChannel.bufferedAmount > HIGH_WATER_MARK * 2) {
+          return false;
+        }
+        this.bulkChannel.send(data);
+        return true;
+      } catch (error) {
+        logWarn(`[Peer ${this.id}]`, 'bulk send failed', error);
+        return false;
+      }
+    }
+
+    // Legacy fallback: single ordered channel.
+    if (!this.pc) return false;
+    const channel = (this.pc as SimplePeerWithChannel)._channel;
+    if (!channel || channel.readyState !== 'open') return false;
+    try {
+      this.pc.send(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public hasBulkChannel(): boolean {
+    return Boolean(this.bulkChannel && this.bulkChannel.readyState === 'open');
   }
 
   /**
    * 현재 버퍼 크기 조회
    */
   public getBufferedAmount(): number {
-    if (!this.pc || this.destroyed) return 0;
+    if (this.destroyed) return 0;
+    if (this.enableBulkPlane && this.bulkChannel?.readyState === 'open') {
+      return this.bulkChannel.bufferedAmount || 0;
+    }
+    if (!this.pc) return 0;
     const channel = (this.pc as SimplePeerWithChannel)._channel;
     return channel?.bufferedAmount ?? 0;
   }
@@ -383,6 +565,21 @@ export class SinglePeerConnection {
     this.destroyed = true;
     this.connected = false;
     this.ready = false;
+    this.bulkReady = false;
+
+    if (this.bulkChannel) {
+      try {
+        this.bulkChannel.onopen = null;
+        this.bulkChannel.onmessage = null;
+        this.bulkChannel.onclose = null;
+        this.bulkChannel.onerror = null;
+        this.bulkChannel.onbufferedamountlow = null;
+        this.bulkChannel.close();
+      } catch {
+        // ignore
+      }
+      this.bulkChannel = null;
+    }
 
     if (this.pc) {
       this.pc.destroy();

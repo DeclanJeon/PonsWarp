@@ -18,8 +18,14 @@ import {
   selectPartitionSize,
   selectInFlightTargetBytes,
   selectTransferTuningProfile,
+  shouldBlockOnPartitionAck,
   shouldRequestMoreChunks,
 } from './transferFlowControl';
+import {
+  BULK_CHANNEL_INIT,
+  BULK_CHANNEL_LABEL,
+  BULK_PLANE_VNEXT,
+} from './constants';
 
 describe('transferFlowControl', () => {
   it('requires two identical host/udp samples at least 500ms apart', () => {
@@ -353,5 +359,64 @@ describe('transferFlowControl', () => {
     bytes.set([1, 2, 3], 22);
 
     expect(getPacketPayloadSize(packet)).toBe(3);
+  });
+
+  it('makes 1:1 host partition checkpoints non-blocking under bulk plane vNext', () => {
+    expect(
+      shouldBlockOnPartitionAck({
+        bulkPlaneVnext: true,
+        activeReceiverCount: 1,
+        stripeEnabled: false,
+        candidatePathKind: 'host',
+      })
+    ).toBe(false);
+    expect(
+      shouldBlockOnPartitionAck({
+        bulkPlaneVnext: true,
+        activeReceiverCount: 1,
+        stripeEnabled: false,
+        candidatePathKind: 'srflx',
+      })
+    ).toBe(false);
+    expect(
+      shouldBlockOnPartitionAck({
+        bulkPlaneVnext: true,
+        activeReceiverCount: 2,
+        stripeEnabled: false,
+        candidatePathKind: 'host',
+      })
+    ).toBe(true);
+    expect(
+      shouldBlockOnPartitionAck({
+        bulkPlaneVnext: true,
+        activeReceiverCount: 1,
+        stripeEnabled: true,
+        candidatePathKind: 'host',
+      })
+    ).toBe(true);
+    expect(
+      shouldBlockOnPartitionAck({
+        bulkPlaneVnext: true,
+        activeReceiverCount: 1,
+        stripeEnabled: false,
+        candidatePathKind: 'relay',
+      })
+    ).toBe(true);
+    expect(
+      shouldBlockOnPartitionAck({
+        bulkPlaneVnext: false,
+        activeReceiverCount: 1,
+        stripeEnabled: false,
+        candidatePathKind: 'host',
+      })
+    ).toBe(true);
+  });
+
+  it('exports bulk plane channel policy as reliable-unordered', () => {
+    expect(BULK_PLANE_VNEXT).toBe(true);
+    expect(BULK_CHANNEL_LABEL).toBe('ponswarp-bulk');
+    expect(BULK_CHANNEL_INIT.ordered).toBe(false);
+    expect(BULK_CHANNEL_INIT.maxRetransmits).toBeUndefined();
+    expect(BULK_CHANNEL_INIT.maxPacketLifeTime).toBeUndefined();
   });
 });

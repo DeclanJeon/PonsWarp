@@ -71,3 +71,14 @@ export const HYBRID_HTTP_ASSIST =
 export const HYBRID_MIN_BYTES = 8 * 1024 * 1024; // 8MB
 export const HYBRID_TRIGGER_MBps = 4;
 export const HYBRID_UPLOAD_CONCURRENCY = 3;
+
+// Bulk plane vNext (docs/design/file-transfer-logic-comparison-and-redesign.md)
+// Default ON in this branch; set VITE_BULK_PLANE_VNEXT=false to force legacy single ordered channel.
+export const BULK_PLANE_VNEXT =
+  import.meta.env.VITE_BULK_PLANE_VNEXT !== 'false';
+export const BULK_CHANNEL_LABEL = 'ponswarp-bulk';
+/** Reliable-unordered bulk channel (no maxRetransmits => reliable). */
+export const BULK_CHANNEL_INIT: RTCDataChannelInit = {
+  ordered: false,
+  // intentionally omit maxRetransmits / maxPacketLifeTime for reliable delivery
+};

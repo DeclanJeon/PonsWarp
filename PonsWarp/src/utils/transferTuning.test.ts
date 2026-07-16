@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BULK_CHANNEL_INIT,
+  BULK_PLANE_VNEXT,
   CHUNK_SIZE_INITIAL,
   HIGH_WATER_MARK,
   LOW_WATER_MARK,
@@ -24,5 +26,10 @@ describe('transfer tuning constants', () => {
   it('uses short partitioned-transfer polling fallback intervals', () => {
     expect(SEND_WINDOW_POLL_INTERVAL_MS).toBeLessThanOrEqual(5);
     expect(PARTITION_ACK_POLL_INTERVAL_MS).toBeLessThanOrEqual(10);
+  });
+
+  it('enables bulk plane vNext with reliable-unordered bulk policy', () => {
+    expect(BULK_PLANE_VNEXT).toBe(true);
+    expect(BULK_CHANNEL_INIT.ordered).toBe(false);
   });
 });

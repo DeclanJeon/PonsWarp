@@ -30,6 +30,7 @@ import {
   LAN_STRIPE_PARTITION_BYTES,
   SEND_WINDOW_POLL_INTERVAL_MS,
   CONNECTION_TIMEOUT_MS,
+  BULK_PLANE_VNEXT,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
@@ -52,6 +53,7 @@ import {
   selectPartitionSize,
   selectInFlightTargetBytes,
   selectTransferTuningProfile,
+  shouldBlockOnPartitionAck,
   shouldRequestMoreChunks,
   UNKNOWN_TRANSFER_TUNING_PROFILE,
   TransferDiagnostics,
@@ -1020,7 +1022,7 @@ export class SwarmManager {
       }
 
       try {
-        if (peer.send(chunk)) {
+        if (peer.sendBulk(chunk)) {
           successCount++;
           sentPeers.push(peerId);
         } else {
@@ -3600,14 +3602,35 @@ export class SwarmManager {
       throw new Error('No active receivers for partition ACK');
     }
 
+    const blockOnAck = shouldBlockOnPartitionAck({
+      bulkPlaneVnext: BULK_PLANE_VNEXT,
+      activeReceiverCount: peerIds.length,
+      stripeEnabled: this.stripeEnabled,
+      candidatePathKind: this.currentTransferTuningProfile.pathKind,
+    });
+
     const waiter: PartitionAckWaiter = { runId, peers: new Set(peerIds) };
+    // Only track waiters when we will wait, or when we still want late ACKs for metrics.
     this.partitionAckWaiters.set(offset, waiter);
     const msg = JSON.stringify({ type: 'PARTITION', offset, runId });
     for (const peerId of peerIds) {
       const peer = this.peers.get(peerId);
       if (peer && peer.connected) {
+        // Control marker stays on control plane (string), never bulk binary.
         peer.send(msg);
       }
+    }
+
+    // Phase 1: fire-and-continue checkpoint on 1:1 direct/host.
+    // SCTP reliability + final EOS/integrity remain the hard completion gate.
+    if (!blockOnAck) {
+      // Drop waiter soon so late ACKs don't accumulate forever.
+      queueMicrotask(() => {
+        if (this.partitionAckWaiters.get(offset) === waiter) {
+          this.partitionAckWaiters.delete(offset);
+        }
+      });
+      return;
     }
 
     const started = performance.now();

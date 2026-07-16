@@ -266,6 +266,24 @@ export function calculateSendBudget(p: {
 export function selectPartitionSize(profile: TransferTuningProfile): number {
   return Math.max(0, Math.floor(profile.partitionSizeBytes));
 }
+
+/**
+ * Phase 1 bulk plane: on 1:1 direct/host (or unknown) paths, partition markers
+ * are async checkpoints and must not block the send loop. Multi-receiver and
+ * stripe modes keep the legacy blocking barrier for lockstep safety.
+ */
+export function shouldBlockOnPartitionAck(p: {
+  bulkPlaneVnext: boolean;
+  activeReceiverCount: number;
+  stripeEnabled?: boolean;
+  candidatePathKind?: CandidatePathKind | null;
+}): boolean {
+  if (!p.bulkPlaneVnext) return true;
+  if (p.activeReceiverCount > 1) return true;
+  if (p.stripeEnabled) return true;
+  // host / srflx / unknown: non-blocking. relay keeps blocking for durability.
+  return p.candidatePathKind === 'relay';
+}
 export const DEFAULT_FLOW_CONTROL_PROFILE: FlowControlProfile = {
   chunkSize: 16 * KIB,
   highWaterMark: 128 * KIB,
