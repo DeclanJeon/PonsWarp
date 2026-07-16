@@ -162,7 +162,7 @@ if [[ "$MODE" == deploy ]]; then
     while IFS= read -r line; do
       [[ "$line" == *=* ]] || continue
       key="${line%%=*}"
-      case "$key" in PATH|HOSTNAME|HOME|TERM) continue ;; esac
+      case "$key" in PATH|HOSTNAME|HOME|TERM|PORT|PONSWARP_ENV) continue ;; esac
       if [[ -z "${merged_env_values[$key]+set}" ]]; then
         merged_env_order+=("$key")
         merged_env_values["$key"]="$line"
@@ -196,6 +196,16 @@ if [[ "$NETWORK" == host ]]; then
 else
   [[ -z "$(docker ps -q --filter "publish=$new_port")" ]] || { echo "candidate port $new_port is already in use" >&2; exit 1; }
 fi
+# Force candidate listen port into env-file so --env-file cannot pin the previous release port.
+tmp_env="$release/.env.production.portfix"
+awk -v port="$new_port" '
+  BEGIN { done=0 }
+  /^PORT=/ { if (!done) { print "PORT=" port; done=1 }; next }
+  { print }
+  END { if (!done) print "PORT=" port }
+' "$release/.env.production" > "$tmp_env"
+install -m 0600 "$tmp_env" "$release/.env.production"
+rm -f "$tmp_env"
 activation="$REMOTE_DIR/activations/${RELEASE_ID}-$(date -u +%Y%m%d%H%M%S)-$$"; mkdir -p "$activation"
 ln -s "$release/static" "$activation/static"; printf '%s\n' "$RELEASE_ID" > "$activation/release.id"; printf 'set $ponswarp_backend http://127.0.0.1:%s;\n' "$new_port" > "$activation/backend.inc"
 if docker container inspect "$name" >/dev/null 2>&1; then
@@ -203,14 +213,29 @@ if docker container inspect "$name" >/dev/null 2>&1; then
   exit 1
 fi
 container_started=1
-docker_args=(-d --name "$name" --restart unless-stopped --network "$NETWORK" --env-file "$release/.env.production" -e PONSWARP_ENV=production)
+docker_args=(-d --name "$name" --restart unless-stopped --network "$NETWORK" --env-file "$release/.env.production" -e PONSWARP_ENV=production -e "PORT=$new_port")
 if [[ "$NETWORK" == host ]]; then
-  docker_args+=(--add-host postgres:127.0.0.1 -e "PORT=$new_port")
+  docker_args+=(--add-host postgres:127.0.0.1)
 else
   docker_args+=(-p "127.0.0.1:${new_port}:5502")
 fi
+echo "starting backend $name on port $new_port"
 docker run "${docker_args[@]}" "$image_identity" >/dev/null
-for path in health ready; do for attempt in {1..30}; do curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${new_port}/$path" >/dev/null && break; sleep 1; done; curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${new_port}/$path" >/dev/null; done
+for path in health ready; do
+  ok=0
+  for attempt in {1..45}; do
+    if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${new_port}/$path" >/dev/null; then
+      ok=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$ok" -eq 1 ]] || {
+    echo "backend health check failed for http://127.0.0.1:${new_port}/$path" >&2
+    docker logs "$name" >&2 || true
+    exit 1
+  }
+done
 rm -f "$current.new"; ln -s "$activation" "$current.new"; mv -Tf "$current.new" "$current"; swapped=1
 install -m 0644 "$release/warp.ponslink.com.conf" /etc/nginx/sites-available/warp.ponslink.com
 ln -sfn /etc/nginx/sites-available/warp.ponslink.com /etc/nginx/sites-enabled/warp.ponslink.com
