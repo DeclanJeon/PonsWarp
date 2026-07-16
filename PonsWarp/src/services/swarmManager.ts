@@ -31,6 +31,9 @@ import {
   SEND_WINDOW_POLL_INTERVAL_MS,
   CONNECTION_TIMEOUT_MS,
   BULK_PLANE_VNEXT,
+  BULK_PREPARE_AHEAD_BYTES,
+  BULK_PREPARE_AHEAD_CHUNKS,
+  BULK_READY_TIMEOUT_MS,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
@@ -302,6 +305,11 @@ export class SwarmManager {
   private partitionNonceCounter = 0;
   private transferPauseCount = 0;
   private partitionAckCount = 0;
+  private timingEncryptMs = 0;
+  private timingWaitDrainMs = 0;
+  private timingWaitPartitionAckMs = 0;
+  private timingBulkReadyMs = 0;
+  private bulkChannelUsed = false;
   private transferRunId = 0;
   private startGateState: StartGateState = 'DISABLED';
   private pendingStartIntent: StartIntent | null = null;
@@ -1025,6 +1033,7 @@ export class SwarmManager {
         if (peer.sendBulk(chunk)) {
           successCount++;
           sentPeers.push(peerId);
+          if (peer.hasBulkChannel()) this.bulkChannelUsed = true;
         } else {
           failedPeers.push(peerId);
         }
@@ -2122,7 +2131,18 @@ export class SwarmManager {
       `🎉 All transfers complete! ${this.completedPeersInSession.size} receivers finished.`
     );
 
-    this.emit('all-transfers-complete');
+    logInfo(
+      '[SwarmManager]',
+      `Transfer timing ms encrypt=${this.timingEncryptMs.toFixed(1)} drain=${this.timingWaitDrainMs.toFixed(1)} partitionAck=${this.timingWaitPartitionAckMs.toFixed(1)} bulkReady=${this.timingBulkReadyMs.toFixed(1)} bulkUsed=${this.bulkChannelUsed}`
+    );
+    this.emit('all-transfers-complete', {
+      timingEncryptMs: this.timingEncryptMs,
+      timingWaitDrainMs: this.timingWaitDrainMs,
+      timingWaitPartitionAckMs: this.timingWaitPartitionAckMs,
+      timingBulkReadyMs: this.timingBulkReadyMs,
+      bulkChannelUsed: this.bulkChannelUsed,
+      totalBytesSent: this.totalBytesSent,
+    });
     this.emit('complete');
 
     setTimeout(() => {
@@ -2673,6 +2693,31 @@ export class SwarmManager {
     this.totalBytesSent = startOffset;
     this.pendingAckPeers.clear();
     this.partitionAckWaiters.clear();
+    this.timingEncryptMs = 0;
+    this.timingWaitDrainMs = 0;
+    this.timingWaitPartitionAckMs = 0;
+    this.timingBulkReadyMs = 0;
+    this.bulkChannelUsed = false;
+
+    // Phase 2: wait for dedicated bulk channel before first binary frame.
+    if (BULK_PLANE_VNEXT) {
+      const bulkWaitStarted = performance.now();
+      for (const peerId of this.currentTransferPeers) {
+        const peer = this.peers.get(peerId);
+        if (!peer || !peer.connected) continue;
+        try {
+          const ready = await peer.waitForBulkReady(BULK_READY_TIMEOUT_MS);
+          if (ready || peer.hasBulkChannel()) this.bulkChannelUsed = true;
+          logInfo(
+            '[SwarmManager]',
+            `Bulk ready peer=${peerId} ready=${ready} hasBulk=${peer.hasBulkChannel()}`
+          );
+        } catch (error) {
+          logWarn('[SwarmManager]', `Bulk ready wait failed for ${peerId}`, error);
+        }
+      }
+      this.timingBulkReadyMs += performance.now() - bulkWaitStarted;
+    }
 
     // Multi-PC striping: open bulk associations, probe, then arm.
     // PARTITION_ACK now waits for contiguous reordering frontier, so
@@ -3110,6 +3155,7 @@ export class SwarmManager {
     new DataView(nonce.buffer).setUint32(0, nonceCounter, true);
     nonce.set(this.randomPrefix.subarray(0, 8), 4);
 
+    const encryptStarted = performance.now();
     const ciphertextWithTag = await crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
@@ -3119,6 +3165,7 @@ export class SwarmManager {
       this.partitionCryptoKey,
       params.payload
     );
+    this.timingEncryptMs += performance.now() - encryptStarted;
 
     const packet = new ArrayBuffer(38 + ciphertextWithTag.byteLength);
     const packetBytes = new Uint8Array(packet);
@@ -3213,8 +3260,10 @@ export class SwarmManager {
       let planSequence = cursor.sequence;
       let chunksSinceProgress = 0;
       let lastProgressAt = performance.now();
-      // 암호화/읽기를 충분히 앞서 돌려 DataChannel을 굶기지 않는다.
-      const PREPARE_AHEAD = 16;
+      // Phase 2: prepare-ahead by chunk count AND bytes to hide encrypt latency.
+      const PREPARE_AHEAD = BULK_PREPARE_AHEAD_CHUNKS;
+      const PREPARE_AHEAD_BYTES = BULK_PREPARE_AHEAD_BYTES;
+      let preparedBytes = 0;
 
       const nextDescriptor = (): Descriptor | null => {
         while (
@@ -3271,13 +3320,18 @@ export class SwarmManager {
       let eofPlanned = false;
 
       const fill = () => {
-        while (!eofPlanned && inFlight.size + ready.size < PREPARE_AHEAD) {
+        while (
+          !eofPlanned &&
+          inFlight.size + ready.size < PREPARE_AHEAD &&
+          preparedBytes < PREPARE_AHEAD_BYTES
+        ) {
           const d = nextDescriptor();
           if (!d) {
             eofPlanned = true;
             break;
           }
           const seq = d.sequence;
+          preparedBytes += d.bytes;
           const promise = prepare(d)
             .then(chunk => {
               ready.set(seq, chunk);
@@ -3286,6 +3340,7 @@ export class SwarmManager {
             })
             .catch(error => {
               inFlight.delete(seq);
+              preparedBytes = Math.max(0, preparedBytes - d.bytes);
               // Surface failure so the transfer aborts instead of deadlocking
               // on a missing sequence forever.
               throw error;
@@ -3318,7 +3373,7 @@ export class SwarmManager {
               : 1;
           const sendCap = Math.min(
             this.getCurrentInFlightTargetBytes(),
-            laneFactor * 4 * 1024 * 1024 // per-association queue cap
+            laneFactor * 8 * 1024 * 1024 // per-association queue cap (bulk plane host)
           );
           if (this.getHighestBufferedAmount() > sendCap) {
             await this.waitUntilSendWindowOpen(runId, sendCap);
@@ -3327,6 +3382,7 @@ export class SwarmManager {
           const chunk = ready.get(nextToSend)!;
           ready.delete(nextToSend);
           nextToSend++;
+          preparedBytes = Math.max(0, preparedBytes - chunk.payloadSize);
           fill();
 
           const result = this.broadcastChunk(chunk.packet);
@@ -3354,6 +3410,12 @@ export class SwarmManager {
             globalOffset < manifest.totalSize
           ) {
             this.emitProgress();
+            const blockOnAck = shouldBlockOnPartitionAck({
+              bulkPlaneVnext: BULK_PLANE_VNEXT,
+              activeReceiverCount: this.getActiveTransferPeerIds().length,
+              stripeEnabled: this.stripeEnabled,
+              candidatePathKind: this.currentTransferTuningProfile.pathKind,
+            });
             await this.sendPartitionMarkerAndWait(globalOffset, runId);
             partitionEnd = Math.min(
               globalOffset + this.getActivePartitionSize(),
@@ -3361,7 +3423,9 @@ export class SwarmManager {
             );
             // partition barrier 이후 파이프라인 재충전
             fill();
-            break;
+            // Phase 2: only break the burst when we actually blocked on ACK.
+            // Async checkpoints must not interrupt continuous SCTP fill.
+            if (blockOnAck) break;
           }
         }
       }
@@ -3586,7 +3650,9 @@ export class SwarmManager {
         throw new Error('Timed out waiting for receiver/backpressure window');
       }
       // drain 이벤트 우선, 짧은 watchdog로 재평가
+      const drainWaitStarted = performance.now();
       await this.waitForSendWindowSignal(20);
+      this.timingWaitDrainMs += performance.now() - drainWaitStarted;
     }
     throw new Error('Transfer stopped');
   }
@@ -3640,6 +3706,7 @@ export class SwarmManager {
         if (pending === waiter) {
           this.partitionAckWaiters.delete(offset);
         }
+        this.timingWaitPartitionAckMs += performance.now() - started;
         return;
       }
 
@@ -3662,6 +3729,7 @@ export class SwarmManager {
           this.stripeEnabled = true;
           logInfo('[SwarmManager]', 'Stripe lanes armed after first partition ACK');
         }
+        this.timingWaitPartitionAckMs += performance.now() - started;
         return;
       }
 

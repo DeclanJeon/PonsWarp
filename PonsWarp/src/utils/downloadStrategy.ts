@@ -10,7 +10,8 @@ export type DownloadStrategy =
   | 'blob-fallback'
   | 'opfs-fallback';
 
-const SMALL_BLOB_LIMIT = 50 * 1024 * 1024;
+// Align with PonsLink LAN memory path: keep medium files off FSA/StreamSaver.
+const SMALL_BLOB_LIMIT = 64 * 1024 * 1024;
 
 export function shouldUseBlobFallbackBeforeStreaming(fileSize: number): boolean {
   return fileSize > 0 && fileSize <= SMALL_BLOB_LIMIT;
@@ -61,11 +62,12 @@ export function getPreferredDownloadStrategies(
     return strategies;
   }
 
-  if (capability.hasFileSystemAccess) strategies.push('file-system-access');
-  strategies.push('streamsaver');
+  // Phase 2: medium files prefer memory assemble on Chromium LAN path.
   if (shouldUseBlobFallbackBeforeStreaming(capability.fileSize)) {
     strategies.push('blob-fallback');
   }
+  if (capability.hasFileSystemAccess) strategies.push('file-system-access');
+  strategies.push('streamsaver');
   strategies.push('opfs-fallback');
   return strategies;
 }

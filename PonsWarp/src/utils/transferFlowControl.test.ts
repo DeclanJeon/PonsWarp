@@ -131,6 +131,9 @@ describe('transferFlowControl', () => {
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
       4 * 1024 * 1024
     );
+    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(
+      8 * 1024 * 1024
+    );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
     ).toBeLessThanOrEqual(256 * 1024 + 54);

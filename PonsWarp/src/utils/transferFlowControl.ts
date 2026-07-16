@@ -181,7 +181,8 @@ export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   chunkSizeBytes: 240 * KIB,
   minInFlightBytes: 2 * MIB,
   initialInFlightBytes: 4 * MIB,
-  maxInFlightBytes: 6 * MIB, // match practical SCTP queue depth
+  // Phase 2: 12MiB regressed (bufferbloat). Keep 8MiB host ceiling.
+  maxInFlightBytes: 8 * MIB,
   lowWaterBytes: 1 * MIB,
   partitionSizeBytes: 128 * MIB,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,

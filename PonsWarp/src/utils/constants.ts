@@ -82,3 +82,9 @@ export const BULK_CHANNEL_INIT: RTCDataChannelInit = {
   ordered: false,
   // intentionally omit maxRetransmits / maxPacketLifeTime for reliable delivery
 };
+/** Max concurrent prepared ciphertext frames ahead of the send cursor. */
+export const BULK_PREPARE_AHEAD_CHUNKS = 48;
+/** Byte cap for prepared-but-unsent frames (~encrypt hide latency). */
+export const BULK_PREPARE_AHEAD_BYTES = 8 * 1024 * 1024;
+/** Wait for dedicated bulk channel before first binary frame. */
+export const BULK_READY_TIMEOUT_MS = 1500;

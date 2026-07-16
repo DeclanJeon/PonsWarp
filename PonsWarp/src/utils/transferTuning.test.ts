@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   BULK_CHANNEL_INIT,
   BULK_PLANE_VNEXT,
+  BULK_PREPARE_AHEAD_BYTES,
+  BULK_PREPARE_AHEAD_CHUNKS,
+  BULK_READY_TIMEOUT_MS,
   CHUNK_SIZE_INITIAL,
   HIGH_WATER_MARK,
   LOW_WATER_MARK,
@@ -9,7 +12,6 @@ import {
   SEND_WINDOW_POLL_INTERVAL_MS,
   TRANSFER_PARTITION_SIZE,
 } from './constants';
-
 describe('transfer tuning constants', () => {
   it('uses a larger but browser-safe chunk and bounded multi-megabyte send queue', () => {
     expect(CHUNK_SIZE_INITIAL).toBe(240 * 1024);
@@ -31,5 +33,8 @@ describe('transfer tuning constants', () => {
   it('enables bulk plane vNext with reliable-unordered bulk policy', () => {
     expect(BULK_PLANE_VNEXT).toBe(true);
     expect(BULK_CHANNEL_INIT.ordered).toBe(false);
+    expect(BULK_PREPARE_AHEAD_CHUNKS).toBeGreaterThanOrEqual(32);
+    expect(BULK_PREPARE_AHEAD_BYTES).toBeGreaterThanOrEqual(4 * 1024 * 1024);
+    expect(BULK_READY_TIMEOUT_MS).toBeGreaterThan(0);
   });
 });

@@ -372,17 +372,14 @@ export class SinglePeerConnection {
 
   /**
    * Bulk-plane send: reliable-unordered channel when available.
-   * Falls back to control channel for legacy peers / flag-off.
+   * Falls back to control/default channel for legacy peers / flag-off.
+   * Never returns false solely for backpressure — caller paces via getBufferedAmount().
    */
   public sendBulk(data: ArrayBuffer): boolean {
     if (!this.connected || this.destroyed) return false;
 
     if (this.enableBulkPlane && this.bulkChannel?.readyState === 'open') {
       try {
-        // Soft high-water guard; caller also paces via getBufferedAmount().
-        if (this.bulkChannel.bufferedAmount > HIGH_WATER_MARK * 2) {
-          return false;
-        }
         this.bulkChannel.send(data);
         return true;
       } catch (error) {
@@ -391,7 +388,7 @@ export class SinglePeerConnection {
       }
     }
 
-    // Legacy fallback: single ordered channel.
+    // Legacy / not-yet-ready bulk: single default channel.
     if (!this.pc) return false;
     const channel = (this.pc as SimplePeerWithChannel)._channel;
     if (!channel || channel.readyState !== 'open') return false;
@@ -405,6 +402,35 @@ export class SinglePeerConnection {
 
   public hasBulkChannel(): boolean {
     return Boolean(this.bulkChannel && this.bulkChannel.readyState === 'open');
+  }
+
+  public isBulkPlaneEnabled(): boolean {
+    return this.enableBulkPlane;
+  }
+
+  /**
+   * Wait until dedicated bulk channel is open, or timeout and continue with fallback.
+   */
+  public async waitForBulkReady(timeoutMs = 1500): Promise<boolean> {
+    if (!this.enableBulkPlane) return false;
+    if (this.hasBulkChannel()) return true;
+    if (!this.connected || this.destroyed) return false;
+
+    return await new Promise<boolean>(resolve => {
+      let settled = false;
+      const done = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        this.off('bulk-ready', onReady);
+        clearTimeout(timer);
+        resolve(ok);
+      };
+      const onReady = () => done(true);
+      this.on('bulk-ready', onReady);
+      const timer = setTimeout(() => done(this.hasBulkChannel()), timeoutMs);
+      // Race: may have opened between check and listener attach.
+      if (this.hasBulkChannel()) done(true);
+    });
   }
 
   /**
