@@ -2893,11 +2893,10 @@ export class SwarmManager {
       this.startAdaptiveControl();
     }
     await this.sampleAdaptiveStats();
-    // Keep sampling path/rtt lightly during speed transfers for QA visibility.
     if (SPEED_TRANSFER && !this.isEncryptionEnabled()) {
-      this.adaptiveStatsInterval = setInterval(() => {
+      setTimeout(() => {
         this.sampleAdaptiveStats().catch(() => {});
-      }, 1000);
+      }, 1500);
     }
 
     // Host LAN path is already SCTP-bound; hybrid HTTP only helps constrained
