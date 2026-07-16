@@ -73,6 +73,8 @@ import {
   hasStableHostRoute,
 } from '../utils/transferFlowControl';
 import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
+import { createBulkTransports } from '../transfer/BulkTransport';
+import { sendSpeedFirehose } from '../transfer/SpeedSender';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -3260,6 +3262,55 @@ export class SwarmManager {
     startOffset: number,
     runId: number
   ): Promise<void> {
+    // Speed-first hot path: firehose plain bulk with local backpressure only.
+    if (SPEED_TRANSFER && !this.isEncryptionEnabled()) {
+      this.ensureActiveTransferRun(runId);
+      const peerIds = this.getActiveTransferPeerIds();
+      const peers = peerIds
+        .map(id => this.peers.get(id))
+        .filter((p): p is SinglePeerConnection => !!p && p.connected);
+      const transports = createBulkTransports(peers);
+      if (transports.length === 0) {
+        throw new Error('No connected receivers for speed firehose');
+      }
+
+      // Announce start controls once (legacy receivers still understand MANIFEST/STARTED).
+      for (const t of transports) {
+        t.sendControl({ type: 'MODE', mode: 'speed' });
+        t.sendControl({ type: 'TRANSFER_STARTED' });
+      }
+
+      const result = await sendSpeedFirehose({
+        files: this.files,
+        manifest: { totalSize: manifest.totalSize },
+        transports,
+        startOffset,
+        isActive: () => runId === this.transferRunId && this.isTransferring,
+        waitWhilePaused: async () => {
+          // honor receiver PAUSE if any
+          while (
+            runId === this.transferRunId &&
+            this.isTransferring &&
+            this.pausedPeers.size > 0
+          ) {
+            await this.waitForSendWindowSignal(20);
+          }
+        },
+        onProgress: ({ bytesSent }) => {
+          this.totalBytesSent = bytesSent;
+          this.emitProgress();
+        },
+      });
+      this.totalBytesSent = result.bytesSent;
+      this.emitProgress();
+      if (result.bytesSent < manifest.totalSize && startOffset === 0) {
+        throw new Error(
+          `Speed firehose incomplete: ${result.bytesSent}/${manifest.totalSize}`
+        );
+      }
+      return;
+    }
+
     const hostPipelineReady = await this.awaitStableHostPipeline(runId);
     const scheduler = hostPipelineReady
       ? (this.hostTransferScheduler ??= new HostTransferScheduler(

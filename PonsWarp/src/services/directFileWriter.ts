@@ -27,6 +27,7 @@ import initPonsCore, { CryptoSession, Zip64Stream } from 'pons-core-wasm';
 import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE, SPEED_TRANSFER } from '../utils/constants';
+import { canSequentialAppend } from '../transfer/SpeedReceiver';
 import { calculateReceiverBufferedProgress } from '../utils/transferProgress';
 import {
   shouldUseBlobFallbackBeforeStreaming,
@@ -1213,15 +1214,34 @@ export class DirectFileWriter {
     }
 
     const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
-    const chunksToWrite = this.reorderingBuffer.push(
-      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-      offset
-    );
 
-    for (const chunk of chunksToWrite) {
-      this.writeBuffer.push(new Uint8Array(chunk));
-      this.currentBatchSize += chunk.byteLength;
-      this.pendingBytesInBuffer += chunk.byteLength;
+    // Speed path sequential fast-append: avoid reordering map churn when in order.
+    if (
+      SPEED_TRANSFER &&
+      this.reorderingBuffer &&
+      canSequentialAppend(this.reorderingBuffer.getNextExpectedOffset(), offset)
+    ) {
+      // Still push through reordering buffer for frontier consistency, but payload
+      // is already sequential so it drains immediately as one chunk.
+      const chunksToWrite = this.reorderingBuffer.push(
+        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+        offset
+      );
+      for (const chunk of chunksToWrite) {
+        this.writeBuffer.push(new Uint8Array(chunk));
+        this.currentBatchSize += chunk.byteLength;
+        this.pendingBytesInBuffer += chunk.byteLength;
+      }
+    } else {
+      const chunksToWrite = this.reorderingBuffer.push(
+        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+        offset
+      );
+      for (const chunk of chunksToWrite) {
+        this.writeBuffer.push(new Uint8Array(chunk));
+        this.currentBatchSize += chunk.byteLength;
+        this.pendingBytesInBuffer += chunk.byteLength;
+      }
     }
 
     this.checkBackpressure();
