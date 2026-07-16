@@ -56,6 +56,10 @@ const AUTH_TAG_SIZE = 16;
 const MAX_RESUME_ATTEMPTS = 3;
 
 import type { EvidenceFsaHandleContext } from './lanEvidenceAdapter';
+import {
+  getCryptoPlaneClient,
+  resetCryptoPlaneClient,
+} from './cryptoPlaneClient';
 export class DirectFileWriter {
   private evidenceFsaHandleContext: EvidenceFsaHandleContext | null = null;
 
@@ -122,6 +126,8 @@ export class DirectFileWriter {
   private randomPrefix: Uint8Array | null = null;
   private cryptoSession: CryptoSession | null = null;
   private decryptCryptoKey: CryptoKey | null = null;
+  private cryptoPlane = getCryptoPlaneClient();
+  private cryptoPlaneReady = false;
   private writeFailure: Error | null = null;
   private resumeAttempts = 0;
   private awaitingResume = false;
@@ -218,7 +224,28 @@ export class DirectFileWriter {
     this.randomPrefix = new Uint8Array(randomPrefix);
     this.cryptoSession = null;
     this.decryptCryptoKey = null;
+    this.cryptoPlaneReady = false;
+    void this.armCryptoPlane();
     logInfo('[DirectFileWriter]', '🔐 Encryption key configured');
+  }
+
+  private async armCryptoPlane(): Promise<void> {
+    if (!this.sessionKey || !this.randomPrefix) {
+      this.cryptoPlaneReady = false;
+      return;
+    }
+    try {
+      this.cryptoPlaneReady = await this.cryptoPlane.ensureKey(
+        this.sessionKey,
+        this.randomPrefix
+      );
+      if (this.cryptoPlaneReady) {
+        logInfo('[DirectFileWriter]', '🔐 Crypto plane workers armed for decrypt');
+      }
+    } catch (error) {
+      this.cryptoPlaneReady = false;
+      logWarn('[DirectFileWriter]', 'Crypto plane arm failed', error);
+    }
   }
 
   /**
@@ -1312,6 +1339,20 @@ export class DirectFileWriter {
       throw new Error('Corrupt encrypted packet');
     }
 
+    // Prefer off-main-thread decrypt (returns normalized plain packet).
+    if (this.cryptoPlaneReady) {
+      try {
+        return await this.cryptoPlane.decryptPacket(packet);
+      } catch (error) {
+        this.cryptoPlaneReady = false;
+        logWarn(
+          '[DirectFileWriter]',
+          'Crypto plane decrypt failed; main-thread fallback',
+          error
+        );
+      }
+    }
+
     const decrypted = await this.decryptEncryptedPacket(bytes);
     if (decrypted.byteLength !== plaintextLength) {
       throw new Error('Encrypted packet plaintext length mismatch');
@@ -1903,6 +1944,9 @@ export class DirectFileWriter {
     if (this.randomPrefix) {
       this.randomPrefix.fill(0);
     }
+    this.cryptoPlaneReady = false;
+    resetCryptoPlaneClient();
+    this.cryptoPlane = getCryptoPlaneClient();
     this.sessionKey = null;
     this.randomPrefix = null;
     this.cryptoSession?.reset();

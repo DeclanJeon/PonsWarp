@@ -19,3 +19,10 @@ export const getSenderWorkerV1 = (): Worker => {
 export const getReceiverWorkerV1 = (): Worker => {
   return getReceiverWorker();
 };
+
+export const getCryptoPlaneWorker = (): Worker => {
+  return new Worker(
+    new URL('../workers/crypto-plane.worker.ts', import.meta.url),
+    { type: 'module' }
+  );
+};

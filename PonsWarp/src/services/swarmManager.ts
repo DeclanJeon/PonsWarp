@@ -37,6 +37,10 @@ import {
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
+import {
+  getCryptoPlaneClient,
+  resetCryptoPlaneClient,
+} from './cryptoPlaneClient';
 import { networkController, AdaptiveParams } from './networkAdaptiveController';
 import { calculateProgressPercent } from '../utils/transferProgress';
 import {
@@ -302,6 +306,8 @@ export class SwarmManager {
   private currentInFlightTargetBytes =
     UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes;
   private partitionCryptoKey: CryptoKey | null = null;
+  private cryptoPlane = getCryptoPlaneClient();
+  private cryptoPlaneReady = false;
   private partitionNonceCounter = 0;
   private transferPauseCount = 0;
   private partitionAckCount = 0;
@@ -447,6 +453,7 @@ export class SwarmManager {
   private ensureTransferEncryption(): void {
     if (this.sessionKey && this.randomPrefix) {
       this.encryptionEnabled = true;
+      void this.armCryptoPlane();
       return;
     }
 
@@ -454,6 +461,7 @@ export class SwarmManager {
     this.randomPrefix = crypto.getRandomValues(new Uint8Array(8));
     this.encryptionEnabled = true;
     logInfo('[SwarmManager]', '🔐 Transfer encryption session generated');
+    void this.armCryptoPlane();
   }
 
   private sendCryptoSessionToPeer(peer: SinglePeerConnection): void {
@@ -2698,6 +2706,7 @@ export class SwarmManager {
     this.timingWaitPartitionAckMs = 0;
     this.timingBulkReadyMs = 0;
     this.bulkChannelUsed = false;
+    await this.armCryptoPlane();
 
     // Phase 2: wait for dedicated bulk channel before first binary frame.
     if (BULK_PLANE_VNEXT) {
@@ -3125,6 +3134,27 @@ export class SwarmManager {
   }
 
 
+  private async armCryptoPlane(): Promise<void> {
+    if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
+      this.cryptoPlaneReady = false;
+      return;
+    }
+    try {
+      this.cryptoPlaneReady = await this.cryptoPlane.ensureKey(
+        this.sessionKey,
+        this.randomPrefix
+      );
+      if (this.cryptoPlaneReady) {
+        logInfo('[SwarmManager]', '🔐 Crypto plane workers armed');
+      } else {
+        logWarn('[SwarmManager]', 'Crypto plane arm failed; main-thread encrypt fallback');
+      }
+    } catch (error) {
+      this.cryptoPlaneReady = false;
+      logWarn('[SwarmManager]', 'Crypto plane arm error', error);
+    }
+  }
+
   private async createPartitionDataPacket(params: {
     payload: ArrayBuffer;
     sequence: number;
@@ -3133,6 +3163,30 @@ export class SwarmManager {
   }): Promise<ArrayBuffer> {
     if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
       return createPlainDataPacket(params);
+    }
+
+    const nonceCounter = params.nonceCounter ?? this.partitionNonceCounter++;
+    const encryptStarted = performance.now();
+
+    // Prefer off-main-thread crypto plane workers (parallel AES-GCM).
+    if (this.cryptoPlaneReady) {
+      try {
+        const packet = await this.cryptoPlane.encryptPacket({
+          payload: params.payload,
+          sequence: params.sequence,
+          offset: params.offset,
+          nonceCounter,
+        });
+        this.timingEncryptMs += performance.now() - encryptStarted;
+        return packet;
+      } catch (error) {
+        this.cryptoPlaneReady = false;
+        logWarn(
+          '[SwarmManager]',
+          'Crypto plane encrypt failed; falling back to main thread',
+          error
+        );
+      }
     }
 
     if (!this.partitionCryptoKey) {
@@ -3150,12 +3204,10 @@ export class SwarmManager {
       );
     }
 
-    const nonceCounter = params.nonceCounter ?? this.partitionNonceCounter++;
     const nonce = new Uint8Array(12);
     new DataView(nonce.buffer).setUint32(0, nonceCounter, true);
     nonce.set(this.randomPrefix.subarray(0, 8), 4);
 
-    const encryptStarted = performance.now();
     const ciphertextWithTag = await crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
@@ -4077,6 +4129,9 @@ export class SwarmManager {
     }
     this.sessionKey = null;
     this.randomPrefix = null;
+    this.cryptoPlaneReady = false;
+    resetCryptoPlaneClient();
+    this.cryptoPlane = getCryptoPlaneClient();
     this.encryptionEnabled = false;
     this.files = [];
   }
