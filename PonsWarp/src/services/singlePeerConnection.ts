@@ -6,9 +6,12 @@
  */
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import {
+  BULK_CHANNEL_COUNT,
   BULK_CHANNEL_INIT,
   BULK_CHANNEL_LABEL,
   BULK_PLANE_VNEXT,
+  bulkChannelLabel,
+  isBulkChannelLabel,
   HIGH_WATER_MARK,
   LOW_WATER_MARK,
 } from '../utils/constants';
@@ -67,8 +70,9 @@ export class SinglePeerConnection {
   private drainEmitted: boolean = false;
   private drainPollInterval: ReturnType<typeof setInterval> | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
-  private bulkChannel: RTCDataChannel | null = null;
+  private bulkChannels: RTCDataChannel[] = [];
   private bulkReady = false;
+  private bulkRr = 0;
   private readonly enableBulkPlane: boolean;
   private readonly isInitiator: boolean;
 
@@ -201,12 +205,15 @@ export class SinglePeerConnection {
     if (this.drainPollInterval) clearInterval(this.drainPollInterval);
     this.drainPollInterval = setInterval(() => {
       if (!this.connected || this.destroyed) return;
-      const bulk = this.bulkChannel;
-      if (this.enableBulkPlane && bulk && bulk.readyState === 'open') {
-        if (bulk.bufferedAmount <= bulk.bufferedAmountLowThreshold) {
-          this.emitDrainOnce();
+      if (this.enableBulkPlane) {
+        const open = this.bulkChannels.filter(ch => ch.readyState === 'open');
+        if (open.length > 0) {
+          const anyLow = open.some(
+            ch => ch.bufferedAmount <= (ch.bufferedAmountLowThreshold || 0)
+          );
+          if (anyLow) this.emitDrainOnce();
+          return;
         }
-        return;
       }
       if (channel.readyState !== 'open') return;
       if (channel.bufferedAmount <= channel.bufferedAmountLowThreshold) {
@@ -230,23 +237,33 @@ export class SinglePeerConnection {
       return;
     }
 
-    // Answerer accepts remote bulk channel; offerer creates it.
+    // Answerer accepts remote bulk channels; offerer creates them.
+    const prev = native.ondatachannel;
     native.ondatachannel = event => {
-      if (event.channel?.label === BULK_CHANNEL_LABEL) {
+      if (isBulkChannelLabel(event.channel?.label)) {
         this.attachBulkChannel(event.channel);
+        return;
+      }
+      if (typeof prev === 'function') {
+        try {
+          prev.call(native, event);
+        } catch {
+          // ignore
+        }
       }
     };
 
-    // simple-peer initiator creates the default channel; same side opens bulk.
     try {
       if (this.isInitiator) {
-        const channel = native.createDataChannel(
-          BULK_CHANNEL_LABEL,
-          BULK_CHANNEL_INIT
-        );
-        this.attachBulkChannel(channel);
+        const n = Math.max(1, Math.min(4, BULK_CHANNEL_COUNT || 1));
+        for (let i = 0; i < n; i++) {
+          const channel = native.createDataChannel(
+            bulkChannelLabel(i),
+            BULK_CHANNEL_INIT
+          );
+          this.attachBulkChannel(channel);
+        }
       }
-      // Non-initiator attaches via ondatachannel.
     } catch (error) {
       logWarn(`[Peer ${this.id}]`, 'Failed to create bulk data channel', error);
     }
@@ -262,19 +279,22 @@ export class SinglePeerConnection {
       return;
     }
 
-    this.bulkChannel = channel;
+    if (this.bulkChannels.includes(channel)) return;
+    this.bulkChannels.push(channel);
     channel.binaryType = 'arraybuffer';
     channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
 
     const markReady = () => {
       if (channel.readyState === 'open') {
-        this.bulkReady = true;
+        this.bulkReady = this.bulkChannels.some(ch => ch.readyState === 'open');
         logInfo(
           `[Peer ${this.id}]`,
-          `Bulk channel open (ordered=${String(channel.ordered)})`
+          `Bulk channel open label=${channel.label} ordered=${String(channel.ordered)} open=${this.bulkChannels.filter(c => c.readyState === 'open').length}/${this.bulkChannels.length}`
         );
-        this.emit('bulk-ready', this.id);
-        this.emitDrainOnce();
+        if (this.bulkReady) {
+          this.emit('bulk-ready', this.id);
+          this.emitDrainOnce();
+        }
       }
     };
 
@@ -305,19 +325,17 @@ export class SinglePeerConnection {
           .arrayBuffer()
           .then(buffer => this.emit('data', buffer))
           .catch(error => this.emit('error', error));
-        return;
       }
-      // Bulk plane is binary-only; ignore unexpected control strings.
     };
 
     channel.onclose = () => {
-      this.bulkReady = false;
-      if (this.bulkChannel === channel) this.bulkChannel = null;
-      logInfo(`[Peer ${this.id}]`, 'Bulk channel closed');
+      this.bulkChannels = this.bulkChannels.filter(ch => ch !== channel);
+      this.bulkReady = this.bulkChannels.some(ch => ch.readyState === 'open');
+      logInfo(`[Peer ${this.id}]`, `Bulk channel closed label=${channel.label}`);
     };
 
     channel.onerror = () => {
-      logWarn(`[Peer ${this.id}]`, 'Bulk channel error');
+      logWarn(`[Peer ${this.id}]`, `Bulk channel error label=${channel.label}`);
     };
   }
 
@@ -375,16 +393,40 @@ export class SinglePeerConnection {
    * Falls back to control/default channel for legacy peers / flag-off.
    * Never returns false solely for backpressure — caller paces via getBufferedAmount().
    */
+  private pickBulkChannel(): RTCDataChannel | null {
+    const open = this.bulkChannels.filter(ch => ch.readyState === 'open');
+    if (open.length === 0) return null;
+    // Prefer lowest bufferedAmount; tiny RR bias for fairness.
+    let best = open[0];
+    let bestBuf = best.bufferedAmount || 0;
+    for (let i = 1; i < open.length; i++) {
+      const b = open[i].bufferedAmount || 0;
+      if (b < bestBuf) {
+        best = open[i];
+        bestBuf = b;
+      }
+    }
+    // If several are empty, rotate.
+    if (bestBuf === 0 && open.length > 1) {
+      this.bulkRr = (this.bulkRr + 1) % open.length;
+      return open[this.bulkRr];
+    }
+    return best;
+  }
+
   public sendBulk(data: ArrayBuffer): boolean {
     if (!this.connected || this.destroyed) return false;
 
-    if (this.enableBulkPlane && this.bulkChannel?.readyState === 'open') {
-      try {
-        this.bulkChannel.send(data);
-        return true;
-      } catch (error) {
-        logWarn(`[Peer ${this.id}]`, 'bulk send failed', error);
-        return false;
+    if (this.enableBulkPlane) {
+      const bulk = this.pickBulkChannel();
+      if (bulk) {
+        try {
+          bulk.send(data);
+          return true;
+        } catch (error) {
+          logWarn(`[Peer ${this.id}]`, 'bulk send failed', error);
+          return false;
+        }
       }
     }
 
@@ -401,7 +443,11 @@ export class SinglePeerConnection {
   }
 
   public hasBulkChannel(): boolean {
-    return Boolean(this.bulkChannel && this.bulkChannel.readyState === 'open');
+    return this.bulkChannels.some(ch => ch.readyState === 'open');
+  }
+
+  public getOpenBulkChannelCount(): number {
+    return this.bulkChannels.filter(ch => ch.readyState === 'open').length;
   }
 
   public isBulkPlaneEnabled(): boolean {
@@ -438,8 +484,12 @@ export class SinglePeerConnection {
    */
   public getBufferedAmount(): number {
     if (this.destroyed) return 0;
-    if (this.enableBulkPlane && this.bulkChannel?.readyState === 'open') {
-      return this.bulkChannel.bufferedAmount || 0;
+    if (this.enableBulkPlane) {
+      const open = this.bulkChannels.filter(ch => ch.readyState === 'open');
+      if (open.length > 0) {
+        // Total queued across bulk streams (same SCTP assoc, multi-SID).
+        return open.reduce((sum, ch) => sum + (ch.bufferedAmount || 0), 0);
+      }
     }
     if (!this.pc) return 0;
     const channel = (this.pc as SimplePeerWithChannel)._channel;
@@ -593,19 +643,19 @@ export class SinglePeerConnection {
     this.ready = false;
     this.bulkReady = false;
 
-    if (this.bulkChannel) {
+    for (const channel of this.bulkChannels) {
       try {
-        this.bulkChannel.onopen = null;
-        this.bulkChannel.onmessage = null;
-        this.bulkChannel.onclose = null;
-        this.bulkChannel.onerror = null;
-        this.bulkChannel.onbufferedamountlow = null;
-        this.bulkChannel.close();
+        channel.onopen = null;
+        channel.onmessage = null;
+        channel.onclose = null;
+        channel.onerror = null;
+        channel.onbufferedamountlow = null;
+        channel.close();
       } catch {
         // ignore
       }
-      this.bulkChannel = null;
     }
+    this.bulkChannels = [];
 
     if (this.pc) {
       this.pc.destroy();

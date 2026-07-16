@@ -77,6 +77,13 @@ export const HYBRID_UPLOAD_CONCURRENCY = 3;
 export const BULK_PLANE_VNEXT =
   import.meta.env.VITE_BULK_PLANE_VNEXT !== 'false';
 export const BULK_CHANNEL_LABEL = 'ponswarp-bulk';
+/** Number of unordered bulk DataChannels on one PeerConnection (shared SCTP assoc). */
+export const BULK_CHANNEL_COUNT = 1; // multi-SID same-PC regressed to ~5Mbps in LAN QA
+export const bulkChannelLabel = (index: number) =>
+  index <= 0 ? BULK_CHANNEL_LABEL : `${BULK_CHANNEL_LABEL}-${index}`;
+export const isBulkChannelLabel = (label: string | null | undefined) =>
+  typeof label === 'string' &&
+  (label === BULK_CHANNEL_LABEL || label.startsWith(`${BULK_CHANNEL_LABEL}-`));
 /** Reliable-unordered bulk channel (no maxRetransmits => reliable). */
 export const BULK_CHANNEL_INIT: RTCDataChannelInit = {
   ordered: false,
