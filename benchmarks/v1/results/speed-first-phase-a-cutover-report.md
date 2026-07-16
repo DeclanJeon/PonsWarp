@@ -86,3 +86,17 @@ bufferedAmount: often several MB while drain ~2 MB/s
 - Range-partitioned dual-lane firehose implemented (`endOffset` + per-lane send) but left **disabled** (`LAN_STRIPE_LANES=1`) after incomplete transfer at ~offset 11MB.
 - Harness bug fixed: `INCOMPLETE_TRANSFER` no longer matches `COMPLETE`.
 - Next: prove gap-free range-stripe, then same-subnet direct socket assist.
+
+
+## Secondary-lane diagnosis (2026-07-16 cont.)
+
+| Mode | Result |
+|------|--------|
+| Single lane firehose | COMPLETE ~12–16 Mbps |
+| Sequential dual-PC range + full drain | COMPLETE (no speed gain) |
+| Parallel dual-PC range | FAILED incomplete mid-file |
+| Parallel same-PC dual negotiated DC range | FAILED ~2MB then incomplete |
+| writeChunk arrival-order serialization | landed (correctness) |
+| Legacy re-send after stripe fail | disabled when stripeEnabled |
+
+Conclusion: secondary lane can deliver bulk when exclusive; **concurrency** across streams/associations is what creates gaps. Speed ceiling remains single SCTP association goodput on this Wi‑Fi dual-STA path.
