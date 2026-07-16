@@ -4,7 +4,13 @@ export const CHUNK_SIZE = 64 * 1024; // 64 KiB payload
 // Chromium throws once the RTCDataChannel send queue hits ~16 MiB.
 // Keep a conservative high-water mark for multi-device reliability.
 export const MAX_BUFFERED_AMOUNT = 2 * 1024 * 1024; // 2 MiB
+export const MIN_BUFFERED_AMOUNT = 512 * 1024; // adaptive congestion floor
 export const SEND_PROGRESS_INTERVAL_MS = 100; // throttle main-thread progress while blasting chunks
+// Multi-DC remains experimental and off by default.
+export const DATA_CHANNEL_COUNT = 0;
+export const CONTROL_CHANNEL_LABEL = "warp-control";
+export const dataChannelLabel = (index: number) => `warp-data-${index}`;
+export const WRITE_BATCH_BYTES = 1024 * 1024; // coalesce disk writes to ~1 MiB
 export const PROTOCOL_VERSION = 1;
 
 export type BinaryPacketType = 1 | 2 | 3; // chunk | complete | abort
