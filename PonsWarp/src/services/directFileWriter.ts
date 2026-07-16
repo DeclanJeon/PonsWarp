@@ -1208,9 +1208,19 @@ export class DirectFileWriter {
 
     const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
 
-    // Always go through reorderingBuffer so multi-lane arrivals cannot desync
-    // frontier via advanceTo races with out-of-order writeQueue scheduling.
-    {
+    // Single-stream speed path: sequential append without reordering map churn.
+    if (
+      SPEED_TRANSFER &&
+      this.reorderingBuffer &&
+      canSequentialAppend(this.reorderingBuffer.getNextExpectedOffset(), offset)
+    ) {
+      this.reorderingBuffer.advanceTo(offset + size);
+      this.writeBuffer.push(
+        this.writerMode === 'blob-fallback' ? data : data.slice()
+      );
+      this.currentBatchSize += size;
+      this.pendingBytesInBuffer += size;
+    } else {
       const owned = data.slice().buffer;
       const chunksToWrite = this.reorderingBuffer.push(owned, offset);
       for (const chunk of chunksToWrite) {

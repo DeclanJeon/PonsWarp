@@ -105,7 +105,7 @@ export const SPEED_TRANSFER =
 export const DEFAULT_APP_AES = !SPEED_TRANSFER;
 export const SPEED_BUFFER_HIGH = 8 * 1024 * 1024;
 export const SPEED_BUFFER_LOW = 2 * 1024 * 1024;
-export const SPEED_CHUNK_SIZE = 192 * 1024; // large messages, host LAN
+export const SPEED_CHUNK_SIZE = 192 * 1024; // stable under current dual-device Wi-Fi
 /** Negotiated bulk DataChannels (no SDP renegotiation) on speed path. */
 export const SPEED_BULK_CHANNELS = 0; // concurrent multi-stream range-split still incomplete
 export const SPEED_BULK_CHANNEL_ID_BASE = 10;

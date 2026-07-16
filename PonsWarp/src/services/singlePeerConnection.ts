@@ -116,9 +116,8 @@ export class SinglePeerConnection {
         trickle: true,
         config: { iceServers: config.iceServers },
         channelConfig: {
-          // Speed path: reliable-unordered default channel (no HOL) without extra bulk DCs.
-          // Hardened/legacy: ordered when bulk plane is off.
-          ordered: this.enableBulkPlane || SPEED_TRANSFER ? false : true,
+          // Speed path: unordered reliable (app QA better than ordered on this harness).
+          ordered: SPEED_TRANSFER || this.enableBulkPlane ? false : true,
           bufferedAmountLowThreshold: SPEED_TRANSFER ? SPEED_BUFFER_LOW : LOW_WATER_MARK,
           ...config.channelConfig,
         },
@@ -512,10 +511,16 @@ export class SinglePeerConnection {
     const channel = (this.pc as SimplePeerWithChannel)._channel;
     if (!channel || channel.readyState !== 'open') return false;
     try {
-      this.pc.send(data);
+      // Prefer native DC.send (raw-dc style) over simple-peer wrapper.
+      channel.send(data);
       return true;
     } catch {
-      return false;
+      try {
+        this.pc.send(data);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 

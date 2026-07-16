@@ -1,12 +1,9 @@
 import {
+  HEADER_SIZE,
   SPEED_BUFFER_HIGH,
   SPEED_CHUNK_SIZE,
   SPEED_TRANSFER,
 } from '../utils/constants';
-import {
-  createEosPacket,
-  createPlainDataPacketFast,
-} from '../utils/plainPacket';
 
 export type SpeedManifestLike = {
   totalSize: number;
@@ -27,11 +24,14 @@ export type SpeedSendHooks = {
   waitForDrain?: () => Promise<void>;
 };
 
+const PREFETCH_LIMIT = 64 * 1024 * 1024;
+
 /**
- * Speed-path firehose using the existing peer send path (broadcastChunk).
- * - plain packets (no app AES)
+ * Speed-path firehose:
+ * - plain packets (no app AES, CRC skipped)
  * - local bufferedAmount pacing only
- * - no partition barriers
+ * - optional full-file memory prefetch for small/medium transfers
+ * - recycled packet buffer (raw-dc style)
  */
 export async function sendSpeedFirehose(params: {
   files: File[];
@@ -66,7 +66,42 @@ export async function sendSpeedFirehose(params: {
     throw new Error('No files for speed firehose');
   }
 
-  // Build flat file cursor from startOffset.
+  const rangeEnd = Math.min(
+    manifest.totalSize,
+    Math.max(startOffset, endOffset)
+  );
+  const rangeBytes = Math.max(0, rangeEnd - startOffset);
+  if (rangeBytes === 0) {
+    return { bytesSent: startOffset, packets: 0 };
+  }
+
+  // Prefetch the needed range into one contiguous buffer when small enough.
+  // This removes File.slice/arrayBuffer from the send hot loop.
+  let flat: Uint8Array | null = null;
+  if (rangeBytes <= PREFETCH_LIMIT) {
+    flat = new Uint8Array(rangeBytes);
+    let writeAt = 0;
+    let skip = startOffset;
+    for (const file of files) {
+      if (writeAt >= rangeBytes) break;
+      if (skip >= file.size) {
+        skip -= file.size;
+        continue;
+      }
+      const from = skip;
+      skip = 0;
+      const take = Math.min(file.size - from, rangeBytes - writeAt);
+      const part = new Uint8Array(await file.slice(from, from + take).arrayBuffer());
+      flat.set(part, writeAt);
+      writeAt += part.byteLength;
+    }
+    if (writeAt !== rangeBytes) {
+      // Some test/DOM File shims report size > readable bytes; fall back.
+      flat = null;
+    }
+  }
+
+  // Cursor over files when not prefetched.
   let fileIndex = 0;
   let fileOffset = 0;
   let globalOffset = 0;
@@ -82,7 +117,6 @@ export async function sendSpeedFirehose(params: {
     globalOffset = startOffset;
   }
 
-  const rangeEnd = Math.min(manifest.totalSize, Math.max(startOffset, endOffset));
   let sequence = Math.floor(startOffset / Math.max(1, chunkSize));
   let packets = 0;
   let lastProgressAt = 0;
@@ -90,11 +124,24 @@ export async function sendSpeedFirehose(params: {
   let cache: { fileIndex: number; offset: number; data: ArrayBuffer } | null =
     null;
 
+  // Recycle one packet buffer (header + max chunk).
+  let packetBuf = new ArrayBuffer(HEADER_SIZE + chunkSize);
+  let packetBytes = new Uint8Array(packetBuf);
+  let packetView = new DataView(packetBuf);
+
+  const ensurePacketCapacity = (payloadLen: number) => {
+    const need = HEADER_SIZE + payloadLen;
+    if (packetBuf.byteLength >= need) return;
+    packetBuf = new ArrayBuffer(need);
+    packetBytes = new Uint8Array(packetBuf);
+    packetView = new DataView(packetBuf);
+  };
+
   const readPayload = async (
     fIdx: number,
     fOff: number,
     size: number
-  ): Promise<ArrayBuffer> => {
+  ): Promise<Uint8Array> => {
     if (
       cache &&
       cache.fileIndex === fIdx &&
@@ -102,29 +149,23 @@ export async function sendSpeedFirehose(params: {
       fOff + size <= cache.offset + cache.data.byteLength
     ) {
       const rel = fOff - cache.offset;
-      return cache.data.slice(rel, rel + size);
+      return new Uint8Array(cache.data, rel, size);
     }
     const file = files[fIdx];
     const blockEnd = Math.min(fOff + readBlockSize, file.size);
     const block = await file.slice(fOff, blockEnd).arrayBuffer();
     cache = { fileIndex: fIdx, offset: fOff, data: block };
-    return block.slice(0, size);
+    return new Uint8Array(block, 0, size);
   };
 
-  while (fileIndex < files.length && globalOffset < rangeEnd) {
+  while (globalOffset < rangeEnd) {
     if (!isActive()) throw new Error('Transfer stopped');
     if (waitWhilePaused) await waitWhilePaused();
 
-    const file = files[fileIndex];
-    if (fileOffset >= file.size) {
-      fileIndex += 1;
-      fileOffset = 0;
-      continue;
-    }
-
-    const bytes = Math.min(chunkSize, file.size - fileOffset, rangeEnd - globalOffset);
+    const bytes = Math.min(chunkSize, rangeEnd - globalOffset);
     if (bytes <= 0) break;
-    while (hooks.getBufferedAmount() + bytes > highWater) {
+
+    while (hooks.getBufferedAmount() + bytes + HEADER_SIZE > highWater) {
       if (!isActive()) throw new Error('Transfer stopped');
       if (hooks.waitForDrain) {
         await hooks.waitForDrain();
@@ -135,16 +176,44 @@ export async function sendSpeedFirehose(params: {
       }
     }
 
-    const payload = await readPayload(fileIndex, fileOffset, bytes);
-    const packet = createPlainDataPacketFast({
-      payload,
-      sequence,
-      offset: globalOffset,
-    });
+    let payload: Uint8Array;
+    if (flat) {
+      const rel = globalOffset - startOffset;
+      payload = flat.subarray(rel, rel + bytes);
+    } else {
+      // Advance file cursor if needed.
+      while (fileIndex < files.length && fileOffset >= files[fileIndex].size) {
+        fileIndex += 1;
+        fileOffset = 0;
+      }
+      if (fileIndex >= files.length) {
+        throw new Error('File cursor past end during speed send');
+      }
+      const room = files[fileIndex].size - fileOffset;
+      const take = Math.min(bytes, room);
+      payload = await readPayload(fileIndex, fileOffset, take);
+      // If file boundary splits chunk, only send this file's remainder this iteration.
+      if (take < bytes) {
+        // fall through with take
+      }
+      fileOffset += payload.byteLength;
+    }
+
+    const payloadLen = payload.byteLength;
+    ensurePacketCapacity(payloadLen);
+    // Plain fast header: fileId=0, seq, offset, len, crc=0
+    packetView.setUint16(0, 0, true);
+    packetView.setUint32(2, sequence, true);
+    packetView.setBigUint64(6, BigInt(globalOffset), true);
+    packetView.setUint32(14, payloadLen, true);
+    packetView.setUint32(18, 0, true);
+    packetBytes.set(payload, HEADER_SIZE);
+
+    // Send only the used prefix (not the whole recycled capacity).
+    const packet = packetBuf.slice(0, HEADER_SIZE + payloadLen);
 
     let success = hooks.sendPacket(packet);
     if (success === 0) {
-      // brief retry for channel open races
       for (let attempt = 0; attempt < 5 && success === 0; attempt++) {
         const { promise, resolve } = Promise.withResolvers<void>();
         setTimeout(resolve, 8);
@@ -156,11 +225,10 @@ export async function sendSpeedFirehose(params: {
 
     sequence += 1;
     packets += 1;
-    fileOffset += bytes;
-    globalOffset += bytes;
+    globalOffset += payloadLen;
 
-    // Yield every 32 packets (~7.5MB @240KB) so WebRTC can drain without killing fill rate.
-    if ((packets & 31) === 0) {
+    // Rare yield so UI/CDP can run without starving the fill loop.
+    if ((packets & 63) === 0) {
       const { promise, resolve } = Promise.withResolvers<void>();
       queueMicrotask(resolve);
       await promise;
@@ -169,7 +237,7 @@ export async function sendSpeedFirehose(params: {
     const now = performance.now();
     if (
       onProgress &&
-      (now - lastProgressAt > 100 || globalOffset >= manifest.totalSize)
+      (now - lastProgressAt > 100 || globalOffset >= rangeEnd)
     ) {
       lastProgressAt = now;
       onProgress({
@@ -180,6 +248,5 @@ export async function sendSpeedFirehose(params: {
     }
   }
 
-  // EOS is sent by finishTransfer(); avoid double-EOS races.
   return { bytesSent: globalOffset, packets };
 }
