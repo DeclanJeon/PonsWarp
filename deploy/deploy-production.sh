@@ -83,11 +83,22 @@ staging="${STAGING_PATH:-}"
 smoke_public() {
   local headers_file rc status
   curl --fail --silent --show-error --max-time 10 "$PUBLIC_URL/" >/dev/null
+  curl --fail --silent --show-error --max-time 10 "$PUBLIC_URL/health" >/dev/null
+  curl --fail --silent --show-error --max-time 10 "$PUBLIC_URL/ready" >/dev/null
   headers_file="$(mktemp)"; rc=0
-  curl --silent --show-error --max-time 10 --http1.1 -D "$headers_file" -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$PUBLIC_URL/ws" || rc=$?
+  # Origin is required by signaling CORS/origin policy; bare upgrade probes get 403.
+  curl --silent --show-error --max-time 10 --http1.1 \
+    -D "$headers_file" -o /dev/null \
+    -H "Origin: $PUBLIC_URL" \
+    -H 'Connection: Upgrade' \
+    -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+    "$PUBLIC_URL/ws" || rc=$?
   status="$(<"$headers_file")"; rm -f "$headers_file"
-  [[ "$rc" -eq 0 || "$rc" -eq 28 ]] || return "$rc"
-  status="${status%%$'\r\n'*}"; [[ "$status" == *' 101 '* ]]
+  [[ "$rc" -eq 0 || "$rc" -eq 28 || "$rc" -eq 52 ]] || return "$rc"
+  status="${status%%$'\r\n'*}"
+  [[ "$status" == *' 101 '* ]]
 }
 restore_after_failure() {
   local original_rc="$1" restore_rc=0
