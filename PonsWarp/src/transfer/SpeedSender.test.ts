@@ -49,7 +49,7 @@ describe('sendSpeedFirehose', () => {
       },
     } as unknown as File;
 
-    const sent: ArrayBuffer[] = [];
+    const sent: ArrayBuffer[] = []; // may receive ArrayBufferView at runtime
     const result = await sendSpeedFirehose({
       files: [fileLike],
       manifest: { totalSize: total },
@@ -58,7 +58,7 @@ describe('sendSpeedFirehose', () => {
       hooks: {
         getBufferedAmount: () => 0,
         sendPacket: packet => {
-          sent.push(packet);
+          sent.push(packet as ArrayBuffer);
           return 1;
         },
       },
@@ -66,7 +66,11 @@ describe('sendSpeedFirehose', () => {
     expect(result.bytesSent).toBe(total);
     expect(result.packets).toBe(4);
     expect(sent).toHaveLength(4);
-    expect(sent[0].byteLength).toBe(HEADER_SIZE + 16 * 1024);
-    expect(isPlainSpeedCompatiblePacket(sent[0])).toBe(true);
+    const first = sent[0];
+    const ab = ArrayBuffer.isView(first)
+      ? first.buffer.slice(first.byteOffset, first.byteOffset + first.byteLength)
+      : first;
+    expect(ab.byteLength).toBe(HEADER_SIZE + 16 * 1024);
+    expect(isPlainSpeedCompatiblePacket(ab as ArrayBuffer)).toBe(true);
   });
 });

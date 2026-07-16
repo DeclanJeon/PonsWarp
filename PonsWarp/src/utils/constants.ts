@@ -59,7 +59,7 @@ export const DATA_CHANNEL_COUNT = 4; // legacy constant
 export const PRODUCER_CONCURRENCY = 12;
 export const READY_QUEUE_MAX_CHUNKS = 32;
 // Parallel RTCPeerConnections for host LAN bulk transfer (separate SCTP associations)
-export const LAN_STRIPE_LANES = 1; // parallel multi-PC bulk still gap-fails; sequential-only proven
+export const LAN_STRIPE_LANES = 1; // concurrent multi-PC still stalls/gaps; keep single association
 /** Partition barrier size while multi-PC striping is active (faster gap detection). */
 export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
 

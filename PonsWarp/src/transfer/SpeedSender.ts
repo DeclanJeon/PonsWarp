@@ -19,7 +19,7 @@ export type SpeedSendHooks = {
   /** Return current max peer bufferedAmount. */
   getBufferedAmount: () => number;
   /** Send one packet to all active peers; return success count. */
-  sendPacket: (packet: ArrayBuffer) => number;
+  sendPacket: (packet: ArrayBuffer | ArrayBufferView) => number;
   /** Optional drain wait when buffer is high. */
   waitForDrain?: () => Promise<void>;
 };
@@ -209,10 +209,10 @@ export async function sendSpeedFirehose(params: {
     packetView.setUint32(18, 0, true);
     packetBytes.set(payload, HEADER_SIZE);
 
-    // Send only the used prefix (not the whole recycled capacity).
-    const packet = packetBuf.slice(0, HEADER_SIZE + payloadLen);
+    // Zero-copy view into recycled buffer (DataChannel accepts BufferSource).
+    const packet = packetBytes.subarray(0, HEADER_SIZE + payloadLen);
 
-    let success = hooks.sendPacket(packet);
+    let success = hooks.sendPacket(packet as unknown as ArrayBuffer);
     if (success === 0) {
       for (let attempt = 0; attempt < 5 && success === 0; attempt++) {
         const { promise, resolve } = Promise.withResolvers<void>();

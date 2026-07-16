@@ -1046,14 +1046,17 @@ export class SwarmManager {
     return pool[idx];
   }
 
-  public broadcastChunk(chunk: ArrayBuffer): BroadcastResult {
+  public broadcastChunk(chunk: ArrayBuffer | ArrayBufferView): BroadcastResult {
     const failedPeers: string[] = [];
     const sentPeers: string[] = [];
     let successCount = 0;
 
     if (this.hybridArmed && this.isTransferring && !this.hybridPrebuilt) {
       // Tee exact ciphertext for hybrid HTTP assist (no re-encrypt / nonce drift).
-      this.hybridPackets.push(chunk.slice(0));
+      const ab = ArrayBuffer.isView(chunk)
+        ? chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+        : chunk.slice(0);
+      this.hybridPackets.push(ab as ArrayBuffer);
     }
 
     // currentTransferPeers holds logical (lane-0) peer ids
@@ -4312,7 +4315,10 @@ const hostPipelineReady = await this.awaitStableHostPipeline(runId);
 
     // 버퍼가 비워질 때까지 대기
     await this.waitForBufferZero();
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Speed path: no artificial 500ms stall after drain (raw-dc does not wait).
+    if (!SPEED_TRANSFER) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
 
     // EOS 패킷 브로드캐스트
     const eosPacket = createEosPacket();

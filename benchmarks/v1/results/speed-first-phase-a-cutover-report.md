@@ -137,3 +137,17 @@ User expectation: ~8 MB/s usable (≈64 Mbps) on a “100 Mbps” network.
 2. **Browser WebRTC DataChannel raw ceiling is ~4–5 MB/s** here (SCTP/DTLS), even with multi-PC.
 3. App path is still below raw WebRTC; first close that gap, then add a **LAN TCP/HTTP assist** (or native helper) if product requires ≥8 MB/s.
 4. QA default should prefer **HOME as sender** (stronger radio). Harness flag: `HOME_SENDER=1` (default on).
+
+
+## Hot-path pass HOME_SENDER (2026-07-16 late)
+
+Changes: zero-copy DC send views, prefetch ≤64MB, remove speed-path 500ms finish stall, progress throttle 250ms, QA `networkMbps` split.
+
+| Run | networkMbps | peakMBps | status |
+|-----|-------------|----------|--------|
+| 1 | 19.5 | 2.43 | COMPLETE |
+| 2 | 17.1 | 2.09 | COMPLETE |
+| 3 | 18.7 | 2.49 | COMPLETE |
+
+Still below raw WebRTC (~31 Mbps) and far below TCP (~67 Mbps / 8.4 MB/s).
+Next: app→raw closure, then LAN TCP assist (see vault `lan-tcp-assist-plan.md`).

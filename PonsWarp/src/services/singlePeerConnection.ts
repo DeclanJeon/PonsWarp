@@ -490,14 +490,15 @@ export class SinglePeerConnection {
     return best;
   }
 
-  public sendBulk(data: ArrayBuffer): boolean {
+  public sendBulk(data: ArrayBuffer | ArrayBufferView): boolean {
+    const payload = data as BufferSource;
     if (!this.connected || this.destroyed) return false;
 
     if (this.enableBulkPlane) {
       const bulk = this.pickBulkChannel();
       if (bulk) {
         try {
-          bulk.send(data);
+          bulk.send(payload as ArrayBuffer);
           return true;
         } catch (error) {
           logWarn(`[Peer ${this.id}]`, 'bulk send failed', error);
@@ -511,12 +512,17 @@ export class SinglePeerConnection {
     const channel = (this.pc as SimplePeerWithChannel)._channel;
     if (!channel || channel.readyState !== 'open') return false;
     try {
-      // Prefer native DC.send (raw-dc style) over simple-peer wrapper.
-      channel.send(data);
+      // Prefer native DC.send (raw-dc style). Accept views to avoid copy.
+      channel.send(payload as ArrayBuffer);
       return true;
     } catch {
       try {
-        this.pc.send(data);
+        // simple-peer expects ArrayBuffer-like
+        const ab =
+          ArrayBuffer.isView(data)
+            ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+            : data;
+        this.pc.send(ab as ArrayBuffer);
         return true;
       } catch {
         return false;

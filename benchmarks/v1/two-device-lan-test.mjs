@@ -215,6 +215,7 @@ async function main() {
   let status = 'TIMEOUT';
   let lastRecv = '';
   let lastSend = '';
+  let networkCompleteAt = 0; // ms from t0 when payload path hits ~100%
 
   for (let i = 0; i < 90; i++) {
     // Lightweight poll: avoid full body.innerText every second (starves WebRTC).
@@ -224,15 +225,23 @@ async function main() {
       snap = await receiver.evaluate(() => {
         const t = document.body ? document.body.innerText : '';
         const speed = t.match(/(\d+\.?\d*)\s*(MB|KB)\/s/i);
+        const pct = t.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
         const done = /(?:^|\n)\s*(?:COMPLETE|전송 완료|다운로드 완료)\b|MATERIALIZED|File reconstruction complete|All transfers have been completed/i.test(t);
         const failed = /FAILED|USER_CANCELLED|실패|CONNECTION FAILED/i.test(t);
-        // Only return a short tail to keep CDP payload small.
+        // Network path complete: 100% or full size transferred text before materialize UI.
+        const netDone =
+          done ||
+          (pct && Number(pct[1]) >= 99.5) ||
+          /20\.00\s*MB transferred/i.test(t) ||
+          /DATA RECEIVED[\s\S]{0,40}20(\.0+)?\s*MB/i.test(t);
         return {
           text: t.slice(0, 400),
           speed: speed ? speed[0] : null,
           unit: speed ? speed[2] : null,
           val: speed ? speed[1] : null,
+          pct: pct ? Number(pct[1]) : null,
           done,
+          netDone,
           failed,
         };
       });
@@ -256,6 +265,10 @@ async function main() {
     } else if (i % 10 === 0) {
       console.log(`[t+${((i + 1) * 0.5).toFixed(1)}s] waiting | ${String(lastRecv).split('\n').map(x=>x.trim()).filter(Boolean).slice(0,4).join(' | ')}`);
     }
+    if (snap.netDone && !networkCompleteAt) {
+      networkCompleteAt = Date.now() - t0;
+      console.log(`[network-complete] ${ (networkCompleteAt/1000).toFixed(2) }s`);
+    }
     if (snap.done) {
       status = 'COMPLETE';
       break;
@@ -274,15 +287,20 @@ async function main() {
   const avg = samples.length
     ? samples.reduce((a, b) => a + b.mbps, 0) / samples.length
     : 0;
+  const networkSec = networkCompleteAt ? networkCompleteAt / 1000 : elapsed;
   const overall = status === 'COMPLETE' ? 20 / elapsed : avg;
+  const networkMBps = status === 'COMPLETE' || networkCompleteAt ? 20 / networkSec : avg;
   const result = {
     status,
     room,
     elapsedSec: +elapsed.toFixed(2),
+    networkSec: +networkSec.toFixed(2),
     peakMBps: +peak.toFixed(3),
     avgMBps: +avg.toFixed(3),
     overallMBps: +overall.toFixed(3),
     overallMbps: +(overall * 8).toFixed(1),
+    networkMBps: +networkMBps.toFixed(3),
+    networkMbps: +(networkMBps * 8).toFixed(1),
     samples,
     senderTail: lastSend.split('\n').slice(0, 30),
     receiverTail: lastRecv.split('\n').slice(0, 30),

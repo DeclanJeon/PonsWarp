@@ -1208,7 +1208,6 @@ export class DirectFileWriter {
 
     const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
 
-    // Single-stream speed path: sequential append without reordering map churn.
     if (
       SPEED_TRANSFER &&
       this.reorderingBuffer &&
@@ -1654,7 +1653,9 @@ export class DirectFileWriter {
    */
   private reportProgress(): void {
     const now = Date.now();
-    if (now - this.lastProgressTime < 100) return;
+    // Speed path: UI progress is secondary; thrashing report hurts goodput.
+    const minInterval = SPEED_TRANSFER ? 250 : 100;
+    if (now - this.lastProgressTime < minInterval) return;
 
     const elapsed = (now - this.startTime) / 1000;
     const visibleProgress = calculateReceiverBufferedProgress({
