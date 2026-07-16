@@ -527,6 +527,10 @@ export class SinglePeerConnection {
     return this.bulkChannels.filter(ch => ch.readyState === 'open').length;
   }
 
+  public getOpenBulkChannels(): RTCDataChannel[] {
+    return this.bulkChannels.filter(ch => ch.readyState === 'open');
+  }
+
   public isBulkPlaneEnabled(): boolean {
     return this.enableBulkPlane;
   }

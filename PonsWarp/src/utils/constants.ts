@@ -59,7 +59,7 @@ export const DATA_CHANNEL_COUNT = 4; // legacy constant
 export const PRODUCER_CONCURRENCY = 12;
 export const READY_QUEUE_MAX_CHUNKS = 32;
 // Parallel RTCPeerConnections for host LAN bulk transfer (separate SCTP associations)
-export const LAN_STRIPE_LANES = 1; // secondary-lane bulk demux still drops mid-file offsets
+export const LAN_STRIPE_LANES = 1; // parallel multi-PC bulk still gap-fails; sequential-only proven
 /** Partition barrier size while multi-PC striping is active (faster gap detection). */
 export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
 
@@ -107,5 +107,5 @@ export const SPEED_BUFFER_HIGH = 8 * 1024 * 1024;
 export const SPEED_BUFFER_LOW = 2 * 1024 * 1024;
 export const SPEED_CHUNK_SIZE = 192 * 1024; // large messages, host LAN
 /** Negotiated bulk DataChannels (no SDP renegotiation) on speed path. */
-export const SPEED_BULK_CHANNELS = 0; // multi negotiated DCs regressed LAN QA to ~5Mbps
+export const SPEED_BULK_CHANNELS = 0; // concurrent multi-stream range-split still incomplete
 export const SPEED_BULK_CHANNEL_ID_BASE = 10;

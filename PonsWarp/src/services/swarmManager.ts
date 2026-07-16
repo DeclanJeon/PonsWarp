@@ -1017,17 +1017,19 @@ export class SwarmManager {
     if (!this.stripeEnabled || LAN_STRIPE_LANES <= 1) {
       return primary && primary.connected ? [primary] : [];
     }
-    const lanes: SinglePeerConnection[] = [];
+    const lanes: Array<{ lane: number; peer: SinglePeerConnection }> = [];
     for (const [key, peer] of this.peers) {
       const parsed = parseStripePeerKey(key);
       if (parsed.baseId !== baseId || !peer.connected) continue;
       if (!this.verifiedStripeKeys.has(key) && parsed.lane !== 0) continue;
-      lanes.push(peer);
+      lanes.push({ lane: parsed.lane, peer });
     }
-    if (lanes.length < 2) {
+    lanes.sort((a, b) => a.lane - b.lane);
+    const ordered = lanes.map(l => l.peer);
+    if (ordered.length < 2) {
       return primary && primary.connected ? [primary] : [];
     }
-    return lanes;
+    return ordered;
   }
 
   private pickStripePeer(peers: SinglePeerConnection[]): SinglePeerConnection | null {
@@ -1138,12 +1140,16 @@ export class SwarmManager {
       encryptionEnabled: this.isEncryptionEnabled(),
       hybridArmed: this.hybridArmed,
       speedTransfer: SPEED_TRANSFER,
-      channels: Array.from(this.currentTransferPeers).map(id => {
-        const peer = this.peers.get(id) || this.peers.get(stripePeerKey(id, 0));
-        return peer && 'getChannelDebugInfo' in peer
+      stripeEnabled: this.stripeEnabled,
+      stripeLanesConfig: LAN_STRIPE_LANES,
+      verifiedStripeKeys: Array.from(this.verifiedStripeKeys),
+      peerKeys: Array.from(this.peers.keys()),
+      channels: Array.from(this.peers.entries()).map(([key, peer]) => ({
+        key,
+        ...(peer && 'getChannelDebugInfo' in peer
           ? (peer as SinglePeerConnection).getChannelDebugInfo()
-          : { id, missing: true };
-      }),
+          : { missing: true }),
+      })),
     };
   }
 
@@ -2784,14 +2790,14 @@ export class SwarmManager {
     // out-of-order multi-lane delivery cannot false-ACK past gaps.
     if (LAN_STRIPE_LANES > 1) {
       for (const peerId of this.currentTransferPeers) {
-        await this.waitForStripeLanes(peerId, 4000);
-        const verified = await this.probeStripeLanes(peerId, 2000);
+        await this.waitForStripeLanes(peerId, 8000);
+        const verified = await this.probeStripeLanes(peerId, 4000);
         if (verified >= 2) {
           this.stripeEnabled = true;
           // Primary is always verified in probeStripeLanes
           logInfo(
             '[SwarmManager]',
-            `Stripe ARMED for ${peerId}: verified ${verified}/${LAN_STRIPE_LANES}`
+            `Stripe ARMED for ${peerId}: verified ${verified}/${LAN_STRIPE_LANES} keys=${Array.from(this.verifiedStripeKeys).join(',')}`
           );
         } else {
           this.stripeEnabled = false;
@@ -3321,7 +3327,10 @@ export class SwarmManager {
 
         if (useRangeStripe) {
           const total = manifest.totalSize;
-          const cut = Math.floor(total / lanePeers.length);
+          // Align cut to chunk size so no range boundary splits a logical block.
+          const chunk = SPEED_CHUNK_SIZE;
+          const rawCut = Math.floor(total / lanePeers.length);
+          const cut = Math.max(chunk, Math.floor(rawCut / chunk) * chunk);
           logInfo(
             '[SwarmManager]',
             `⚡ Speed range-stripe lanes=${lanePeers.length} cut=${cut} total=${total}`
@@ -3333,62 +3342,79 @@ export class SwarmManager {
             this.emitProgress();
           };
 
-          // Sequential ranges first (prove demux). Parallelism is a later switch.
-          const laneResults: Array<{ bytesSent: number; packets: number }> = [];
-          for (let idx = 0; idx < lanePeers.length; idx++) {
-            const peer = lanePeers[idx];
-            const rangeStart = idx === 0 ? 0 : cut * idx;
-            const rangeEnd =
-              idx === lanePeers.length - 1 ? total : cut * (idx + 1);
-            const result = await sendSpeedFirehose({
-              files: this.files,
-              manifest: { totalSize: total },
-              startOffset: rangeStart,
-              endOffset: rangeEnd,
-              highWater: SPEED_BUFFER_HIGH,
-              isActive: () =>
-                runId === this.transferRunId && this.isTransferring,
-              waitWhilePaused: async () => {
-                const started = performance.now();
-                while (
-                  runId === this.transferRunId &&
-                  this.isTransferring &&
-                  this.pausedPeers.size > 0
-                ) {
-                  if (performance.now() - started > 15_000) {
-                    throw new Error('Paused too long during range stripe');
-                  }
-                  await this.waitForSendWindowSignal(20);
-                }
-              },
-              hooks: {
-                getBufferedAmount: () => peer.getBufferedAmount(),
-                sendPacket: (packet: ArrayBuffer) => {
-                  if (!peer.connected) return 0;
-                  return peer.sendBulk(packet) ? 1 : 0;
-                },
-                waitForDrain: async () => {
+          // Parallel range partitions: each verified lane owns a disjoint offset range.
+          const laneSent = new Array(lanePeers.length).fill(0);
+          const laneResults = await Promise.all(
+            lanePeers.map((peer, idx) => {
+              const rangeStart = idx === 0 ? 0 : cut * idx;
+              const rangeEnd =
+                idx === lanePeers.length - 1 ? total : cut * (idx + 1);
+              return sendSpeedFirehose({
+                files: this.files,
+                manifest: { totalSize: total },
+                startOffset: rangeStart,
+                endOffset: rangeEnd,
+                // Per-lane high water (avoid one fat queue on a single association).
+                highWater: Math.min(SPEED_BUFFER_HIGH, 4 * 1024 * 1024),
+                isActive: () =>
+                  runId === this.transferRunId && this.isTransferring,
+                waitWhilePaused: async () => {
                   const started = performance.now();
                   while (
                     runId === this.transferRunId &&
                     this.isTransferring &&
-                    peer.getBufferedAmount() > SPEED_BUFFER_HIGH * 0.75
+                    this.pausedPeers.size > 0
                   ) {
-                    if (performance.now() - started > 30_000) {
-                      throw new Error('Range-stripe drain timeout');
+                    if (performance.now() - started > 15_000) {
+                      throw new Error('Paused too long during range stripe');
                     }
-                    await this.waitForSendWindowSignal(4);
+                    await this.waitForSendWindowSignal(20);
                   }
                 },
-              },
-              onProgress: ({ bytesSent: abs }) => {
-                this.totalBytesSent = Math.min(total, abs);
-                this.emitProgress();
-              },
-            });
-            laneResults.push(result);
-            this.totalBytesSent = Math.min(total, result.bytesSent);
-            this.emitProgress();
+                hooks: {
+                  getBufferedAmount: () => peer.getBufferedAmount(),
+                  sendPacket: (packet: ArrayBuffer) => {
+                    if (!peer.connected) return 0;
+                    return peer.sendBulk(packet) ? 1 : 0;
+                  },
+                  waitForDrain: async () => {
+                    const started = performance.now();
+                    while (
+                      runId === this.transferRunId &&
+                      this.isTransferring &&
+                      peer.getBufferedAmount() > 3 * 1024 * 1024
+                    ) {
+                      if (performance.now() - started > 30_000) {
+                        throw new Error('Range-stripe drain timeout');
+                      }
+                      await this.waitForSendWindowSignal(4);
+                    }
+                  },
+                },
+                onProgress: ({ bytesSent: abs }) => {
+                  laneSent[idx] = Math.max(0, abs - rangeStart);
+                  this.totalBytesSent = Math.min(
+                    total,
+                    laneSent.reduce((a, b) => a + b, 0)
+                  );
+                  this.emitProgress();
+                },
+              });
+            })
+          );
+
+          // Drain all lanes to zero before EOS/finish.
+          const drainAllStarted = performance.now();
+          while (runId === this.transferRunId && this.isTransferring) {
+            const pending = lanePeers.reduce(
+              (a, p) => a + p.getBufferedAmount(),
+              0
+            );
+            if (pending <= 0) break;
+            if (performance.now() - drainAllStarted > 60_000) {
+              throw new Error(`Parallel lane drain timeout pending=${pending}`);
+            }
+            await this.waitForSendWindowSignal(8);
           }
 
           const sent = laneResults.reduce((a, r) => a + r.bytesSent, 0);
@@ -3409,6 +3435,134 @@ export class SwarmManager {
             `⚡ Speed range-stripe complete payload=${payloadSent} lanes=${laneResults.length}`
           );
           return;
+        }
+
+        // Same-PC multi bulk DataChannels (negotiated): range-split like multi-PC stripe.
+        if (peerIds.length === 1) {
+          const primary =
+            this.peers.get(peerIds[0]) ||
+            this.peers.get(stripePeerKey(peerIds[0], 0));
+          if (primary && startOffset === 0 && SPEED_TRANSFER) {
+            // Negotiated bulk channels open slightly after connect.
+            const waitBulk = performance.now();
+            while (
+              (primary.getOpenBulkChannelCount?.() ?? 0) < 2 &&
+              performance.now() - waitBulk < 2000
+            ) {
+              await new Promise(r => setTimeout(r, 20));
+            }
+          }
+          const bulkCount = primary?.getOpenBulkChannelCount?.() ?? 0;
+          if (primary && bulkCount >= 2 && startOffset === 0) {
+            const total = manifest.totalSize;
+            const chunk = SPEED_CHUNK_SIZE;
+            const rawCut = Math.floor(total / bulkCount);
+            const cut = Math.max(chunk, Math.floor(rawCut / chunk) * chunk);
+            const channels =
+              primary.getOpenBulkChannels?.() ??
+              [];
+            if (channels.length >= 2) {
+              logInfo(
+                '[SwarmManager]',
+                `⚡ Speed same-PC bulk range channels=${channels.length} cut=${cut}`
+              );
+              const laneSent = new Array(channels.length).fill(0);
+              const laneResults = await Promise.all(
+                channels.map((channel: RTCDataChannel, idx: number) => {
+                  const rangeStart = idx === 0 ? 0 : cut * idx;
+                  const rangeEnd =
+                    idx === channels.length - 1 ? total : cut * (idx + 1);
+                  return sendSpeedFirehose({
+                    files: this.files,
+                    manifest: { totalSize: total },
+                    startOffset: rangeStart,
+                    endOffset: rangeEnd,
+                    highWater: Math.min(SPEED_BUFFER_HIGH, 4 * 1024 * 1024),
+                    isActive: () =>
+                      runId === this.transferRunId && this.isTransferring,
+                    waitWhilePaused: async () => {
+                      const started = performance.now();
+                      while (
+                        runId === this.transferRunId &&
+                        this.isTransferring &&
+                        this.pausedPeers.size > 0
+                      ) {
+                        if (performance.now() - started > 15_000) {
+                          throw new Error('Paused during same-PC bulk range');
+                        }
+                        await this.waitForSendWindowSignal(20);
+                      }
+                    },
+                    hooks: {
+                      getBufferedAmount: () => channel.bufferedAmount || 0,
+                      sendPacket: (packet: ArrayBuffer) => {
+                        if (channel.readyState !== 'open') return 0;
+                        try {
+                          channel.send(packet);
+                          return 1;
+                        } catch {
+                          return 0;
+                        }
+                      },
+                      waitForDrain: async () => {
+                        const started = performance.now();
+                        while (
+                          runId === this.transferRunId &&
+                          this.isTransferring &&
+                          (channel.bufferedAmount || 0) > 3 * 1024 * 1024
+                        ) {
+                          if (performance.now() - started > 30_000) {
+                            throw new Error('same-PC bulk drain timeout');
+                          }
+                          await this.waitForSendWindowSignal(4);
+                        }
+                      },
+                    },
+                    onProgress: ({ bytesSent: abs }) => {
+                      laneSent[idx] = Math.max(0, abs - rangeStart);
+                      this.totalBytesSent = Math.min(
+                        total,
+                        laneSent.reduce((a: number, b: number) => a + b, 0)
+                      );
+                      this.emitProgress();
+                    },
+                  });
+                })
+              );
+              const payloadSent = laneResults.reduce(
+                (a: number, r: { bytesSent: number }, idx: number) => {
+                  const rangeStart = idx === 0 ? 0 : cut * idx;
+                  return a + (r.bytesSent - rangeStart);
+                },
+                0
+              );
+              this.totalBytesSent = Math.min(total, payloadSent);
+              this.emitProgress();
+              if (payloadSent < total) {
+                throw new Error(
+                  `same-PC bulk range incomplete: ${payloadSent}/${total}`
+                );
+              }
+              // Drain all bulk channels
+              const drainStarted = performance.now();
+              while (runId === this.transferRunId && this.isTransferring) {
+                const pending = channels.reduce(
+                  (a: number, ch: RTCDataChannel) => a + (ch.bufferedAmount || 0),
+                  0
+                );
+                if (pending <= 0) break;
+                if (performance.now() - drainStarted > 60_000) {
+                  throw new Error(`same-PC bulk drain timeout pending=${pending}`);
+                }
+                await this.waitForSendWindowSignal(8);
+              }
+              logInfo(
+                '[SwarmManager]',
+                `⚡ same-PC bulk range complete payload=${payloadSent}`
+              );
+              return;
+            }
+          }
         }
 
         logInfo(
@@ -3476,6 +3630,12 @@ export class SwarmManager {
         );
         return;
       } catch (error) {
+        // Range-stripe partial sends must not be followed by a full legacy re-send:
+        // the receiver already accepted multi-lane offsets and will gap-fail harder.
+        if (this.stripeEnabled) {
+          logError('[SwarmManager]', 'Speed range-stripe failed (no legacy re-send)', error);
+          throw error;
+        }
         logWarn(
           '[SwarmManager]',
           'Speed firehose failed; falling back to legacy partitioned plain path',

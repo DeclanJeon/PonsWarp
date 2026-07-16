@@ -1069,24 +1069,15 @@ export class DirectFileWriter {
       this.checkBackpressure();
     }
 
-    // 🚀 [성능 핵심] 복호화를 큐 밖에서 먼저 수행 (네트워크 수신과 병렬)
-    let normalizedPacket: ArrayBuffer;
-    try {
-      normalizedPacket = await this.normalizePacket(packet);
-    } catch (error: unknown) {
-      const writeError = error instanceof Error ? error : new Error('Decryption failed');
-      this.writeFailure = writeError;
-      this.onErrorCallback?.(`Decrypt failed: ${writeError.message}`);
-      throw writeError;
-    }
-
-    // 큐에는 이미 복호화된 패킷만 전달 (가벼운 연산)
+    // Preserve arrival order across multi-lane peers: enqueue before normalize.
+    // Concurrent normalize-before-queue reordered processDecodedChunk under load.
     const writeTask = this.writeQueue.then(async () => {
       if (this.writeFailure) {
         throw this.writeFailure;
       }
 
       try {
+        const normalizedPacket = await this.normalizePacket(packet);
         await this.processDecodedChunk(normalizedPacket);
       } catch (error: unknown) {
         const writeError =
@@ -1217,22 +1208,9 @@ export class DirectFileWriter {
 
     const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
 
-    // Speed path sequential fast-append: zero-copy view, skip reordering map.
-    if (
-      SPEED_TRANSFER &&
-      this.reorderingBuffer &&
-      canSequentialAppend(this.reorderingBuffer.getNextExpectedOffset(), offset)
-    ) {
-      // Keep frontier in sync without buffering/copying through the map.
-      this.reorderingBuffer.advanceTo(offset + size);
-      // Blob path can retain the packet payload view; disk writers get a copy at flush merge.
-      this.writeBuffer.push(
-        this.writerMode === 'blob-fallback' ? data : data.slice()
-      );
-      this.currentBatchSize += size;
-      this.pendingBytesInBuffer += size;
-    } else {
-      // Copy once; avoid ArrayBuffer.slice on a view that may share the packet buffer.
+    // Always go through reorderingBuffer so multi-lane arrivals cannot desync
+    // frontier via advanceTo races with out-of-order writeQueue scheduling.
+    {
       const owned = data.slice().buffer;
       const chunksToWrite = this.reorderingBuffer.push(owned, offset);
       for (const chunk of chunksToWrite) {
