@@ -100,3 +100,20 @@ bufferedAmount: often several MB while drain ~2 MB/s
 | Legacy re-send after stripe fail | disabled when stripeEnabled |
 
 Conclusion: secondary lane can deliver bulk when exclusive; **concurrency** across streams/associations is what creates gaps. Speed ceiling remains single SCTP association goodput on this Wi‑Fi dual-STA path.
+
+
+## Raw DC ceiling remeasure (2026-07-16 night)
+
+Harness: `benchmarks/v1/raw-dc-bench.mjs` (native RTCPeerConnection, no app protocol)
+
+| Case | Receiver Mbps |
+|------|---------------|
+| 1pc ordered 192k | **24.1** |
+| 1pc unordered 192k | 19.4 |
+| 1pc unordered 240k | 21.3 |
+| 2pc unordered 192k | **25.4** |
+| 4pc unordered 192k | 16.2 |
+
+App complete goodput after prefetch/native-send pass: **~12–13 Mbps** (Wi‑Fi variance; earlier same day ~15–18).
+
+Implication: first target is close app complete rate to raw ~20–24 Mbps; multi-PC only buys ~1 Mbps more on this link and still lacks a gap-free app demux.
