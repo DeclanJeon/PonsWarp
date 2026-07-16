@@ -7,7 +7,6 @@ import {
   createEosPacket,
   createPlainDataPacketFast,
 } from '../utils/plainPacket';
-import type { BulkTransport } from './BulkTransport';
 
 export type SpeedManifestLike = {
   totalSize: number;
@@ -19,8 +18,17 @@ export type SpeedSendProgress = {
   sequence: number;
 };
 
+export type SpeedSendHooks = {
+  /** Return current max peer bufferedAmount. */
+  getBufferedAmount: () => number;
+  /** Send one packet to all active peers; return success count. */
+  sendPacket: (packet: ArrayBuffer) => number;
+  /** Optional drain wait when buffer is high. */
+  waitForDrain?: () => Promise<void>;
+};
+
 /**
- * Speed-path firehose:
+ * Speed-path firehose using the existing peer send path (broadcastChunk).
  * - plain packets (no app AES)
  * - local bufferedAmount pacing only
  * - no partition barriers
@@ -28,7 +36,7 @@ export type SpeedSendProgress = {
 export async function sendSpeedFirehose(params: {
   files: File[];
   manifest: SpeedManifestLike;
-  transports: BulkTransport[];
+  hooks: SpeedSendHooks;
   startOffset?: number;
   chunkSize?: number;
   highWater?: number;
@@ -42,7 +50,7 @@ export async function sendSpeedFirehose(params: {
   const {
     files,
     manifest,
-    transports,
+    hooks,
     startOffset = 0,
     chunkSize = SPEED_CHUNK_SIZE,
     highWater = SPEED_BUFFER_HIGH,
@@ -51,18 +59,18 @@ export async function sendSpeedFirehose(params: {
     waitWhilePaused,
   } = params;
 
-  if (transports.length === 0) {
-    throw new Error('No connected bulk transports');
+  if (!files.length) {
+    throw new Error('No files for speed firehose');
   }
-
-  // Best-effort bulk channel readiness.
-  await Promise.all(transports.map(t => t.waitBulkReady(1500)));
 
   // Build flat file cursor from startOffset.
   let fileIndex = 0;
   let fileOffset = 0;
   let globalOffset = 0;
-  while (fileIndex < files.length && globalOffset + files[fileIndex].size <= startOffset) {
+  while (
+    fileIndex < files.length &&
+    globalOffset + files[fileIndex].size <= startOffset
+  ) {
     globalOffset += files[fileIndex].size;
     fileIndex += 1;
   }
@@ -74,10 +82,9 @@ export async function sendSpeedFirehose(params: {
   let sequence = Math.floor(startOffset / Math.max(1, chunkSize));
   let packets = 0;
   let lastProgressAt = 0;
-  const readBlockSize = Math.max(chunkSize * 8, 2 * 1024 * 1024);
-  let cache:
-    | { fileIndex: number; offset: number; data: ArrayBuffer }
-    | null = null;
+  const readBlockSize = Math.max(chunkSize * 16, 4 * 1024 * 1024);
+  let cache: { fileIndex: number; offset: number; data: ArrayBuffer } | null =
+    null;
 
   const readPayload = async (
     fIdx: number,
@@ -100,9 +107,6 @@ export async function sendSpeedFirehose(params: {
     return block.slice(0, size);
   };
 
-  const maxBuffered = () =>
-    Math.max(0, ...transports.map(t => t.getBulkBufferedAmount()));
-
   while (fileIndex < files.length) {
     if (!isActive()) throw new Error('Transfer stopped');
     if (waitWhilePaused) await waitWhilePaused();
@@ -115,14 +119,15 @@ export async function sendSpeedFirehose(params: {
     }
 
     const bytes = Math.min(chunkSize, file.size - fileOffset);
-    // Keep SCTP queue fed but bounded.
-    while (maxBuffered() + bytes > highWater) {
+    while (hooks.getBufferedAmount() + bytes > highWater) {
       if (!isActive()) throw new Error('Transfer stopped');
-      // Wait on the most-backed-up peer.
-      const busiest = transports.reduce((a, b) =>
-        a.getBulkBufferedAmount() >= b.getBulkBufferedAmount() ? a : b
-      );
-      await busiest.waitBulkLow(highWater, Math.floor(highWater / 4));
+      if (hooks.waitForDrain) {
+        await hooks.waitForDrain();
+      } else {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 4);
+        await promise;
+      }
     }
 
     const payload = await readPayload(fileIndex, fileOffset, bytes);
@@ -132,10 +137,15 @@ export async function sendSpeedFirehose(params: {
       offset: globalOffset,
     });
 
-    let success = 0;
-    for (const t of transports) {
-      if (!t.connected) continue;
-      if (t.sendBulk(packet)) success += 1;
+    let success = hooks.sendPacket(packet);
+    if (success === 0) {
+      // brief retry for channel open races
+      for (let attempt = 0; attempt < 5 && success === 0; attempt++) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 8);
+        await promise;
+        success = hooks.sendPacket(packet);
+      }
     }
     if (success === 0) throw new Error('No connected receivers for speed send');
 
@@ -144,8 +154,18 @@ export async function sendSpeedFirehose(params: {
     fileOffset += bytes;
     globalOffset += bytes;
 
+    // Yield every 32 packets (~7.5MB @240KB) so WebRTC can drain without killing fill rate.
+    if ((packets & 31) === 0) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      queueMicrotask(resolve);
+      await promise;
+    }
+
     const now = performance.now();
-    if (onProgress && (now - lastProgressAt > 100 || globalOffset >= manifest.totalSize)) {
+    if (
+      onProgress &&
+      (now - lastProgressAt > 100 || globalOffset >= manifest.totalSize)
+    ) {
       lastProgressAt = now;
       onProgress({
         bytesSent: globalOffset,
@@ -155,17 +175,6 @@ export async function sendSpeedFirehose(params: {
     }
   }
 
-  if (globalOffset !== manifest.totalSize && startOffset === 0) {
-    // Allow resume partials; full start must match.
-    if (startOffset === 0) {
-      // still send EOS with actual offset for receiver to validate
-    }
-  }
-
-  const eos = createEosPacket();
-  for (const t of transports) {
-    if (t.connected) t.sendBulk(eos);
-  }
-
+  // EOS is sent by finishTransfer(); avoid double-EOS races.
   return { bytesSent: globalOffset, packets };
 }

@@ -2,65 +2,80 @@
 
 Date: 2026-07-16  
 Branch: `perf/bulk-plane-vnext`  
-Commit: `3219985`  
-Design: `PonsWarp/docs/design/speed-first-file-transfer-redesign.md`
+Environment: dual-device LAN (`ssh home` ↔ local), production static `warp.ponslink.com` deploy, headless Chrome both sides.
 
-## Implemented
+## Goal
+Approach theoretical Wi‑Fi capacity (~100 Mbps advertised). Success criterion: dual-device LAN file transfer near link capacity.
 
-### Modules
-- `src/transfer/BulkTransport.ts` — control/bulk facade over `SinglePeerConnection`
-- `src/transfer/SpeedSender.ts` — partition-free plain firehose sender
-- `src/transfer/SpeedReceiver.ts` — sequential/plain packet helpers
-- `src/transfer/speedFrames.ts` — speed frame codec (earlier)
+## What shipped
+1. **Speed firehose default path** (`SPEED_TRANSFER`):
+   - App AES off (`DEFAULT_APP_AES = !SPEED_TRANSFER`)
+   - Partition ACK barriers skipped
+   - Plain packets with optional CRC skip (`createPlainDataPacketFast`)
+   - Send loop uses existing `broadcastChunk` + bufferedAmount pacing
+2. **Unordered reliable default DataChannel** under speed path (no HOL blocking)
+3. **Receiver sequential fast path**:
+   - `WasmReorderingBuffer.advanceTo` / JS `advanceTo`
+   - Avoid reordering map on in-order packets
+   - Pipelined `scheduleFlush` + atomic buffer snapshot
+   - Blob mode defers intermediate flushes for ≤64MB
+4. **Hybrid HTTP assist forced off** on speed plain path
+5. **QA harness**:
+   - Lightweight progress polling (less main-thread steal)
+   - `window.__ponswarpSwarm.getQaDiagnostics()` path/rtt/buffer snapshot
 
-### Wiring
-- `SwarmManager.sendFilesPartitioned`:
-  - if `SPEED_TRANSFER && !isEncryptionEnabled()` → **`sendSpeedFirehose`**
-  - else legacy partitioned/hardened path
-- Default path already has app-AES disabled (`ensureTransferEncryption`)
-- Receiver pause thresholds raised under speed mode
-- Deployed frontend includes firehose strings (`index-CX_16tEb.js`)
+## Dual-device LAN results (20MB)
 
-### Tests / build
-- unit: SpeedSender compatibility + frames + tuning/plainPacket passed
-- `pnpm build` passed
-- production static deploy succeeded
+| Build | Status | Overall Mbps | Peak MB/s | Notes |
+|------|--------|--------------|-----------|-------|
+| AES-off legacy baseline | COMPLETE | ~15–17 | ~2.2 | Working reference |
+| Firehose + unordered + recv opts | COMPLETE | ~12–16 | ~1.7–2.3 | host/host UDP confirmed |
+| Negotiated multi bulk DC (2) | COMPLETE/FAILED | ~4–5 | <0.5 | Regressed; disabled (`SPEED_BULK_CHANNELS=0`) |
+| LAN stripe lanes=2 | TIMEOUT | n/a | <0.2 | Sender finished early, receiver starved (black-hole); reverted |
+| Tight 2MB high-water | COMPLETE | ~11–15 | ~1.5–2.0 | No gain |
 
-## Dual-device LAN QA status
-
-**Blocked at report time:** `ssh home` / `100.65.42.93` unreachable (timeout / no route).
-
-Previous same-day baseline before full cutover (AES-off only):
-
-- median **15.4 Mbps**, max **17.1 Mbps**, 5/5 complete
-
-Cutover multi-run remeasure is pending host recovery.
-
-## Remaining for ≥30/40 Mbps
-
-Even with firehose sender cutover, remaining suspects:
-
-1. Receiver still uses reordering writer path (not pure append-only materializer)
-2. simple-peer association still under bulk path
-3. Network path / host availability variance
-
-Next when `home` is back:
-
-```bash
-node benchmarks/v1/two-device-lan-test.mjs  # x5
+### Representative mid-transfer diagnostics
+```
+candidatePathKind: host
+local/remote: host/host
+protocol: udp
+rttMs: ~4–30 (sometimes spikes 90–140 on Wi‑Fi)
+bufferedAmount: often several MB while drain ~2 MB/s
 ```
 
-Gate: median ≥ 30 Mbps (Phase A), stretch ≥ 40 Mbps.
+## Interpretation
+- Path is **true LAN host UDP**, not TURN.
+- Bottleneck is **SCTP/DTLS drain rate**, not app AES or partition ACKs.
+- Sender can enqueue far faster than the association drains (~app buffer stays multi‑MB).
+- Multi-association striping / multi-DC attempts currently **hurt** under simple-peer demux.
 
-## Files changed (cutover)
+## Theoretical ceiling context
+- Advertised Wi‑Fi: ~100 Mbps.
+- Two STA through one AP is half-duplex; practical TCP often ~40–60 Mbps.
+- Current WebRTC DataChannel steady state: **~12–16 Mbps overall** on this harness.
+- Gap to goal: ~6× vs 100 Mbps, ~3× vs a realistic 50 Mbps LAN target.
 
-- `PonsWarp/src/transfer/BulkTransport.ts`
+## Rejected / parked
+- Post-connect non-negotiated bulk DC (renegotiation stalls)
+- Negotiated multi bulk DC count=2 (throughput collapse)
+- `LAN_STRIPE_LANES=2` (black-hole under current demux)
+
+## Next high-impact work (ordered)
+1. Fix multi-PeerConnection striping demux end-to-end (range-partitioned, not RR) and re-QA.
+2. Same-subnet **LAN WebSocket/HTTP assist** when host path is proven (PairDrop-style dual path).
+3. Headed browser QA (current remote host has no DISPLAY for headed Chrome).
+4. 100–500MB transfers to separate slow-start/UI finalize from steady-state goodput.
+5. Capture `chrome://webrtc-internals` from both peers during a run for SCTP CWND/loss.
+
+## Files touched (primary)
 - `PonsWarp/src/transfer/SpeedSender.ts`
 - `PonsWarp/src/transfer/SpeedReceiver.ts`
-- `PonsWarp/src/transfer/SpeedSender.test.ts`
+- `PonsWarp/src/transfer/BulkTransport.ts` (earlier experiments)
 - `PonsWarp/src/services/swarmManager.ts`
+- `PonsWarp/src/services/singlePeerConnection.ts`
 - `PonsWarp/src/services/directFileWriter.ts`
-
----
-
-*End of report.*
+- `PonsWarp/src/services/reorderingBuffer.ts`
+- `PonsWarp/src/services/wasmReorderingBuffer.ts`
+- `PonsWarp/src/utils/constants.ts`
+- `PonsWarp/src/utils/plainPacket.ts`
+- `benchmarks/v1/two-device-lan-test.mjs`

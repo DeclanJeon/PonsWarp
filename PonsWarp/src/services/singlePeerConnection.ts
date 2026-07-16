@@ -10,6 +10,10 @@ import {
   BULK_CHANNEL_INIT,
   BULK_CHANNEL_LABEL,
   BULK_PLANE_VNEXT,
+  SPEED_BUFFER_LOW,
+  SPEED_BULK_CHANNELS,
+  SPEED_BULK_CHANNEL_ID_BASE,
+  SPEED_TRANSFER,
   bulkChannelLabel,
   isBulkChannelLabel,
   HIGH_WATER_MARK,
@@ -73,12 +77,14 @@ export class SinglePeerConnection {
   private bulkChannels: RTCDataChannel[] = [];
   private bulkReady = false;
   private bulkRr = 0;
-  private readonly enableBulkPlane: boolean;
+  private enableBulkPlane: boolean;
   private readonly isInitiator: boolean;
 
   constructor(peerId: string, initiator: boolean, config: PeerConfig) {
     this.id = peerId;
-    this.enableBulkPlane = BULK_PLANE_VNEXT;
+    // Speed-first plain path: do NOT open extra DataChannels after connect.
+    // Post-connect createDataChannel triggers renegotiation that can stall simple-peer.
+    this.enableBulkPlane = BULK_PLANE_VNEXT && !SPEED_TRANSFER;
     this.isInitiator = initiator;
     this.initializePeer(initiator, config);
   }
@@ -110,10 +116,10 @@ export class SinglePeerConnection {
         trickle: true,
         config: { iceServers: config.iceServers },
         channelConfig: {
-          // vNext: reliable-unordered default channel avoids SCTP HOL on bulk.
-          // Control remains JSON/sparse; critical control is sent before bulk.
-          ordered: this.enableBulkPlane ? false : true,
-          bufferedAmountLowThreshold: LOW_WATER_MARK,
+          // Speed path: reliable-unordered default channel (no HOL) without extra bulk DCs.
+          // Hardened/legacy: ordered when bulk plane is off.
+          ordered: this.enableBulkPlane || SPEED_TRANSFER ? false : true,
+          bufferedAmountLowThreshold: SPEED_TRANSFER ? SPEED_BUFFER_LOW : LOW_WATER_MARK,
           ...config.channelConfig,
         },
       };
@@ -149,7 +155,9 @@ export class SinglePeerConnection {
       logInfo(`[Peer ${this.id}]`, 'Connected');
       this.emit('connected', this.id);
       this.setupChannelEvents();
-      if (this.enableBulkPlane) {
+      // Speed path: negotiated multi bulk DCs (no renegotiation).
+      this.setupNegotiatedSpeedBulkChannels();
+      if (this.enableBulkPlane && !SPEED_TRANSFER) {
         this.setupBulkPlane();
       }
     });
@@ -164,11 +172,28 @@ export class SinglePeerConnection {
       }
 
       if (ArrayBuffer.isView(data)) {
-        const buffer = data.buffer.slice(
-          data.byteOffset,
-          data.byteOffset + data.byteLength
-        );
-        this.emit('data', buffer);
+        const view = data as ArrayBufferView;
+        // Zero-copy when the view already owns the whole buffer.
+        if (
+          view.byteOffset === 0 &&
+          view.byteLength === view.buffer.byteLength &&
+          view.buffer instanceof ArrayBuffer
+        ) {
+          this.emit('data', view.buffer);
+          return;
+        }
+        // Only copy when the view is a window into a larger shared buffer.
+        if (view.buffer instanceof ArrayBuffer) {
+          this.emit(
+            'data',
+            view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)
+          );
+          return;
+        }
+        // SharedArrayBuffer / exotic: copy into a fresh ArrayBuffer.
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+        this.emit('data', copy.buffer);
         return;
       }
 
@@ -227,6 +252,45 @@ export class SinglePeerConnection {
     return native ?? null;
   }
 
+  
+  /**
+   * Speed path: open N reliable-unordered bulk DataChannels with negotiated:true.
+   * Both peers create the same ids — no SDP renegotiation, no simple-peer demux.
+   */
+  private setupNegotiatedSpeedBulkChannels(): void {
+    if (!SPEED_TRANSFER) return;
+    const n = Math.max(0, Math.min(4, SPEED_BULK_CHANNELS || 0));
+    if (n <= 0) return; // disabled by default after LAN regression
+    const native = this.getNativePeerConnection();
+    if (!native) return;
+
+    // Mark bulk plane active for sendBulk/getBufferedAmount.
+    this.enableBulkPlane = true;
+
+    for (let i = 0; i < n; i++) {
+      const label = bulkChannelLabel(i);
+      const id = SPEED_BULK_CHANNEL_ID_BASE + i;
+      try {
+        // Skip if already present.
+        if (this.bulkChannels.some(ch => ch.label === label && ch.readyState !== 'closed')) {
+          continue;
+        }
+        const channel = native.createDataChannel(label, {
+          negotiated: true,
+          id,
+          ordered: false,
+        });
+        this.attachBulkChannel(channel);
+      } catch (error) {
+        logWarn(
+          `[Peer ${this.id}]`,
+          `Negotiated bulk channel failed label=${label} id=${id}`,
+          error
+        );
+      }
+    }
+  }
+
   private setupBulkPlane(): void {
     const native = this.getNativePeerConnection();
     if (!native) {
@@ -282,7 +346,7 @@ export class SinglePeerConnection {
     if (this.bulkChannels.includes(channel)) return;
     this.bulkChannels.push(channel);
     channel.binaryType = 'arraybuffer';
-    channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
+    channel.bufferedAmountLowThreshold = SPEED_TRANSFER ? SPEED_BUFFER_LOW : LOW_WATER_MARK;
 
     const markReady = () => {
       if (channel.readyState === 'open') {
@@ -313,11 +377,24 @@ export class SinglePeerConnection {
       }
       if (ArrayBuffer.isView(data)) {
         const view = data as ArrayBufferView;
-        const buffer = view.buffer.slice(
-          view.byteOffset,
-          view.byteOffset + view.byteLength
-        );
-        this.emit('data', buffer);
+        if (
+          view.byteOffset === 0 &&
+          view.byteLength === view.buffer.byteLength &&
+          view.buffer instanceof ArrayBuffer
+        ) {
+          this.emit('data', view.buffer);
+          return;
+        }
+        if (view.buffer instanceof ArrayBuffer) {
+          this.emit(
+            'data',
+            view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength)
+          );
+          return;
+        }
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+        this.emit('data', copy.buffer);
         return;
       }
       if (data instanceof Blob) {
@@ -462,21 +539,21 @@ export class SinglePeerConnection {
     if (this.hasBulkChannel()) return true;
     if (!this.connected || this.destroyed) return false;
 
-    return await new Promise<boolean>(resolve => {
-      let settled = false;
-      const done = (ok: boolean) => {
-        if (settled) return;
-        settled = true;
-        this.off('bulk-ready', onReady);
-        clearTimeout(timer);
-        resolve(ok);
-      };
-      const onReady = () => done(true);
-      this.on('bulk-ready', onReady);
-      const timer = setTimeout(() => done(this.hasBulkChannel()), timeoutMs);
-      // Race: may have opened between check and listener attach.
-      if (this.hasBulkChannel()) done(true);
-    });
+    const { promise, resolve } = Promise.withResolvers<boolean>();
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      this.off('bulk-ready', onReady);
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const onReady = () => done(true);
+    this.on('bulk-ready', onReady);
+    const timer = setTimeout(() => done(this.hasBulkChannel()), timeoutMs);
+    // Race: may have opened between check and listener attach.
+    if (this.hasBulkChannel()) done(true);
+    return await promise;
   }
 
   /**

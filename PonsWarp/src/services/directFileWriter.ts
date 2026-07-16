@@ -114,9 +114,11 @@ export class DirectFileWriter {
   // 🚀 [속도 개선] 배치 버퍼 설정 (메모리에 모았다가 한 번에 쓰기)
   private writeBuffer: Uint8Array[] = [];
   private currentBatchSize = 0;
+  private flushInFlight: Promise<void> | null = null;
+  private flushError: Error | null = null;
   // 🚀 [최적화] 디스크 I/O 배치 크기 상향
   // 송신 측의 HIGH_WATER_MARK(12MB)에 맞춰 효율적인 쓰기 수행 (Context Switch 최소화)
-  private readonly BATCH_THRESHOLD = 2 * 1024 * 1024; // 2MB - 더 자주 플러시하여 파이프라인 유지
+  private readonly BATCH_THRESHOLD = SPEED_TRANSFER ? 8 * 1024 * 1024 : 2 * 1024 * 1024; // speed: fewer flushes
 
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
   private pendingBytesInBuffer = 0;
@@ -1215,28 +1217,24 @@ export class DirectFileWriter {
 
     const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
 
-    // Speed path sequential fast-append: avoid reordering map churn when in order.
+    // Speed path sequential fast-append: zero-copy view, skip reordering map.
     if (
       SPEED_TRANSFER &&
       this.reorderingBuffer &&
       canSequentialAppend(this.reorderingBuffer.getNextExpectedOffset(), offset)
     ) {
-      // Still push through reordering buffer for frontier consistency, but payload
-      // is already sequential so it drains immediately as one chunk.
-      const chunksToWrite = this.reorderingBuffer.push(
-        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-        offset
+      // Keep frontier in sync without buffering/copying through the map.
+      this.reorderingBuffer.advanceTo(offset + size);
+      // Blob path can retain the packet payload view; disk writers get a copy at flush merge.
+      this.writeBuffer.push(
+        this.writerMode === 'blob-fallback' ? data : data.slice()
       );
-      for (const chunk of chunksToWrite) {
-        this.writeBuffer.push(new Uint8Array(chunk));
-        this.currentBatchSize += chunk.byteLength;
-        this.pendingBytesInBuffer += chunk.byteLength;
-      }
+      this.currentBatchSize += size;
+      this.pendingBytesInBuffer += size;
     } else {
-      const chunksToWrite = this.reorderingBuffer.push(
-        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-        offset
-      );
+      // Copy once; avoid ArrayBuffer.slice on a view that may share the packet buffer.
+      const owned = data.slice().buffer;
+      const chunksToWrite = this.reorderingBuffer.push(owned, offset);
       for (const chunk of chunksToWrite) {
         this.writeBuffer.push(new Uint8Array(chunk));
         this.currentBatchSize += chunk.byteLength;
@@ -1247,8 +1245,13 @@ export class DirectFileWriter {
     this.checkBackpressure();
     this.reportProgress();
 
-    if (this.currentBatchSize >= this.BATCH_THRESHOLD) {
-      await this.flushBuffer();
+    // Small in-memory blob transfers: skip intermediate flushes (finalize once).
+    const deferFlush =
+      this.writerMode === 'blob-fallback' &&
+      this.totalSize > 0 &&
+      this.totalSize <= 64 * 1024 * 1024;
+    if (!deferFlush && this.currentBatchSize >= this.BATCH_THRESHOLD) {
+      await this.scheduleFlush(false);
     }
   }
   private async processChunkInternal(packet: ArrayBuffer): Promise<void> {
@@ -1334,8 +1337,13 @@ export class DirectFileWriter {
     this.reportProgress();
 
     // 3. 임계값(8MB) 넘으면 디스크에 쓰기 (Flushing)
-    if (this.currentBatchSize >= this.BATCH_THRESHOLD) {
-      await this.flushBuffer();
+    // Small in-memory blob transfers: skip intermediate flushes (finalize once).
+    const deferFlush =
+      this.writerMode === 'blob-fallback' &&
+      this.totalSize > 0 &&
+      this.totalSize <= 64 * 1024 * 1024;
+    if (!deferFlush && this.currentBatchSize >= this.BATCH_THRESHOLD) {
+      await this.scheduleFlush(false);
     }
   }
 
@@ -1459,13 +1467,61 @@ export class DirectFileWriter {
   /**
    * 🚀 [핵심] 메모리에 모아둔 데이터를 한 번에 디스크로 전송
    */
+  /**
+   * Pipeline disk writes: start a flush without blocking the receive queue unless
+   * memory pressure requires waiting for the previous write.
+   */
+  private async scheduleFlush(force: boolean): Promise<void> {
+    if (this.flushError) throw this.flushError;
+    if (this.writeBuffer.length === 0 && this.currentBatchSize === 0) {
+      if (this.flushInFlight) await this.flushInFlight;
+      if (this.flushError) throw this.flushError;
+      return;
+    }
+
+    // If a flush is already running, only block when forced or memory is high.
+    if (this.flushInFlight) {
+      const mustWait =
+        force ||
+        this.pendingBytesInBuffer >= WRITE_BUFFER_LOW_MARK ||
+        this.currentBatchSize >= this.BATCH_THRESHOLD * 2;
+      if (!mustWait) return;
+      await this.flushInFlight;
+      if (this.flushError) throw this.flushError;
+      if (this.writeBuffer.length === 0) return;
+    }
+
+    const run = this.flushBuffer()
+      .catch(error => {
+        this.flushError =
+          error instanceof Error ? error : new Error('Flush failed');
+        this.writeFailure = this.flushError;
+        throw this.flushError;
+      })
+      .finally(() => {
+        if (this.flushInFlight === run) this.flushInFlight = null;
+      });
+    this.flushInFlight = run;
+
+    if (force) {
+      await run;
+      if (this.flushError) throw this.flushError;
+    }
+  }
+
   private async flushBuffer(): Promise<void> {
     if (this.writeBuffer.length === 0) return;
 
+    // Snapshot + clear first so receive path can keep filling the next batch.
+    const chunks = this.writeBuffer;
+    const batchSize = this.currentBatchSize;
+    this.writeBuffer = [];
+    this.currentBatchSize = 0;
+
     // 1. 큰 버퍼 하나로 병합
-    const mergedBuffer = new Uint8Array(this.currentBatchSize);
+    const mergedBuffer = new Uint8Array(batchSize);
     let offset = 0;
-    for (const chunk of this.writeBuffer) {
+    for (const chunk of chunks) {
       mergedBuffer.set(chunk, offset);
       offset += chunk.byteLength;
     }
@@ -1476,11 +1532,12 @@ export class DirectFileWriter {
       await this.writeOutputData(mergedBuffer);
     }
 
-    // 3. 상태 업데이트 및 초기화
-    this.totalBytesWritten += this.currentBatchSize;
-    this.pendingBytesInBuffer -= this.currentBatchSize; // 버퍼에서 디스크로 이동했으므로 감소
-    this.writeBuffer = [];
-    this.currentBatchSize = 0;
+    // 3. 상태 업데이트
+    this.totalBytesWritten += batchSize;
+    this.pendingBytesInBuffer = Math.max(
+      0,
+      this.pendingBytesInBuffer - batchSize
+    );
 
     // 🚀 [Flow Control] Low Water Mark 체크 (Resume)
     this.checkBackpressure();
@@ -1645,7 +1702,7 @@ export class DirectFileWriter {
     }
 
     // 버퍼에 남은 잔여 데이터 강제 플러시
-    await this.flushBuffer();
+    await this.scheduleFlush(true);
 
     // 버퍼 정리 및 데이터 손실 체크
     if (this.reorderingBuffer) {

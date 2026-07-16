@@ -45,18 +45,21 @@ export class BulkTransport {
 
   public async waitBulkLow(
     high = SPEED_BUFFER_HIGH,
-    low = SPEED_BUFFER_LOW
+    low = SPEED_BUFFER_LOW,
+    timeoutMs = 30_000
   ): Promise<void> {
     if (this.getBulkBufferedAmount() <= low) return;
 
-    const { promise, resolve } = Promise.withResolvers<void>();
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
     let settled = false;
-    const done = () => {
+    const done = (err?: Error) => {
       if (settled) return;
       settled = true;
       clearInterval(timer);
+      clearTimeout(timeout);
       this.peer.off('drain', onDrain);
-      resolve();
+      if (err) reject(err);
+      else resolve();
     };
     const onDrain = () => {
       if (this.getBulkBufferedAmount() <= high) done();
@@ -64,11 +67,14 @@ export class BulkTransport {
     this.peer.on('drain', onDrain);
     const timer = setInterval(() => {
       if (!this.connected) {
-        done();
+        done(new Error('Peer disconnected while waiting for bulk drain'));
         return;
       }
       if (this.getBulkBufferedAmount() <= high) done();
     }, 4);
+    const timeout = setTimeout(() => {
+      done(new Error(`waitBulkLow timeout buffered=${this.getBulkBufferedAmount()}`));
+    }, timeoutMs);
     // Immediate re-check after attaching listener.
     onDrain();
     await promise;

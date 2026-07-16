@@ -163,6 +163,21 @@ async function main() {
   await clickButton(receiver, 'MATERIALIZE');
   console.log('[transfer] started');
 
+  // One-shot path diagnostics (best effort).
+  try {
+    const diag = await sender.evaluate(() => {
+      const g = globalThis;
+      const sm = g.__ponswarpSwarm || null;
+      return {
+        hasSwarm: !!sm,
+        qa: sm && typeof sm.getQaDiagnostics === 'function' ? sm.getQaDiagnostics() : null,
+      };
+    });
+    console.log('[diag]', JSON.stringify(diag));
+  } catch (e) {
+    console.log('[diag] unavailable', String(e).slice(0, 120));
+  }
+
   const t0 = Date.now();
   const samples = [];
   let status = 'TIMEOUT';
@@ -170,34 +185,57 @@ async function main() {
   let lastSend = '';
 
   for (let i = 0; i < 90; i++) {
-    await sleep(1000);
-    lastRecv = await body(receiver);
-    lastSend = await body(sender);
-    const sm = lastRecv.match(/(\d+\.?\d*)\s*(MB|KB)\/s/i);
-    if (sm) {
-      const mbps = sm[2].toUpperCase() === 'MB' ? +sm[1] : +sm[1] / 1024;
-      samples.push({ t: i + 1, mbps: +mbps.toFixed(3), raw: sm[0] });
-      console.log(`[t+${i + 1}s] ${sm[0]}`);
-    } else if (i % 5 === 0) {
-      console.log(
-        `[t+${i + 1}s] waiting | ` +
-          lastRecv
-            .split('\n')
-            .map((x) => x.trim())
-            .filter(Boolean)
-            .slice(0, 6)
-            .join(' | ')
-      );
+    // Lightweight poll: avoid full body.innerText every second (starves WebRTC).
+    await sleep(500);
+    let snap = { text: '', speed: null, done: false, failed: false };
+    try {
+      snap = await receiver.evaluate(() => {
+        const t = document.body ? document.body.innerText : '';
+        const speed = t.match(/(\d+\.?\d*)\s*(MB|KB)\/s/i);
+        const done = /COMPLETE|전송 완료|다운로드 완료|MATERIALIZED|File reconstruction complete/i.test(t);
+        const failed = /FAILED|USER_CANCELLED|실패|CONNECTION FAILED/i.test(t);
+        // Only return a short tail to keep CDP payload small.
+        return {
+          text: t.slice(0, 400),
+          speed: speed ? speed[0] : null,
+          unit: speed ? speed[2] : null,
+          val: speed ? speed[1] : null,
+          done,
+          failed,
+        };
+      });
+    } catch (e) {
+      // ignore transient CDP errors
     }
-    if (/COMPLETE|전송 완료|다운로드 완료/i.test(lastRecv)) {
+    lastRecv = snap.text || lastRecv;
+    if (i === 4) {
+      try {
+        const mid = await sender.evaluate(() => {
+          const sm = globalThis.__ponswarpSwarm;
+          return sm && sm.getQaDiagnostics ? sm.getQaDiagnostics() : null;
+        });
+        console.log('[mid-diag]', JSON.stringify(mid));
+      } catch {}
+    }
+    if (snap.speed && snap.val) {
+      const mbps = String(snap.unit).toUpperCase() === 'MB' ? +snap.val : +snap.val / 1024;
+      samples.push({ t: (i + 1) * 0.5, mbps: +mbps.toFixed(3), raw: snap.speed });
+      if (i % 2 === 0) console.log(`[t+${((i + 1) * 0.5).toFixed(1)}s] ${snap.speed}`);
+    } else if (i % 10 === 0) {
+      console.log(`[t+${((i + 1) * 0.5).toFixed(1)}s] waiting | ${String(lastRecv).split('\n').map(x=>x.trim()).filter(Boolean).slice(0,4).join(' | ')}`);
+    }
+    if (snap.done) {
       status = 'COMPLETE';
       break;
     }
-    if (/FAILED|USER_CANCELLED|실패/i.test(lastRecv)) {
+    if (snap.failed) {
       status = 'FAILED';
       break;
     }
   }
+  // Final full tails only once.
+  try { lastRecv = await body(receiver); } catch {}
+  try { lastSend = await body(sender); } catch {}
 
   const elapsed = (Date.now() - t0) / 1000;
   const peak = samples.reduce((a, b) => Math.max(a, b.mbps), 0);

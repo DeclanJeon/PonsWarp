@@ -148,6 +148,26 @@ export class WasmReorderingBuffer {
   }
 
   /**
+   * Speed sequential path: advance frontier without map push.
+   * Uses reset on WASM (no pending out-of-order chunks in sequential mode).
+   */
+  advanceTo(nextOffset: number): void {
+    if (nextOffset <= this.getNextExpectedOffset()) return;
+    if (this.useWasm && this.wasmBuffer) {
+      try {
+        this.wasmBuffer.reset(BigInt(nextOffset));
+        return;
+      } catch (e) {
+        logWarn('[ReorderingBuffer]', 'WASM advanceTo failed, falling back', e);
+        this.switchToFallback(nextOffset);
+        this.fallback?.advanceTo(nextOffset);
+        return;
+      }
+    }
+    this.fallback?.advanceTo(nextOffset);
+  }
+
+  /**
    * 버퍼에 남은 청크 수 조회
    */
   getPendingCount(): number {

@@ -73,7 +73,6 @@ import {
   hasStableHostRoute,
 } from '../utils/transferFlowControl';
 import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
-import { createBulkTransports } from '../transfer/BulkTransport';
 import { sendSpeedFirehose } from '../transfer/SpeedSender';
 
 // 핵심 안전 상수: 절대 변경 금지
@@ -415,6 +414,10 @@ export class SwarmManager {
   }
 
   constructor(options: SwarmManagerOptions = {}) {
+    if (typeof window !== 'undefined') {
+      (window as any).__ponswarpSwarm = this;
+    }
+
     debugLog('[SwarmManager] 🆕 Initializing new instance');
     this.signalingService = options.signaling ?? null;
     this.peerFactory =
@@ -1119,6 +1122,25 @@ export class SwarmManager {
   /**
    * 모든 피어 중 가장 높은 버퍼 크기 반환
    */
+  public getQaDiagnostics() {
+    const d = this.currentTransferDiagnostics;
+    return {
+      candidatePathKind: d.candidatePathKind,
+      localCandidateType: d.candidateTuple?.localCandidateType ?? null,
+      remoteCandidateType: d.candidateTuple?.remoteCandidateType ?? null,
+      protocol: d.protocol ?? null,
+      relayProtocol: d.relayProtocol ?? null,
+      rttMs: d.rttMs ?? null,
+      availableOutgoingBitrateBps: d.availableOutgoingBitrateBps ?? null,
+      bytesSent: this.totalBytesSent,
+      totalBytes: this.totalBytes,
+      buffered: this.getHighestBufferedAmount(),
+      encryptionEnabled: this.isEncryptionEnabled(),
+      hybridArmed: this.hybridArmed,
+      speedTransfer: SPEED_TRANSFER,
+    };
+  }
+
   public getHighestBufferedAmount(): number {
     let highest = 0;
     // Prefer active transfer peers' stripe lanes when transferring
@@ -2825,17 +2847,20 @@ export class SwarmManager {
     this.hybridBytesUploaded = 0;
     this.hybridPackets = [];
     this.hybridPrebuilt = false;
-    if (!this.remoteHybridCaps) {
+    if (!(SPEED_TRANSFER && !this.isEncryptionEnabled()) && !this.remoteHybridCaps) {
       const waitStart = Date.now();
       while (!this.remoteHybridCaps && Date.now() - waitStart < 1000) {
         await new Promise(r => setTimeout(r, 50));
       }
     }
-    const arm = shouldArmHybrid({
-      remoteCaps: this.remoteHybridCaps,
-      totalBytes: manifest.totalSize,
-      cloudApiConfigured: cloudApiConfigured(),
-    });
+    // Speed-first plain path: hybrid assist is ciphertext-oriented and must stay off.
+    const arm = SPEED_TRANSFER && !this.isEncryptionEnabled()
+      ? { armed: false, reason: 'speed-plain-path' }
+      : shouldArmHybrid({
+          remoteCaps: this.remoteHybridCaps,
+          totalBytes: manifest.totalSize,
+          cloudApiConfigured: cloudApiConfigured(),
+        });
     this.hybridArmed = arm.armed;
     this.hybridArmReason = arm.reason;
     if (arm.armed) {
@@ -2856,8 +2881,18 @@ export class SwarmManager {
       ...this.getProgressDiagnosticsFields(),
     });
     this.emit('status', 'TRANSFERRING');
-    this.startAdaptiveControl();
+    // Always sample path diagnostics once. Adaptive controller stays off on speed path
+    // so it cannot throttle the firehose.
+    if (!(SPEED_TRANSFER && !this.isEncryptionEnabled())) {
+      this.startAdaptiveControl();
+    }
     await this.sampleAdaptiveStats();
+    // Keep sampling path/rtt lightly during speed transfers for QA visibility.
+    if (SPEED_TRANSFER && !this.isEncryptionEnabled()) {
+      this.adaptiveStatsInterval = setInterval(() => {
+        this.sampleAdaptiveStats().catch(() => {});
+      }, 1000);
+    }
 
     // Host LAN path is already SCTP-bound; hybrid HTTP only helps constrained
     // cross-network (relay/srflx/unknown) paths and would add latency on host.
@@ -3265,53 +3300,87 @@ export class SwarmManager {
     // Speed-first hot path: firehose plain bulk with local backpressure only.
     if (SPEED_TRANSFER && !this.isEncryptionEnabled()) {
       this.ensureActiveTransferRun(runId);
-      const peerIds = this.getActiveTransferPeerIds();
-      const peers = peerIds
-        .map(id => this.peers.get(id))
-        .filter((p): p is SinglePeerConnection => !!p && p.connected);
-      const transports = createBulkTransports(peers);
-      if (transports.length === 0) {
-        throw new Error('No connected receivers for speed firehose');
-      }
-
-      // Announce start controls once (legacy receivers still understand MANIFEST/STARTED).
-      for (const t of transports) {
-        t.sendControl({ type: 'MODE', mode: 'speed' });
-        t.sendControl({ type: 'TRANSFER_STARTED' });
-      }
-
-      const result = await sendSpeedFirehose({
-        files: this.files,
-        manifest: { totalSize: manifest.totalSize },
-        transports,
-        startOffset,
-        isActive: () => runId === this.transferRunId && this.isTransferring,
-        waitWhilePaused: async () => {
-          // honor receiver PAUSE if any
-          while (
-            runId === this.transferRunId &&
-            this.isTransferring &&
-            this.pausedPeers.size > 0
-          ) {
-            await this.waitForSendWindowSignal(20);
-          }
-        },
-        onProgress: ({ bytesSent }) => {
-          this.totalBytesSent = bytesSent;
-          this.emitProgress();
-        },
-      });
-      this.totalBytesSent = result.bytesSent;
-      this.emitProgress();
-      if (result.bytesSent < manifest.totalSize && startOffset === 0) {
-        throw new Error(
-          `Speed firehose incomplete: ${result.bytesSent}/${manifest.totalSize}`
+      try {
+        const peerIds = this.getActiveTransferPeerIds();
+        if (peerIds.length === 0) {
+          throw new Error('No active peers for speed firehose');
+        }
+        logInfo(
+          '[SwarmManager]',
+          `⚡ Speed firehose start peers=${peerIds.join(',')} files=${this.files.length} total=${manifest.totalSize}`
         );
+
+        const result = await sendSpeedFirehose({
+          files: this.files,
+          manifest: { totalSize: manifest.totalSize },
+          startOffset,
+          highWater: SPEED_BUFFER_HIGH,
+          isActive: () => runId === this.transferRunId && this.isTransferring,
+          waitWhilePaused: async () => {
+            const started = performance.now();
+            while (
+              runId === this.transferRunId &&
+              this.isTransferring &&
+              this.pausedPeers.size > 0
+            ) {
+              if (performance.now() - started > 15_000) {
+                throw new Error('Paused too long during speed firehose');
+              }
+              await this.waitForSendWindowSignal(20);
+            }
+          },
+          hooks: {
+            getBufferedAmount: () => this.getHighestBufferedAmount(),
+            sendPacket: (packet: ArrayBuffer) => {
+              const result = this.broadcastChunk(packet);
+              for (const failedPeerId of result.failedPeers) {
+                this.removePeer(failedPeerId, 'speed-firehose-send-failed');
+              }
+              return result.successCount;
+            },
+            waitForDrain: async () => {
+              // Speed path: pure bufferedAmount pacing, no adaptive budget math.
+              const started = performance.now();
+              while (
+                runId === this.transferRunId &&
+                this.isTransferring &&
+                this.getHighestBufferedAmount() > SPEED_BUFFER_HIGH * 0.75
+              ) {
+                if (performance.now() - started > 30_000) {
+                  throw new Error('Speed drain timeout');
+                }
+                await this.waitForSendWindowSignal(4);
+              }
+            },
+          },
+          onProgress: ({ bytesSent }) => {
+            this.totalBytesSent = bytesSent;
+            this.emitProgress();
+          },
+        });
+        this.totalBytesSent = result.bytesSent;
+        this.emitProgress();
+        if (result.bytesSent < manifest.totalSize && startOffset === 0) {
+          throw new Error(
+            `Speed firehose incomplete: ${result.bytesSent}/${manifest.totalSize}`
+          );
+        }
+        logInfo(
+          '[SwarmManager]',
+          `⚡ Speed firehose complete bytes=${result.bytesSent} packets=${result.packets}`
+        );
+        return;
+      } catch (error) {
+        logWarn(
+          '[SwarmManager]',
+          'Speed firehose failed; falling back to legacy partitioned plain path',
+          error
+        );
+        // fall through to legacy path below
       }
-      return;
     }
 
-    const hostPipelineReady = await this.awaitStableHostPipeline(runId);
+const hostPipelineReady = await this.awaitStableHostPipeline(runId);
     const scheduler = hostPipelineReady
       ? (this.hostTransferScheduler ??= new HostTransferScheduler(
           manifest.totalSize,

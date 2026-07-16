@@ -169,6 +169,14 @@ export class ReorderingBuffer {
     return this.nextExpectedOffset;
   }
 
+  /** Speed sequential path: advance frontier without map push. */
+  public advanceTo(nextOffset: number): void {
+    if (nextOffset > this.nextExpectedOffset) {
+      this.totalProcessedBytes += nextOffset - this.nextExpectedOffset;
+      this.nextExpectedOffset = nextOffset;
+    }
+  }
+
   /**
    * 버퍼에 남은 청크 수 조회
    */
