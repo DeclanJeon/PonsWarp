@@ -9,9 +9,10 @@ import {
 } from './constants';
 
 describe('transfer tuning constants', () => {
-  it('uses a larger but browser-safe chunk and bounded multi-megabyte send queue', () => {
+  it('uses browser-safe chunk and measured Chromium send-queue water marks', () => {
     expect(CHUNK_SIZE_INITIAL).toBe(240 * 1024);
     expect(CHUNK_SIZE_INITIAL).toBeLessThanOrEqual(256 * 1024);
+    // Empirical host path: ~4MB high / ~1MB low (not multi-tens-of-MB)
     expect(HIGH_WATER_MARK).toBe(4 * 1024 * 1024);
     expect(LOW_WATER_MARK).toBe(1 * 1024 * 1024);
   });

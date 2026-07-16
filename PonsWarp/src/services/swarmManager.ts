@@ -30,6 +30,8 @@ import {
   LAN_STRIPE_PARTITION_BYTES,
   SEND_WINDOW_POLL_INTERVAL_MS,
   CONNECTION_TIMEOUT_MS,
+  HIGH_WATER_MARK,
+  LOW_WATER_MARK,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
@@ -61,6 +63,7 @@ import {
   hasStableHostRoute,
 } from '../utils/transferFlowControl';
 import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
+import { throughputTrace } from '../utils/throughputTrace';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -1289,41 +1292,33 @@ export class SwarmManager {
   private getPeerStats(
     peer: SinglePeerConnection
   ): Promise<RTCStatsReport> | null {
-    const simplePeer = peer.pc as { _pc?: RTCPeerConnection } | null;
-
-    const nativePeer = simplePeer?._pc;
+    // Native PeerSession exposes RTCPeerConnection on `.pc`.
+    // Legacy simple-peer used `.pc._pc`.
+    const maybe = peer.pc as
+      | RTCPeerConnection
+      | { _pc?: RTCPeerConnection }
+      | null;
+    if (!maybe) return null;
+    const nativePeer =
+      typeof (maybe as RTCPeerConnection).getStats === 'function'
+        ? (maybe as RTCPeerConnection)
+        : (maybe as { _pc?: RTCPeerConnection })._pc;
     if (!nativePeer || typeof nativePeer.getStats !== 'function') {
       return null;
     }
-
     return nativePeer.getStats();
   }
 
   private updateAdaptiveTransferConfig(): void {
+    // AIMD app-level congestion control disabled (webrtc-bulk-throughput.md).
+    // SCTP + bufferedAmount water marks own pacing; keep batch size stable.
     if (!this.worker || !this.isTransferring) return;
-
-    networkController.updateBufferState(this.getHighestBufferedAmount());
-
-    const nextConfig = networkController.getAdaptiveParams();
-    this.currentBatchSize = nextConfig.batchSize;
-
-    if (
-      this.lastAdaptiveConfig &&
-      this.lastAdaptiveConfig.batchSize === nextConfig.batchSize &&
-      this.lastAdaptiveConfig.chunkSize === nextConfig.chunkSize
-    ) {
-      return;
+    if (!this.lastAdaptiveConfig) {
+      this.lastAdaptiveConfig = {
+        batchSize: this.currentBatchSize,
+        chunkSize: this.getCurrentChunkSizeBytes(),
+      };
     }
-
-    this.lastAdaptiveConfig = nextConfig;
-    this.worker.postMessage({
-      type: 'update-adaptive-config',
-      payload: {
-        chunkSize: nextConfig.chunkSize,
-        prefetchBatch: nextConfig.batchSize,
-        enableAdaptive: true,
-      },
-    });
   }
 
   private async sampleAdaptiveStats(): Promise<void> {
@@ -1361,15 +1356,40 @@ export class SwarmManager {
     this.applyTransferDiagnostics(diagnostics);
 
     this.updateAdaptiveTransferConfig();
+
+    // ThroughputTrace diagnostics (webrtc-bulk-throughput.md Phase 0)
+    const elapsedSec = Math.max(
+      0.001,
+      (performance.now() - this.transferStartTime) / 1000
+    );
+    throughputTrace.push({
+      t: performance.now(),
+      pathKind: this.currentTransferDiagnostics.candidatePathKind,
+      protocol: this.currentTransferDiagnostics.protocol ?? null,
+      rttMs: this.currentTransferDiagnostics.rttMs ?? null,
+      availableOutgoingBitrateBps:
+        this.currentTransferDiagnostics.availableOutgoingBitrateBps ?? null,
+      bulkBufferedAmount: this.getHighestBufferedAmount(),
+      highWaterBytes: this.getCurrentInFlightTargetBytes() || HIGH_WATER_MARK,
+      lowWaterBytes:
+        this.currentTransferTuningProfile.lowWaterBytes || LOW_WATER_MARK,
+      chunkSizeBytes: this.getCurrentChunkSizeBytes(),
+      bulkChannelsArmed: 1,
+      bytesSent: this.totalBytesSent,
+      bytesReceivedContiguous: 0,
+      sendMBps: this.totalBytesSent / 1024 / 1024 / elapsedSec,
+      recvMBps: 0,
+      checkpointWaits: this.partitionAckCount,
+      pauseCount: this.transferPauseCount,
+    });
   }
 
   private startAdaptiveControl(): void {
     this.stopAdaptiveControl();
+    // Diagnostics only — no AIMD cwnd mutation.
     networkController.reset();
-    networkController.start();
     this.lastAdaptiveConfig = null;
-    this.currentBatchSize = networkController.getAdaptiveParams().batchSize;
-    this.updateAdaptiveTransferConfig();
+    this.currentBatchSize = BATCH_SIZE_INITIAL;
     this.resetTransferTuning();
 
     this.adaptiveStatsInterval = setInterval(() => {
@@ -2715,10 +2735,10 @@ export class SwarmManager {
     this.stopTransferPumpWatchdog();
     this.stopAdaptiveControl();
 
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
+    // Keep encrypt/read worker alive when present. Main-thread partitioned
+    // path still owns send pacing; worker is available for future ciphertext
+    // production without terminate-on-start thrash.
+    // (Do not terminate healthy worker at transfer start.)
 
     const manifest = this.pendingManifest;
 
@@ -3089,14 +3109,14 @@ export class SwarmManager {
     }
 
     if (!this.partitionCryptoKey) {
-      const sessionKey = new Uint8Array(this.sessionKey);
-      const sessionKeyBuffer = sessionKey.buffer.slice(
-        sessionKey.byteOffset,
-        sessionKey.byteOffset + sessionKey.byteLength
-      );
+      // Copy into a standalone ArrayBuffer — SharedArrayBuffer-backed views
+      // and detached slices fail SubtleCrypto in some test/runtime paths.
+      const sessionKeyBytes = new Uint8Array(this.sessionKey);
+      const keyCopy = new Uint8Array(sessionKeyBytes.byteLength);
+      keyCopy.set(sessionKeyBytes);
       this.partitionCryptoKey = await crypto.subtle.importKey(
         'raw',
-        sessionKeyBuffer,
+        keyCopy,
         { name: 'AES-GCM' },
         false,
         ['encrypt']
@@ -3162,7 +3182,7 @@ export class SwarmManager {
       // 🚀 [Performance] 올바른 윈도우 전송 파이프라인
       // 이전 병렬 구현은 암호화 Promise 완료 시 pending map에서 먼저 삭제되어
       // readyQueue에 들어가지 못하고 0 B/s로 무한 루프에 빠질 수 있었다.
-      const READ_BLOCK_SIZE = 2 * 1024 * 1024;
+      const READ_BLOCK_SIZE = 8 * 1024 * 1024;
       let readBlockCache: {
         fileIndex: number;
         offset: number;
@@ -3212,7 +3232,7 @@ export class SwarmManager {
       let chunksSinceProgress = 0;
       let lastProgressAt = performance.now();
       // 암호화/읽기를 충분히 앞서 돌려 DataChannel을 굶기지 않는다.
-      const PREPARE_AHEAD = 16;
+      const PREPARE_AHEAD = 64;
 
       const nextDescriptor = (): Descriptor | null => {
         while (
@@ -3546,6 +3566,12 @@ export class SwarmManager {
   }
 
   private getActivePartitionSize(): number {
+    // Host/same-Wi-Fi: disable mid-transfer partition barriers.
+    // Reliable SCTP + end-of-file checkpoint is enough for 1:1.
+    const path = this.currentTransferDiagnostics.candidatePathKind;
+    if (path === 'host' || path === 'unknown') {
+      return Number.MAX_SAFE_INTEGER;
+    }
     if (this.stripeEnabled && LAN_STRIPE_LANES > 1) {
       return Math.min(
         LAN_STRIPE_PARTITION_BYTES,
@@ -3576,15 +3602,16 @@ export class SwarmManager {
         paused: hasPausedPeer,
       });
       // Resume a bit under the cap to avoid 1-byte thrash.
-      if (sendBudget > target * 0.25) {
+      // Resume once any meaningful budget is free (was 25% of target).
+      if (sendBudget > 0) {
         return;
       }
 
       if (performance.now() - started > 120_000) {
         throw new Error('Timed out waiting for receiver/backpressure window');
       }
-      // drain 이벤트 우선, 짧은 watchdog로 재평가
-      await this.waitForSendWindowSignal(20);
+      // Prefer drain event; short watchdog for re-eval.
+      await this.waitForSendWindowSignal(SEND_WINDOW_POLL_INTERVAL_MS === 0 ? 4 : SEND_WINDOW_POLL_INTERVAL_MS);
     }
     throw new Error('Transfer stopped');
   }
@@ -3594,6 +3621,25 @@ export class SwarmManager {
     runId: number
   ): Promise<void> {
     this.ensureActiveTransferRun(runId);
+
+    // Host / unknown: skip mid-transfer ACK barrier entirely.
+    // Reliable SCTP owns reliability; waiting for app ACK only hurts Wi-Fi bulk.
+    const path = this.currentTransferDiagnostics.candidatePathKind;
+    if (path === 'host' || path === 'unknown') {
+      const peerIds = this.getActiveTransferPeerIds();
+      const msg = JSON.stringify({ type: 'PARTITION', offset, runId });
+      for (const peerId of peerIds) {
+        const peer = this.peers.get(peerId);
+        if (peer && peer.connected) {
+          try {
+            peer.send(msg);
+          } catch {
+            // ignore control send failures on host fast path
+          }
+        }
+      }
+      return;
+    }
 
     const peerIds = this.getActiveTransferPeerIds();
     if (peerIds.length === 0) {
@@ -3637,7 +3683,10 @@ export class SwarmManager {
         }
         if (!this.stripeEnabled && LAN_STRIPE_LANES > 1) {
           this.stripeEnabled = true;
-          logInfo('[SwarmManager]', 'Stripe lanes armed after first partition ACK');
+          logInfo(
+            '[SwarmManager]',
+            'Stripe lanes armed after first partition ACK'
+          );
         }
         return;
       }
@@ -3750,7 +3799,8 @@ export class SwarmManager {
 
     // 버퍼가 비워질 때까지 대기
     await this.waitForBufferZero();
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Tiny settle only — previous 500ms floor capped measured throughput.
+    await new Promise(resolve => setTimeout(resolve, 20));
 
     // EOS 패킷 브로드캐스트
     const eosPacket = createEosPacket();

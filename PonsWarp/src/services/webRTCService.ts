@@ -830,14 +830,23 @@ export class ReceiverService {
   }
 
   private setupPeerEvents(peer: SinglePeerConnection) {
-    peer.on<PeerSignalData>('signal', data => {
+    peer.on('signal', (raw: unknown) => {
       // Receiver는 Answer와 Candidate를 Sender에게 보냄
-      if (data.type === 'answer') {
-        this.ensureSignalingService().sendAnswer(this.roomId!, data, peer.id);
-      } else if (data.candidate) {
+      const data = raw as {
+        type?: string;
+        sdp?: string;
+        candidate?: RTCIceCandidateInit | null;
+      };
+      if (data.type === 'answer' && typeof data.sdp === 'string') {
+        this.ensureSignalingService().sendAnswer(
+          this.roomId!,
+          data as unknown as PeerSignalData,
+          peer.id
+        );
+      } else if (data.type === 'candidate' || data.candidate) {
         this.ensureSignalingService().sendCandidate(
           this.roomId!,
-          data,
+          data as unknown as PeerSignalData,
           peer.id
         );
       }

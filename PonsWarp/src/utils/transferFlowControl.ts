@@ -181,9 +181,11 @@ export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   chunkSizeBytes: 240 * KIB,
   minInFlightBytes: 2 * MIB,
   initialInFlightBytes: 4 * MIB,
-  maxInFlightBytes: 6 * MIB, // match practical SCTP queue depth
+  // Chromium send-queue sweet spot measured ~4MB; keep headroom to 12MB.
+  maxInFlightBytes: 12 * MIB,
   lowWaterBytes: 1 * MIB,
-  partitionSizeBytes: 128 * MIB,
+  // Host: no mid-transfer partition barrier (reliable SCTP + end checkpoint)
+  partitionSizeBytes: Number.MAX_SAFE_INTEGER,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
 };
@@ -197,15 +199,15 @@ export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   chunkSizeBytes: 128 * KIB,
   minInFlightBytes: 1 * MIB,
   initialInFlightBytes: 2 * MIB,
-  maxInFlightBytes: 3 * MIB,
-  lowWaterBytes: 512 * KIB,
-  partitionSizeBytes: 32 * MIB,
+  maxInFlightBytes: 4 * MIB,
+  lowWaterBytes: 1 * MIB,
+  partitionSizeBytes: 16 * MIB,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
   chunkSizeBytes: 240 * KIB,
-  partitionSizeBytes: 128 * MIB,
+  partitionSizeBytes: Number.MAX_SAFE_INTEGER,
 };
 export function selectTransferTuningProfile(
   diagnostics?: Partial<TransferDiagnostics> | null

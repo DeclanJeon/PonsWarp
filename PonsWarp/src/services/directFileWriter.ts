@@ -101,6 +101,10 @@ export class DirectFileWriter {
 
   // 🚀 [추가] 재정렬 버퍼 (WASM 기반 고성능 버퍼)
   private reorderingBuffer: WasmReorderingBuffer | null = null;
+  /** Next expected payload offset for ordered bulk fast path (1:1). */
+  private contiguousOffset = 0;
+  /** When true, skip WASM reordering for sequential host bulk. */
+  private orderedBulkFastPath = true;
 
   // 🚀 [추가] 쓰기 작업을 순차적으로 처리하기 위한 Promise 체인
   private writeQueue: Promise<void> = Promise.resolve();
@@ -197,6 +201,8 @@ export class DirectFileWriter {
     try {
       // 🚀 핵심 변경: StreamSaver 우선, FSA 폴백 로직 적용
       await this.initStrategy(fileName, manifest.totalSize);
+      this.contiguousOffset = 0;
+      this.orderedBulkFastPath = true;
       logInfo(
         '[DirectFileWriter]',
         `✅ Initialized with mode: ${this.writerMode}`
@@ -1106,10 +1112,13 @@ export class DirectFileWriter {
    * Used by PARTITION_ACK so multi-lane arrivals cannot ACK past gaps.
    */
   public getContiguousReceivedOffset(): number {
+    if (this.orderedBulkFastPath) {
+      return this.contiguousOffset;
+    }
     if (this.reorderingBuffer) {
       return this.reorderingBuffer.getNextExpectedOffset();
     }
-    return this.totalBytesWritten;
+    return this.contiguousOffset || this.totalBytesWritten;
   }
 
   /**
@@ -1161,20 +1170,38 @@ export class DirectFileWriter {
           ? true
           : !!this.writer;
 
-    if (!hasWriter || !this.reorderingBuffer) {
+    if (!hasWriter) {
       throw new Error(`No writer available (mode: ${this.writerMode})`);
     }
 
     const data = new Uint8Array(normalizedPacket, HEADER_SIZE, size);
-    const chunksToWrite = this.reorderingBuffer.push(
-      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-      offset
-    );
 
-    for (const chunk of chunksToWrite) {
-      this.writeBuffer.push(new Uint8Array(chunk));
-      this.currentBatchSize += chunk.byteLength;
-      this.pendingBytesInBuffer += chunk.byteLength;
+    // 1:1 ordered bulk: skip WASM reordering when stream is contiguous.
+    if (this.orderedBulkFastPath && offset === this.contiguousOffset) {
+      // Reuse the decrypted payload view (normalized packet is owned).
+      this.writeBuffer.push(data);
+      this.currentBatchSize += data.byteLength;
+      this.pendingBytesInBuffer += data.byteLength;
+      this.contiguousOffset = offset + size;
+    } else if (this.reorderingBuffer) {
+      // Gap / out-of-order: fall back to reordering buffer.
+      this.orderedBulkFastPath = false;
+      const chunksToWrite = this.reorderingBuffer.push(
+        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+        offset
+      );
+      for (const chunk of chunksToWrite) {
+        this.writeBuffer.push(new Uint8Array(chunk));
+        this.currentBatchSize += chunk.byteLength;
+        this.pendingBytesInBuffer += chunk.byteLength;
+      }
+      this.contiguousOffset = this.reorderingBuffer.getNextExpectedOffset();
+    } else {
+      const copy = data.slice();
+      this.writeBuffer.push(copy);
+      this.currentBatchSize += copy.byteLength;
+      this.pendingBytesInBuffer += copy.byteLength;
+      this.contiguousOffset = Math.max(this.contiguousOffset, offset + size);
     }
 
     this.checkBackpressure();
@@ -1349,12 +1376,13 @@ export class DirectFileWriter {
     if (!this.sessionKey) {
       throw new Error('Encrypted packet received before crypto session');
     }
-
-    const sessionKeyBuffer = new ArrayBuffer(this.sessionKey.byteLength);
-    new Uint8Array(sessionKeyBuffer).set(this.sessionKey);
+    // Prefer a concrete Uint8Array key material. Some jsdom/vitest crypto
+    // polyfills reject plain ArrayBuffer even when Node webcrypto accepts it.
+    const keyBytes = new Uint8Array(this.sessionKey.byteLength);
+    keyBytes.set(this.sessionKey);
     this.decryptCryptoKey = await globalThis.crypto.subtle.importKey(
       'raw',
-      sessionKeyBuffer,
+      keyBytes,
       { name: 'AES-GCM' },
       false,
       ['decrypt']

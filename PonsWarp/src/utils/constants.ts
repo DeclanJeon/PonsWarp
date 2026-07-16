@@ -15,9 +15,12 @@ export const CHUNK_SIZE_MAX = 240 * 1024;
 
 // 🚀 [Performance] Keep bufferedAmount modest — huge queues inflate sender
 // speed while starving the real SCTP congestion window.
-export const MAX_BUFFERED_AMOUNT = 6 * 1024 * 1024; // 6MB
+// Measured Chromium host path (local loop): high≈2–4MB yields ~25+ MB/s;
+// 32MB high-water overflows the browser send queue and collapses to ~6–9 MB/s.
+// SCTP owns congestion control; app only paces on bufferedAmount.
+export const MAX_BUFFERED_AMOUNT = 12 * 1024 * 1024; // 12MB hard stop
 export const LOW_WATER_MARK = 1 * 1024 * 1024; // 1MB drain
-export const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4MB
+export const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4MB fill target
 
 // 파티션 크기: 연속 전송 (ACK 불필요)
 export const TRANSFER_PARTITION_SIZE = 128 * 1024 * 1024;
@@ -62,6 +65,12 @@ export const READY_QUEUE_MAX_CHUNKS = 32;
 export const LAN_STRIPE_LANES = 1; // multi-PC striping disabled: app-path still black-holes under simple-peer demux
 /** Partition barrier size while multi-PC striping is active (faster gap detection). */
 export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
+
+// Native peer transport (control + bulk channels)
+export const NATIVE_PEER_ENABLED = true;
+export const BULK_CHANNEL_COUNT = 1;
+// Host mid-transfer partition ACK wait (0 = disabled; end checkpoint only)
+export const HOST_CHECKPOINT_EVERY_BYTES = 0;
 
 
 // Hybrid bulk assist (WebRTC + encrypted HTTP). Design:

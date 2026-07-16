@@ -131,18 +131,18 @@ describe('transferFlowControl', () => {
     expect(
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
     ).toBeLessThanOrEqual(256 * 1024 + 54);
-    expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThan(
-      receiverPauseHighBytes
-    );
-    expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBeLessThan(
-      receiverPauseHighBytes
-    );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(28 * 1024 * 1024);
+    ).toBeLessThanOrEqual(receiverPauseHighBytes);
     expect(
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(28 * 1024 * 1024);
+    ).toBeLessThanOrEqual(receiverPauseHighBytes);
+    expect(
+      DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
+    expect(
+      DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
   });
 
   it('keeps relay and unknown profiles conservative', () => {
@@ -159,6 +159,7 @@ describe('transferFlowControl', () => {
     expect(
       RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes
     ).toBeLessThanOrEqual(8 * 1024 * 1024);
+    // unknown inherits host profile for Wi-Fi first-path optimism
     expect(
       UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes
     ).toBeLessThanOrEqual(8 * 1024 * 1024);
@@ -228,14 +229,15 @@ describe('transferFlowControl', () => {
   });
 
   it('selects partition size from the active profile', () => {
+    // host/srflx: mid-transfer partition barriers disabled (MAX_SAFE_INTEGER)
     expect(selectPartitionSize(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE)).toBe(
-      128 * 1024 * 1024
+      Number.MAX_SAFE_INTEGER
     );
     expect(selectPartitionSize(RELAY_TRANSFER_TUNING_PROFILE)).toBe(
-      32 * 1024 * 1024
+      16 * 1024 * 1024
     );
     expect(selectPartitionSize(UNKNOWN_TRANSFER_TUNING_PROFILE)).toBe(
-      128 * 1024 * 1024
+      Number.MAX_SAFE_INTEGER
     );
   });
 
