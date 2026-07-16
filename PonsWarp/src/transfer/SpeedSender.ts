@@ -38,6 +38,8 @@ export async function sendSpeedFirehose(params: {
   manifest: SpeedManifestLike;
   hooks: SpeedSendHooks;
   startOffset?: number;
+  /** Exclusive end offset in the flat file concatenation. Defaults to totalSize. */
+  endOffset?: number;
   chunkSize?: number;
   highWater?: number;
   isActive?: () => boolean;
@@ -52,6 +54,7 @@ export async function sendSpeedFirehose(params: {
     manifest,
     hooks,
     startOffset = 0,
+    endOffset = manifest.totalSize,
     chunkSize = SPEED_CHUNK_SIZE,
     highWater = SPEED_BUFFER_HIGH,
     isActive = () => true,
@@ -79,6 +82,7 @@ export async function sendSpeedFirehose(params: {
     globalOffset = startOffset;
   }
 
+  const rangeEnd = Math.min(manifest.totalSize, Math.max(startOffset, endOffset));
   let sequence = Math.floor(startOffset / Math.max(1, chunkSize));
   let packets = 0;
   let lastProgressAt = 0;
@@ -107,7 +111,7 @@ export async function sendSpeedFirehose(params: {
     return block.slice(0, size);
   };
 
-  while (fileIndex < files.length) {
+  while (fileIndex < files.length && globalOffset < rangeEnd) {
     if (!isActive()) throw new Error('Transfer stopped');
     if (waitWhilePaused) await waitWhilePaused();
 
@@ -118,7 +122,8 @@ export async function sendSpeedFirehose(params: {
       continue;
     }
 
-    const bytes = Math.min(chunkSize, file.size - fileOffset);
+    const bytes = Math.min(chunkSize, file.size - fileOffset, rangeEnd - globalOffset);
+    if (bytes <= 0) break;
     while (hooks.getBufferedAmount() + bytes > highWater) {
       if (!isActive()) throw new Error('Transfer stopped');
       if (hooks.waitForDrain) {

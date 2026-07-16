@@ -192,7 +192,7 @@ async function main() {
       snap = await receiver.evaluate(() => {
         const t = document.body ? document.body.innerText : '';
         const speed = t.match(/(\d+\.?\d*)\s*(MB|KB)\/s/i);
-        const done = /COMPLETE|전송 완료|다운로드 완료|MATERIALIZED|File reconstruction complete/i.test(t);
+        const done = /(?:^|\n)\s*(?:COMPLETE|전송 완료|다운로드 완료)\b|MATERIALIZED|File reconstruction complete|All transfers have been completed/i.test(t);
         const failed = /FAILED|USER_CANCELLED|실패|CONNECTION FAILED/i.test(t);
         // Only return a short tail to keep CDP payload small.
         return {

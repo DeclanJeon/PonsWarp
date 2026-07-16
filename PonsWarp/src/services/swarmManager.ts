@@ -3305,6 +3305,109 @@ export class SwarmManager {
         if (peerIds.length === 0) {
           throw new Error('No active peers for speed firehose');
         }
+
+        // Prefer range-partitioned multi-lane when stripe is armed (host LAN).
+        const lanePeers =
+          peerIds.length === 1 ? this.getStripeSendPeers(peerIds[0]) : [];
+        const useRangeStripe =
+          this.stripeEnabled &&
+          lanePeers.length >= 2 &&
+          startOffset === 0;
+
+        if (useRangeStripe) {
+          const total = manifest.totalSize;
+          const cut = Math.floor(total / lanePeers.length);
+          logInfo(
+            '[SwarmManager]',
+            `⚡ Speed range-stripe lanes=${lanePeers.length} cut=${cut} total=${total}`
+          );
+
+          let bytesSent = startOffset;
+          const onLaneProgress = () => {
+            // Aggregate buffered progress from all lanes via totalBytesSent updates below.
+            this.emitProgress();
+          };
+
+          const laneResults = await Promise.all(
+            lanePeers.map((peer, idx) => {
+              const rangeStart = idx === 0 ? 0 : cut * idx;
+              const rangeEnd =
+                idx === lanePeers.length - 1 ? total : cut * (idx + 1);
+              return sendSpeedFirehose({
+                files: this.files,
+                manifest: { totalSize: total },
+                startOffset: rangeStart,
+                endOffset: rangeEnd,
+                highWater: SPEED_BUFFER_HIGH,
+                isActive: () =>
+                  runId === this.transferRunId && this.isTransferring,
+                waitWhilePaused: async () => {
+                  const started = performance.now();
+                  while (
+                    runId === this.transferRunId &&
+                    this.isTransferring &&
+                    this.pausedPeers.size > 0
+                  ) {
+                    if (performance.now() - started > 15_000) {
+                      throw new Error('Paused too long during range stripe');
+                    }
+                    await this.waitForSendWindowSignal(20);
+                  }
+                },
+                hooks: {
+                  getBufferedAmount: () => peer.getBufferedAmount(),
+                  sendPacket: (packet: ArrayBuffer) => {
+                    if (!peer.connected) return 0;
+                    return peer.sendBulk(packet) ? 1 : 0;
+                  },
+                  waitForDrain: async () => {
+                    const started = performance.now();
+                    while (
+                      runId === this.transferRunId &&
+                      this.isTransferring &&
+                      peer.getBufferedAmount() > SPEED_BUFFER_HIGH * 0.75
+                    ) {
+                      if (performance.now() - started > 30_000) {
+                        throw new Error('Range-stripe drain timeout');
+                      }
+                      await this.waitForSendWindowSignal(4);
+                    }
+                  },
+                },
+                onProgress: () => {
+                  // Approximate aggregate by summing peer buffered+sent is hard;
+                  // emit based on max frontier from peer diagnostics later.
+                  onLaneProgress();
+                },
+              }).then(result => {
+                bytesSent += result.bytesSent - rangeStart;
+                this.totalBytesSent = Math.min(total, bytesSent);
+                this.emitProgress();
+                return result;
+              });
+            })
+          );
+
+          const sent = laneResults.reduce((a, r) => a + r.bytesSent, 0);
+          // range sends report absolute end offsets; sum of (end-start) is correct:
+          const payloadSent = laneResults.reduce((a, r, idx) => {
+            const rangeStart = idx === 0 ? 0 : cut * idx;
+            return a + (r.bytesSent - rangeStart);
+          }, 0);
+          this.totalBytesSent = Math.min(total, payloadSent);
+          this.emitProgress();
+          if (payloadSent < total) {
+            throw new Error(
+              `Speed range-stripe incomplete: ${payloadSent}/${total}`
+            );
+          }
+          logInfo(
+            '[SwarmManager]',
+            `⚡ Speed range-stripe complete payload=${payloadSent} lanes=${laneResults.length}`
+          );
+          return;
+        }
+
         logInfo(
           '[SwarmManager]',
           `⚡ Speed firehose start peers=${peerIds.join(',')} files=${this.files.length} total=${manifest.totalSize}`
@@ -3339,7 +3442,6 @@ export class SwarmManager {
               return result.successCount;
             },
             waitForDrain: async () => {
-              // Speed path: pure bufferedAmount pacing, no adaptive budget math.
               const started = performance.now();
               while (
                 runId === this.transferRunId &&
