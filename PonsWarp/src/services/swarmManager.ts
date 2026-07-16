@@ -1138,6 +1138,12 @@ export class SwarmManager {
       encryptionEnabled: this.isEncryptionEnabled(),
       hybridArmed: this.hybridArmed,
       speedTransfer: SPEED_TRANSFER,
+      channels: Array.from(this.currentTransferPeers).map(id => {
+        const peer = this.peers.get(id) || this.peers.get(stripePeerKey(id, 0));
+        return peer && 'getChannelDebugInfo' in peer
+          ? (peer as SinglePeerConnection).getChannelDebugInfo()
+          : { id, missing: true };
+      }),
     };
   }
 
@@ -3328,65 +3334,63 @@ export class SwarmManager {
             this.emitProgress();
           };
 
-          const laneResults = await Promise.all(
-            lanePeers.map((peer, idx) => {
-              const rangeStart = idx === 0 ? 0 : cut * idx;
-              const rangeEnd =
-                idx === lanePeers.length - 1 ? total : cut * (idx + 1);
-              return sendSpeedFirehose({
-                files: this.files,
-                manifest: { totalSize: total },
-                startOffset: rangeStart,
-                endOffset: rangeEnd,
-                highWater: SPEED_BUFFER_HIGH,
-                isActive: () =>
-                  runId === this.transferRunId && this.isTransferring,
-                waitWhilePaused: async () => {
+          // Sequential ranges first (prove demux). Parallelism is a later switch.
+          const laneResults: Array<{ bytesSent: number; packets: number }> = [];
+          for (let idx = 0; idx < lanePeers.length; idx++) {
+            const peer = lanePeers[idx];
+            const rangeStart = idx === 0 ? 0 : cut * idx;
+            const rangeEnd =
+              idx === lanePeers.length - 1 ? total : cut * (idx + 1);
+            const result = await sendSpeedFirehose({
+              files: this.files,
+              manifest: { totalSize: total },
+              startOffset: rangeStart,
+              endOffset: rangeEnd,
+              highWater: SPEED_BUFFER_HIGH,
+              isActive: () =>
+                runId === this.transferRunId && this.isTransferring,
+              waitWhilePaused: async () => {
+                const started = performance.now();
+                while (
+                  runId === this.transferRunId &&
+                  this.isTransferring &&
+                  this.pausedPeers.size > 0
+                ) {
+                  if (performance.now() - started > 15_000) {
+                    throw new Error('Paused too long during range stripe');
+                  }
+                  await this.waitForSendWindowSignal(20);
+                }
+              },
+              hooks: {
+                getBufferedAmount: () => peer.getBufferedAmount(),
+                sendPacket: (packet: ArrayBuffer) => {
+                  if (!peer.connected) return 0;
+                  return peer.sendBulk(packet) ? 1 : 0;
+                },
+                waitForDrain: async () => {
                   const started = performance.now();
                   while (
                     runId === this.transferRunId &&
                     this.isTransferring &&
-                    this.pausedPeers.size > 0
+                    peer.getBufferedAmount() > SPEED_BUFFER_HIGH * 0.75
                   ) {
-                    if (performance.now() - started > 15_000) {
-                      throw new Error('Paused too long during range stripe');
+                    if (performance.now() - started > 30_000) {
+                      throw new Error('Range-stripe drain timeout');
                     }
-                    await this.waitForSendWindowSignal(20);
+                    await this.waitForSendWindowSignal(4);
                   }
                 },
-                hooks: {
-                  getBufferedAmount: () => peer.getBufferedAmount(),
-                  sendPacket: (packet: ArrayBuffer) => {
-                    if (!peer.connected) return 0;
-                    return peer.sendBulk(packet) ? 1 : 0;
-                  },
-                  waitForDrain: async () => {
-                    const started = performance.now();
-                    while (
-                      runId === this.transferRunId &&
-                      this.isTransferring &&
-                      peer.getBufferedAmount() > SPEED_BUFFER_HIGH * 0.75
-                    ) {
-                      if (performance.now() - started > 30_000) {
-                        throw new Error('Range-stripe drain timeout');
-                      }
-                      await this.waitForSendWindowSignal(4);
-                    }
-                  },
-                },
-                onProgress: () => {
-                  // Approximate aggregate by summing peer buffered+sent is hard;
-                  // emit based on max frontier from peer diagnostics later.
-                  onLaneProgress();
-                },
-              }).then(result => {
-                bytesSent += result.bytesSent - rangeStart;
-                this.totalBytesSent = Math.min(total, bytesSent);
+              },
+              onProgress: ({ bytesSent: abs }) => {
+                this.totalBytesSent = Math.min(total, abs);
                 this.emitProgress();
-                return result;
-              });
-            })
-          );
+              },
+            });
+            laneResults.push(result);
+            this.totalBytesSent = Math.min(total, result.bytesSent);
+            this.emitProgress();
+          }
 
           const sent = laneResults.reduce((a, r) => a + r.bytesSent, 0);
           // range sends report absolute end offsets; sum of (end-start) is correct:

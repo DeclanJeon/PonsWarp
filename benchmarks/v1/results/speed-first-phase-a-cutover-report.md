@@ -79,3 +79,10 @@ bufferedAmount: often several MB while drain ~2 MB/s
 - `PonsWarp/src/utils/constants.ts`
 - `PonsWarp/src/utils/plainPacket.ts`
 - `benchmarks/v1/two-device-lan-test.mjs`
+
+## Follow-up 2026-07-16 evening
+
+- Best stable dual-device result after cutover: **~14–18 Mbps** overall (host/host UDP).
+- Range-partitioned dual-lane firehose implemented (`endOffset` + per-lane send) but left **disabled** (`LAN_STRIPE_LANES=1`) after incomplete transfer at ~offset 11MB.
+- Harness bug fixed: `INCOMPLETE_TRANSFER` no longer matches `COMPLETE`.
+- Next: prove gap-free range-stripe, then same-subnet direct socket assist.

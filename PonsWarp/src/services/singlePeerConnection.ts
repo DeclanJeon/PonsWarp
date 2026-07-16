@@ -559,6 +559,22 @@ export class SinglePeerConnection {
   /**
    * 현재 버퍼 크기 조회
    */
+  public getChannelDebugInfo() {
+    const channel = this.pc
+      ? (this.pc as SimplePeerWithChannel)._channel
+      : null;
+    return {
+      id: this.id,
+      connected: this.connected,
+      ordered: channel ? channel.ordered : null,
+      reliable: channel ? (channel as RTCDataChannel).maxRetransmits === null || (channel as any).maxRetransmits === undefined : null,
+      bufferedAmount: channel?.bufferedAmount ?? null,
+      readyState: channel?.readyState ?? null,
+      bulkOpen: this.bulkChannels.filter(c => c.readyState === 'open').length,
+      enableBulkPlane: this.enableBulkPlane,
+    };
+  }
+
   public getBufferedAmount(): number {
     if (this.destroyed) return 0;
     if (this.enableBulkPlane) {

@@ -10,7 +10,7 @@ const REMOTE_DL = '/tmp/chrome-downloads';
 const TUNNEL_PORT = 9223;
 const REMOTE_PORT = 9222;
 const CHROME_ARGS =
-  '--headless=new --remote-debugging-port=9222 --no-first-run --no-sandbox --disable-gpu --user-data-dir=/tmp/chrome-hd-clean --disable-features=WebRtcHideLocalIpsWithMdns,Translate,MediaRouter';
+  '--headless=new --remote-debugging-port=9222 --no-first-run --no-sandbox --disable-gpu --user-data-dir=/tmp/chrome-hd-clean --disable-features=WebRtcHideLocalIpsWithMdns,Translate,MediaRouter --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --enable-features=NetworkServiceInProcess2';
 
 const sh = (cmd) =>
   execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -96,6 +96,9 @@ async function main() {
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--disable-features=WebRtcHideLocalIpsWithMdns',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
     ],
   });
   const receiverBrowser = await chromium.connectOverCDP(

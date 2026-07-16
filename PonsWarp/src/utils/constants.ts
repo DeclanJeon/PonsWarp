@@ -59,7 +59,7 @@ export const DATA_CHANNEL_COUNT = 4; // legacy constant
 export const PRODUCER_CONCURRENCY = 12;
 export const READY_QUEUE_MAX_CHUNKS = 32;
 // Parallel RTCPeerConnections for host LAN bulk transfer (separate SCTP associations)
-export const LAN_STRIPE_LANES = 1; // range-stripe code ready; re-enable after loss/gap QA
+export const LAN_STRIPE_LANES = 1; // secondary-lane bulk demux still drops mid-file offsets
 /** Partition barrier size while multi-PC striping is active (faster gap detection). */
 export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
 
