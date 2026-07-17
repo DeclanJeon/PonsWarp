@@ -188,12 +188,13 @@ const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 /** Desktop LAN host: larger messages, fat SCTP queue. */
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 128 * KIB,
-  minInFlightBytes: 6 * MIB,
-  initialInFlightBytes: 12 * MIB,
-  // False PAUSE fixed; open host window for ≥8 MB/s LAN bulk.
-  maxInFlightBytes: 20 * MIB,
-  lowWaterBytes: 3 * MIB,
+  chunkSizeBytes: 192 * KIB,
+  minInFlightBytes: 4 * MIB,
+  initialInFlightBytes: 8 * MIB,
+  // 20MiB re-broke DCs; 8–12MiB completed with decrypt worker at ~3.8 MB/s peak.
+  // Climb only after multi-run stability at this band.
+  maxInFlightBytes: 12 * MIB,
+  lowWaterBytes: 2 * MIB,
   // Host: no mid-transfer partition barrier (reliable SCTP + end checkpoint)
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,

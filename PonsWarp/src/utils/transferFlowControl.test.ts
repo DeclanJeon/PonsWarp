@@ -123,10 +123,10 @@ describe('transferFlowControl', () => {
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE
     );
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      12 * 1024 * 1024
+      8 * 1024 * 1024
     );
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      12 * 1024 * 1024
+      8 * 1024 * 1024
     );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
@@ -142,10 +142,10 @@ describe('transferFlowControl', () => {
     ).toBeLessThanOrEqual(receiverPauseHighBytes);
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(20 * 1024 * 1024);
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
     expect(
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(20 * 1024 * 1024);
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
   });
 
   it('tunes relay for mobile Wi-Fi without mid-transfer partition barriers', () => {
@@ -166,7 +166,7 @@ describe('transferFlowControl', () => {
     // unknown inherits host profile for Wi-Fi first-path optimism
     expect(
       UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes
-    ).toBeLessThanOrEqual(20 * 1024 * 1024);
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
   });
 
   it('selects direct in-flight targets up to the profile maximum when bitrate stats are absent', () => {
@@ -393,7 +393,7 @@ describe('transferFlowControl', () => {
         hostAddressScope: 'lan',
         rttMs: 12,
       }).chunkSizeBytes
-    ).toBe(128 * 1024);
+    ).toBe(192 * 1024);
     expect(
       selectTransferTuningProfile({ candidatePathKind: 'relay' }).chunkSizeBytes
     ).toBe(64 * 1024);

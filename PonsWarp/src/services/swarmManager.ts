@@ -3272,23 +3272,30 @@ export class SwarmManager {
         for (const failedPeerId of result.failedPeers) {
           this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
         }
-        if (result.successCount === 0) {
+        let attempts = 0;
+        while (result.successCount === 0 && attempts < 6) {
+          attempts++;
           if (this.getActiveTransferPeerIds().length === 0) {
-            producer.credit(chunk.packet.byteLength);
-            throw new Error('No connected receivers available');
+            // Brief grace for DC recovery / reconnect before aborting.
+            await new Promise(r => setTimeout(r, 50 * attempts));
+            if (this.getActiveTransferPeerIds().length === 0 && attempts >= 4) {
+              producer.credit(chunk.packet.byteLength);
+              throw new Error('No connected receivers available');
+            }
           }
           await this.waitUntilSendWindowOpen(
             runId,
             this.getCurrentInFlightTargetBytes()
           );
+          await new Promise(r => setTimeout(r, Math.min(40, 8 * attempts)));
           result = this.broadcastChunk(chunk.packet);
           for (const failedPeerId of result.failedPeers) {
             this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
           }
-          if (result.successCount === 0) {
-            producer.credit(chunk.packet.byteLength);
-            throw new Error('No connected receivers available');
-          }
+        }
+        if (result.successCount === 0) {
+          producer.credit(chunk.packet.byteLength);
+          throw new Error('No connected receivers available');
         }
         producer.credit(chunk.packet.byteLength);
 

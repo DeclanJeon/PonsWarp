@@ -41,12 +41,13 @@ export function getPreferredDownloadStrategies(
 ): DownloadStrategy[] {
   const strategies: DownloadStrategy[] = [];
 
-  // 🚀 Headless/자동화: Blob/OPFS 우선 (StreamSaver/FSA 대화상자 회피)
+  // 🚀 Headless/자동화: OPFS first (streaming). Full-file Blob only for tiny
+  // fixtures — large Blob rebuilds thrash GC and cap throughput well below LAN.
   if (isHeadlessBrowser() || isAutomationDownloadMode()) {
-    if (shouldUseBlobFallbackBeforeStreaming(capability.fileSize)) {
+    strategies.push('opfs-fallback');
+    if (capability.fileSize > 0 && capability.fileSize <= 2 * 1024 * 1024) {
       strategies.push('blob-fallback');
     }
-    strategies.push('opfs-fallback');
     if (capability.hasFileSystemAccess) strategies.push('file-system-access');
     strategies.push('streamsaver');
     return strategies;

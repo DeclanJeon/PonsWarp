@@ -129,7 +129,7 @@ export class DirectFileWriter {
   private bulkDecryptWorker: BulkDecryptWorker | null = null;
   private bulkDecryptArmPromise: Promise<void> | null = null;
   private decryptInFlight = 0;
-  private static readonly MAX_DECRYPT_IN_FLIGHT = 24;
+  private static readonly MAX_DECRYPT_IN_FLIGHT = 48;
   private decryptWaiters: Array<() => void> = [];
   private randomPrefix: Uint8Array | null = null;
   private cryptoSession: CryptoSession | null = null;
@@ -1374,19 +1374,9 @@ export class DirectFileWriter {
     }
     // Off-main-thread decrypt when worker is armed.
     if (this.bulkDecryptWorker) {
-      try {
-        // Transfer a copy so main-thread fallback still has the original.
-        return await this.bulkDecryptWorker.decrypt(packet.slice(0));
-      } catch (error) {
-        logWarn(
-          '[DirectFileWriter]',
-          'Worker decrypt failed; falling back to main thread',
-          error
-        );
-        this.bulkDecryptWorker?.close();
-        this.bulkDecryptWorker = null;
-        // fall through to main-thread decrypt with original packet
-      }
+      // Transfer original buffer (zero-copy). On failure, packet is detached
+      // so we rethrow — worker is required once armed for encrypted bulk.
+      return await this.bulkDecryptWorker.decrypt(packet);
     }
 
     if (packet.byteLength < ENCRYPTED_HEADER_SIZE + AUTH_TAG_SIZE) {
