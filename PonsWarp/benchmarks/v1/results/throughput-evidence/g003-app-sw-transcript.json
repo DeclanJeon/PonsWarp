@@ -7,23 +7,22 @@
       "type": "navigate",
       "url": "https://warp.ponslink.com/app-sw.js",
       "selector": "body",
-      "timestamp": "2026-07-17T14:14:06.803232+00:00"
+      "timestamp": "2026-07-17T14:14:21.938917+00:00"
     },
     {
       "type": "assert",
       "url": "https://warp.ponslink.com/app-sw.js",
       "selector": "text=skipWaiting",
-      "timestamp": "2026-07-17T14:14:06.803232+00:00"
+      "timestamp": "2026-07-17T14:14:21.938917+00:00"
     },
     {
       "type": "assert",
       "url": "https://warp.ponslink.com/",
       "selector": "text=PonsWarp",
-      "timestamp": "2026-07-17T14:14:06.803232+00:00"
+      "timestamp": "2026-07-17T14:14:21.938917+00:00"
     }
   ],
   "result": {
-    "status": "passed",
-    "tests": "appUpdateService"
+    "status": "passed"
   }
 }
