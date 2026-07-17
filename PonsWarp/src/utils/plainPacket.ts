@@ -33,7 +33,10 @@ export function createPlainDataPacket(params: {
   view.setUint32(2, params.sequence, true);
   view.setBigUint64(6, BigInt(params.offset), true);
   view.setUint32(14, payload.byteLength, true);
-  view.setUint32(18, calculateCRC32(payload), true);
+  // CRC32 removed from hot path: reliable SCTP already retransmits, and
+  // AES-GCM (encrypted packets) authenticates ciphertext. Receiver never
+  // verified this field. Keep the 4-byte slot as zero for wire compatibility.
+  view.setUint32(18, 0, true);
   bytes.set(payload, HEADER_SIZE);
 
   return packet;

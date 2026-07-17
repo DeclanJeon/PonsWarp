@@ -5,7 +5,10 @@
  * - control: ordered JSON control plane
  * - bulk-0: ordered reliable binary bulk plane
  */
-import { LOW_WATER_MARK } from '../utils/constants';
+import {
+  LOW_WATER_MARK,
+  DRAIN_EVENT_WATCHDOG_MS,
+} from '../utils/constants';
 import {
   TransferDiagnostics,
   CandidatePathKind,
@@ -45,6 +48,9 @@ type CandidateStats = {
   candidateType?: string;
   protocol?: string;
   relayProtocol?: string;
+  address?: string;
+  ip?: string;
+  networkType?: string;
 };
 
 type CandidatePairStats = {
@@ -76,7 +82,7 @@ export class PeerSession {
   private control: RTCDataChannel | null = null;
   private bulkChannels: RTCDataChannel[] = [];
   private readonly bulkChannelCount: number;
-  private readonly lowWater: number;
+  private lowWater: number;
   private makingOffer = false;
   private ignoreOffer = false;
   private readonly polite: boolean;
@@ -314,7 +320,7 @@ export class PeerSession {
       if (bulk.bufferedAmount <= bulk.bufferedAmountLowThreshold) {
         this.emitDrainOnce();
       }
-    }, 100);
+    }, DRAIN_EVENT_WATCHDOG_MS);
   }
 
   private emitDrainOnce(): void {
@@ -330,6 +336,16 @@ export class PeerSession {
   private primaryBulk(): RTCDataChannel | null {
     return this.bulkChannels.find(c => c && c.readyState === 'open') ?? null;
   }
+
+  /** Path-aware water mark: elevated-RTT host uses a higher low-water. */
+  public setBufferedAmountLowThreshold(bytes: number): void {
+    const next = Math.max(64 * 1024, Math.floor(bytes));
+    this.lowWater = next;
+    for (const ch of this.bulkChannels) {
+      if (ch) ch.bufferedAmountLowThreshold = next;
+    }
+  }
+
 
   private async createAndSendOffer(): Promise<void> {
     if (!this.pc || this.destroyed) return;

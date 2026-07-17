@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HEADER_SIZE } from './constants';
-import { calculateCRC32, createEosPacket, createPlainDataPacket } from './plainPacket';
+import { createEosPacket, createPlainDataPacket } from './plainPacket';
 
 describe('plainPacket', () => {
   it('encodes the DirectFileWriter-compatible 22 byte data header', () => {
@@ -14,7 +14,7 @@ describe('plainPacket', () => {
     expect(view.getUint32(2, true)).toBe(7);
     expect(Number(view.getBigUint64(6, true))).toBe(1234);
     expect(view.getUint32(14, true)).toBe(payload.byteLength);
-    expect(view.getUint32(18, true)).toBe(calculateCRC32(payload));
+    expect(view.getUint32(18, true)).toBe(0); // CRC hot-path removed
     expect([...bytes.slice(HEADER_SIZE)]).toEqual([...payload]);
   });
 

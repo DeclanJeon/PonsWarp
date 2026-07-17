@@ -4,6 +4,7 @@ import {
   isElevatedHostRtt,
   DEFAULT_FLOW_CONTROL_PROFILE,
   DIRECT_HOST_TRANSFER_TUNING_PROFILE,
+  HOST_ELEVATED_RTT_TRANSFER_TUNING_PROFILE,
   DIRECT_SRFLX_TRANSFER_TUNING_PROFILE,
   RELAY_TRANSFER_TUNING_PROFILE,
   UNKNOWN_TRANSFER_TUNING_PROFILE,
@@ -370,5 +371,31 @@ describe('transferFlowControl', () => {
     expect(isElevatedHostRtt({ candidatePathKind: 'host', rttMs: 12 })).toBe(
       false
     );
+  });
+
+  it('selects elevated host profile for high RTT or CGNAT', () => {
+    expect(
+      selectTransferTuningProfile({
+        candidatePathKind: 'host',
+        rttMs: 328,
+      }).chunkSizeBytes
+    ).toBe(HOST_ELEVATED_RTT_TRANSFER_TUNING_PROFILE.chunkSizeBytes);
+    expect(
+      selectTransferTuningProfile({
+        candidatePathKind: 'host',
+        hostAddressScope: 'cgnat',
+        rttMs: 20,
+      }).chunkSizeBytes
+    ).toBe(64 * 1024);
+    expect(
+      selectTransferTuningProfile({
+        candidatePathKind: 'host',
+        hostAddressScope: 'lan',
+        rttMs: 12,
+      }).chunkSizeBytes
+    ).toBe(128 * 1024);
+    expect(
+      selectTransferTuningProfile({ candidatePathKind: 'relay' }).chunkSizeBytes
+    ).toBe(64 * 1024);
   });
 });

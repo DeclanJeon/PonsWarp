@@ -185,9 +185,10 @@ const KIB = 1024;
 const MIB = 1024 * KIB;
 const RECEIVER_PAUSE_HIGH_BYTES = 32 * MIB;
 const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
+/** Desktop LAN host: larger messages, fat SCTP queue. */
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
-  chunkSizeBytes: 240 * KIB,
+  chunkSizeBytes: 128 * KIB,
   minInFlightBytes: 6 * MIB,
   initialInFlightBytes: 12 * MIB,
   // High-RTT "host" (VPN/Tailscale) still needs a fat send queue for BDP.
@@ -198,16 +199,26 @@ export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
 };
+/** Elevated-RTT / CGNAT host: smaller chunks → more in-flight messages for BDP. */
+export const HOST_ELEVATED_RTT_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
+  ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
+  chunkSizeBytes: 64 * KIB,
+  minInFlightBytes: 8 * MIB,
+  initialInFlightBytes: 16 * MIB,
+  maxInFlightBytes: 24 * MIB,
+  lowWaterBytes: 4 * MIB,
+};
 export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'srflx',
+  chunkSizeBytes: 128 * KIB,
 };
 export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'relay',
   // Same-SSID mobile often selects TURN. Keep mid-transfer ACKs off and give
   // the relay path a real send window so it is not artificially capped.
-  chunkSizeBytes: 240 * KIB,
+  chunkSizeBytes: 64 * KIB,
   minInFlightBytes: 2 * MIB,
   initialInFlightBytes: 6 * MIB,
   maxInFlightBytes: 12 * MIB,
@@ -217,22 +228,26 @@ export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'unknown',
-  chunkSizeBytes: 240 * KIB,
+  chunkSizeBytes: 128 * KIB,
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
 };
 export function selectTransferTuningProfile(
   diagnostics?: Partial<TransferDiagnostics> | null
 ): TransferTuningProfile {
-  switch (diagnostics?.candidatePathKind) {
-    case 'host':
-      return DIRECT_HOST_TRANSFER_TUNING_PROFILE;
-    case 'srflx':
-      return DIRECT_SRFLX_TRANSFER_TUNING_PROFILE;
-    case 'relay':
-      return RELAY_TRANSFER_TUNING_PROFILE;
-    default:
-      return UNKNOWN_TRANSFER_TUNING_PROFILE;
+  const kind = diagnostics?.candidatePathKind;
+  if (kind === 'relay') return RELAY_TRANSFER_TUNING_PROFILE;
+  if (kind === 'srflx') return DIRECT_SRFLX_TRANSFER_TUNING_PROFILE;
+  if (kind === 'host') {
+    // VPN/Tailscale CGNAT or high-RTT host: more messages in flight.
+    if (
+      diagnostics?.hostAddressScope === 'cgnat' ||
+      isElevatedHostRtt(diagnostics)
+    ) {
+      return HOST_ELEVATED_RTT_TRANSFER_TUNING_PROFILE;
+    }
+    return DIRECT_HOST_TRANSFER_TUNING_PROFILE;
   }
+  return UNKNOWN_TRANSFER_TUNING_PROFILE;
 }
 /**
  * Host with high RTT is still "host" ICE type (VPN/Tailscale/CGNAT overlay,

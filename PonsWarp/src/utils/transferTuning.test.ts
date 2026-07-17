@@ -10,8 +10,8 @@ import {
 
 describe('transfer tuning constants', () => {
   it('uses browser-safe chunk and measured Chromium send-queue water marks', () => {
-    expect(CHUNK_SIZE_INITIAL).toBe(240 * 1024);
-    expect(CHUNK_SIZE_INITIAL).toBeLessThanOrEqual(256 * 1024);
+    expect(CHUNK_SIZE_INITIAL).toBe(128 * 1024);
+    expect(CHUNK_SIZE_INITIAL).toBeLessThanOrEqual(192 * 1024);
     // Keep the SCTP queue filled without multi-tens-of-MB overflow.
     expect(HIGH_WATER_MARK).toBe(12 * 1024 * 1024);
     expect(LOW_WATER_MARK).toBe(3 * 1024 * 1024);

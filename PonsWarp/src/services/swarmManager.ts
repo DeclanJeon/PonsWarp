@@ -32,6 +32,9 @@ import {
   CONNECTION_TIMEOUT_MS,
   HIGH_WATER_MARK,
   LOW_WATER_MARK,
+  PREPARE_AHEAD_BYTES,
+  PROGRESS_EMIT_MIN_INTERVAL_MS,
+  PROGRESS_EMIT_MIN_CHUNKS,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
@@ -1172,6 +1175,14 @@ export class SwarmManager {
         '[SwarmManager]',
         `Elevated host RTT ${selected.rttMs}ms scope=${selected.hostAddressScope ?? '?'} — using max window ${this.currentInFlightTargetBytes}`
       );
+    }
+    // Keep bulk DataChannel low-water aligned with path profile.
+    const lowWater = this.currentTransferTuningProfile.lowWaterBytes;
+    for (const peerId of this.currentTransferPeers) {
+      const peer = this.peers.get(peerId) as
+        | { setBufferedAmountLowThreshold?: (n: number) => void }
+        | undefined;
+      peer?.setBufferedAmountLowThreshold?.(lowWater);
     }
     if (selected.candidateTuple) {
       this.hostRouteSamples = [
@@ -3003,7 +3014,10 @@ export class SwarmManager {
       chunksSinceProgress++;
 
       const now = performance.now();
-      if (chunksSinceProgress >= 16 || now - lastProgressAt >= 100) {
+      if (
+        chunksSinceProgress >= PROGRESS_EMIT_MIN_CHUNKS ||
+        now - lastProgressAt >= PROGRESS_EMIT_MIN_INTERVAL_MS
+      ) {
         this.emitProgress();
         chunksSinceProgress = 0;
         lastProgressAt = now;
@@ -3182,8 +3196,14 @@ export class SwarmManager {
       let planSequence = cursor.sequence;
       let chunksSinceProgress = 0;
       let lastProgressAt = performance.now();
-      // 암호화/읽기를 충분히 앞서 돌려 DataChannel을 굶기지 않는다.
-      const PREPARE_AHEAD = 96;
+      // Bound prepared ciphertext memory, not a fixed packet count.
+      // Smaller chunks on high-RTT host still keep the pipe full without
+      // holding 96 × 240KiB of encrypted packets in RAM.
+      const chunkBytes = Math.max(16 * 1024, this.getCurrentChunkSizeBytes());
+      const PREPARE_AHEAD = Math.max(
+        16,
+        Math.min(128, Math.floor(PREPARE_AHEAD_BYTES / chunkBytes))
+      );
 
       const nextDescriptor = (): Descriptor | null => {
         while (
@@ -3314,7 +3334,10 @@ export class SwarmManager {
           chunksSinceProgress++;
 
           const now = performance.now();
-          if (chunksSinceProgress >= 16 || now - lastProgressAt >= 100) {
+          if (
+            chunksSinceProgress >= PROGRESS_EMIT_MIN_CHUNKS ||
+            now - lastProgressAt >= PROGRESS_EMIT_MIN_INTERVAL_MS
+          ) {
             this.emitProgress();
             chunksSinceProgress = 0;
             lastProgressAt = now;

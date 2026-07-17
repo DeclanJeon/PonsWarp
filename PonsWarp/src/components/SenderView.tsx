@@ -53,6 +53,7 @@ type SenderProgressPayload = {
   bytesTransferred?: number;
   totalBytes?: number;
   candidatePathKind?: string;
+  hostAddressScope?: string | null;
   protocol?: string | null;
   relayProtocol?: string | null;
   rttMs?: number | null;

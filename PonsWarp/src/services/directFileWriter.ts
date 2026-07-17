@@ -1559,7 +1559,7 @@ export class DirectFileWriter {
    */
   private reportProgress(): void {
     const now = Date.now();
-    if (now - this.lastProgressTime < 150) return;
+    if (now - this.lastProgressTime < 200) return;
 
     const visibleProgress = calculateReceiverBufferedProgress({
       bytesWritten: this.totalBytesWritten,

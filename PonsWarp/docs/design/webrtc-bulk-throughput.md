@@ -790,3 +790,36 @@ If raw bench itself is ~3 MB/s on that Wi-Fi pair, the network/browser is the ce
 ## 16. One-sentence contract
 
 **Same-Wi-Fi transfers must be limited by the radio and the browser SCTP stack, not by app-level ACK barriers, AIMD, single mixed ordered channels, or a main-thread pipeline that killed its own worker.**
+
+---
+
+## 17. External review alignment (ChatGPT share 6a59c81a)
+
+Source: https://chatgpt.com/share/6a59c81a-b268-83ee-8b19-8e77d9ab0911
+
+Mapped recommendations → PonsWarp status after this pass:
+
+| Recommendation | Status | Notes |
+|----------------|--------|-------|
+| P0 remove per-chunk ACK | **done** | Partitioned path only; SCTP reliability |
+| P0 remove ACK window=4 | **done** | No app chunk ACK window |
+| P0 setTimeout(100ms) buffer wait → bufferedamountlow | **done** | Event + 25ms watchdog fallback |
+| P0 remove 500ms meta delay | **done** | 20ms settle at EOS only |
+| P0 ICE path in UI/logs | **done** | path/protocol/rtt/hostAddressScope |
+| P0 disk stream receive | **done** | DirectFileWriter FSA/OPFS/StreamSaver |
+| P1 chunk not fixed 240KiB | **done** | 128KiB host, 64KiB relay/high-RTT |
+| P1 control vs bulk channels | **done** | PeerSession control + bulk-0 |
+| P1 multi bulk channels | freeze | BULK_CHANNEL_COUNT=1 until proven |
+| P1 crypto/CRC off main | partial | WebCrypto AES-GCM; CRC removed on hot path |
+| P1 UI throttle 4–10 Hz | **done** | 200ms / 32 chunks |
+| P1 bounded prepare-ahead | **done** | PREPARE_AHEAD_BYTES=12MiB |
+| P2 adaptive profiles | **done** | host / elevated-host / srflx / relay |
+| P2 hybrid/WebTransport | later | hybrid hard-off on hot path; WebTransport not for browser-browser P2P |
+
+Design principles reinforced by the review:
+
+1. **One congestion controller** — SCTP only; app paces on `bufferedAmount`.
+2. **No app stop-and-wait** on bulk except resume checkpoints.
+3. **Path-aware knobs** — high-RTT host is not LAN host.
+4. **Bounded memory pipeline** — prepare-ahead by bytes, not unbounded count.
+5. **Separate control plane** — never mix large bulk with control on one channel.
