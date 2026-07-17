@@ -1,59 +1,157 @@
 import { FileNode, TransferManifest } from '../types/types';
 import { ScannedFile } from './fileScanner';
 
-// ScannedFile[] -> TransferManifest 변환 (새로운 방식)
+const MANIFEST_YIELD_EVERY = 512;
+
+async function yieldToMain(): Promise<void> {
+  await new Promise<void>(resolve => {
+    const scheduler = (
+      globalThis as { scheduler?: { yield?: () => Promise<void> } }
+    ).scheduler;
+    if (typeof scheduler?.yield === 'function') {
+      void scheduler.yield().then(
+        () => resolve(),
+        () => resolve()
+      );
+      return;
+    }
+    if (typeof MessageChannel !== 'undefined') {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => resolve();
+      channel.port2.postMessage(null);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
+function resolveRootMeta(scannedFiles: ScannedFile[]): {
+  rootName: string;
+  isFolder: boolean;
+} {
+  if (scannedFiles.length === 0) {
+    return { rootName: 'Transfer', isFolder: false };
+  }
+
+  const firstPath = scannedFiles[0].path;
+  if (firstPath.includes('/')) {
+    return { rootName: firstPath.split('/')[0] || 'Transfer', isFolder: true };
+  }
+  if (scannedFiles.length > 1) {
+    return {
+      rootName: `Files (${scannedFiles.length})`,
+      isFolder: true,
+    };
+  }
+  return {
+    rootName: scannedFiles[0].file.name,
+    isFolder: false,
+  };
+}
+
+/**
+ * Sync manifest build — fine for small selections / unit helpers.
+ * Large mobile multi-select should use `createManifestProgressive`.
+ */
 export const createManifest = (
   scannedFiles: ScannedFile[]
 ): { manifest: TransferManifest; files: File[] } => {
-  const fileNodes: FileNode[] = [];
+  const count = scannedFiles.length;
+  const fileNodes: FileNode[] = new Array(count);
+  const rawFiles: File[] = new Array(count);
   let totalSize = 0;
-  const rawFiles: File[] = [];
 
-  scannedFiles.forEach((item, index) => {
+  for (let index = 0; index < count; index++) {
+    const item = scannedFiles[index];
     totalSize += item.file.size;
-    rawFiles.push(item.file);
-
-    fileNodes.push({
+    rawFiles[index] = item.file;
+    fileNodes[index] = {
       id: index,
       name: item.file.name,
-      path: item.path, // 스캐너가 정제한 전체 경로
+      path: item.path,
       size: item.file.size,
       type: item.file.type || 'application/octet-stream',
       lastModified: item.file.lastModified,
-    });
-  });
-
-  // Root Name 및 폴더 여부 판단
-  let rootName = 'Transfer';
-  let isFolder = false;
-
-  if (scannedFiles.length > 0) {
-    const firstPath = scannedFiles[0].path;
-    if (firstPath.includes('/')) {
-      // 경로에 슬래시가 있으면 폴더 구조임
-      rootName = firstPath.split('/')[0];
-      isFolder = true;
-    } else if (scannedFiles.length > 1) {
-      // 파일이 여러 개지만 최상위 경로가 없으면 'Multi-Files'
-      rootName = `Files (${scannedFiles.length})`;
-      isFolder = true; // ZIP으로 묶어야 함
-    } else {
-      // 단일 파일
-      rootName = scannedFiles[0].file.name;
-      isFolder = false;
-    }
+    };
   }
+
+  const { rootName, isFolder } = resolveRootMeta(scannedFiles);
 
   const manifest: TransferManifest = {
     transferId: `warp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
     totalSize,
-    totalFiles: scannedFiles.length,
+    totalFiles: count,
     rootName,
     files: fileNodes,
     isFolder,
-    // 🚨 [추가] ZIP 모드일 경우 정확한 크기를 알 수 없음
-    // Receiver는 이 플래그를 보고 StreamSaver 설정을 조정할 수 있음
-    isSizeEstimated: isFolder || scannedFiles.length > 1,
+    // ZIP / multi-file: receiver may treat size as estimated for StreamSaver.
+    isSizeEstimated: isFolder || count > 1,
+  };
+
+  return { manifest, files: rawFiles };
+};
+
+/**
+ * Progressive manifest build for large mobile selections.
+ * Yields to the main thread so the SCANNING UI stays alive while building
+ * thousands of FileNode entries.
+ */
+export const createManifestProgressive = async (
+  scannedFiles: ScannedFile[],
+  options: {
+    yieldEvery?: number;
+    signal?: AbortSignal;
+    onProgress?: (built: number, total: number) => void;
+  } = {}
+): Promise<{ manifest: TransferManifest; files: File[] }> => {
+  const count = scannedFiles.length;
+  if (count === 0) {
+    return createManifest(scannedFiles);
+  }
+  // Small lists: avoid async tax.
+  if (count <= MANIFEST_YIELD_EVERY) {
+    return createManifest(scannedFiles);
+  }
+
+  const yieldEvery = Math.max(64, options.yieldEvery ?? MANIFEST_YIELD_EVERY);
+  const fileNodes: FileNode[] = new Array(count);
+  const rawFiles: File[] = new Array(count);
+  let totalSize = 0;
+
+  for (let index = 0; index < count; index++) {
+    if (options.signal?.aborted) {
+      throw new DOMException('Manifest build aborted', 'AbortError');
+    }
+    const item = scannedFiles[index];
+    totalSize += item.file.size;
+    rawFiles[index] = item.file;
+    fileNodes[index] = {
+      id: index,
+      name: item.file.name,
+      path: item.path,
+      size: item.file.size,
+      type: item.file.type || 'application/octet-stream',
+      lastModified: item.file.lastModified,
+    };
+
+    const built = index + 1;
+    if (built % yieldEvery === 0 || built === count) {
+      options.onProgress?.(built, count);
+      if (built < count) {
+        await yieldToMain();
+      }
+    }
+  }
+
+  const { rootName, isFolder } = resolveRootMeta(scannedFiles);
+  const manifest: TransferManifest = {
+    transferId: `warp_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    totalSize,
+    totalFiles: count,
+    rootName,
+    files: fileNodes,
+    isFolder,
+    isSizeEstimated: isFolder || count > 1,
   };
 
   return { manifest, files: rawFiles };

@@ -25,12 +25,12 @@ import {
 import {
   scanFiles,
   processInputFiles,
-  snapshotFileList,
+  snapshotFileListProgressive,
   ScannedFile,
   FileScanProgress,
 } from '../utils/fileScanner';
 import { getErrorMessage } from '../utils/errors';
-import { createManifest, formatBytes } from '../utils/fileUtils';
+import { createManifestProgressive, formatBytes } from '../utils/fileUtils';
 import {
   estimateRemainingSeconds,
   formatRemainingTime,
@@ -202,26 +202,55 @@ const CloudSenderView: React.FC = () => {
   }, []);
 
   const handleScanProgress = (progress: FileScanProgress) => {
-    setScanProgress(progress);
+    setScanProgress(prev => {
+      if (
+        prev &&
+        progress.phase === 'listing' &&
+        progress.scannedFiles - (prev.scannedFiles || 0) < 64 &&
+        progress.totalHint === prev.totalHint
+      ) {
+        return prev;
+      }
+      return progress;
+    });
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Snapshot first: input.value = '' clears the live FileList.
-    const fileList = snapshotFileList(e.target.files);
-    e.target.value = '';
-    if (fileList.length === 0) return;
+    // Progressive snapshot first: input.value = '' clears the live FileList.
+    const live = e.target.files;
+    const totalHint = live?.length ?? 0;
+    if (!live || totalHint === 0) {
+      e.target.value = '';
+      return;
+    }
     setScanProgress({
       scannedFiles: 0,
-      totalHint: fileList.length,
+      totalHint,
       phase: 'listing',
     });
     setStatus('SCANNING');
     try {
+      const fileList = await snapshotFileListProgressive(live, {
+        onProgress: progress => {
+          setScanProgress(prev => ({
+            scannedFiles: prev?.scannedFiles ?? 0,
+            totalHint: progress.totalHint ?? totalHint,
+            phase: 'listing',
+          }));
+        },
+      });
+      e.target.value = '';
+      if (fileList.length === 0) {
+        setScanProgress(null);
+        setStatus('IDLE');
+        return;
+      }
       const scanned = await processInputFiles(fileList, {
         onProgress: handleScanProgress,
       });
       await processScannedFiles(scanned);
     } catch (error) {
+      e.target.value = '';
       if ((error as DOMException)?.name === 'AbortError') return;
       setScanProgress(null);
       setStatus('ERROR');
@@ -242,7 +271,9 @@ const CloudSenderView: React.FC = () => {
         return;
       }
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const dropped = snapshotFileList(e.dataTransfer.files);
+        const dropped = await snapshotFileListProgressive(e.dataTransfer.files, {
+          onProgress: handleScanProgress,
+        });
         const scanned = await processInputFiles(dropped, {
           onProgress: handleScanProgress,
         });
@@ -271,7 +302,9 @@ const CloudSenderView: React.FC = () => {
       phase: 'done',
     });
 
-    const { manifest: nextManifest } = createManifest(scannedFiles);
+    const { manifest: nextManifest } = await createManifestProgressive(
+      scannedFiles
+    );
     const oversizedFile = scannedFiles.find(
       item => item.file.size > freePlan.maxFileBytes
     );

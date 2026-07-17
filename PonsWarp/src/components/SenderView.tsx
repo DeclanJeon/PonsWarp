@@ -20,11 +20,11 @@ import {
 } from 'lucide-react';
 import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
 import { lanEvidenceAdapter } from '../services/lanEvidenceAdapter';
-import { createManifest, formatBytes } from '../utils/fileUtils';
+import { createManifestProgressive, formatBytes } from '../utils/fileUtils';
 import {
   scanFiles,
   processInputFiles,
-  snapshotFileList,
+  snapshotFileListProgressive,
   ScannedFile,
   FileScanProgress,
 } from '../utils/fileScanner';
@@ -412,26 +412,57 @@ const SenderView: React.FC<SenderViewProps> = () => {
   }, [setTransferStatus]);
 
   const handleScanProgress = useCallback((progress: FileScanProgress) => {
-    setScanProgress(progress);
+    // Throttle React updates on multi-thousand mobile selections.
+    setScanProgress(prev => {
+      if (
+        prev &&
+        progress.phase === 'listing' &&
+        progress.scannedFiles - (prev.scannedFiles || 0) < 64 &&
+        progress.totalHint === prev.totalHint
+      ) {
+        return prev;
+      }
+      return progress;
+    });
   }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Snapshot first: input.value = '' clears the live FileList.
-    const fileList = snapshotFileList(e.target.files);
-    e.target.value = '';
-    if (fileList.length === 0) return;
+    // Progressive snapshot first: input.value = '' clears the live FileList.
+    const live = e.target.files;
+    const totalHint = live?.length ?? 0;
+    if (!live || totalHint === 0) {
+      e.target.value = '';
+      return;
+    }
     setScanProgress({
       scannedFiles: 0,
-      totalHint: fileList.length,
+      totalHint,
       phase: 'listing',
     });
     setTransferStatus('SCANNING');
     try {
+      const fileList = await snapshotFileListProgressive(live, {
+        onProgress: progress => {
+          // During snapshot we only know totalHint; keep UI alive.
+          setScanProgress(prev => ({
+            scannedFiles: prev?.scannedFiles ?? 0,
+            totalHint: progress.totalHint ?? totalHint,
+            phase: 'listing',
+          }));
+        },
+      });
+      e.target.value = '';
+      if (fileList.length === 0) {
+        setScanProgress(null);
+        setTransferStatus('IDLE');
+        return;
+      }
       const scannedFiles = await processInputFiles(fileList, {
         onProgress: handleScanProgress,
       });
       await processScannedFiles(scannedFiles);
     } catch (error) {
+      e.target.value = '';
       if ((error as DOMException)?.name === 'AbortError') return;
       console.error('[SenderView] file scan failed:', error);
       setScanProgress(null);
@@ -473,7 +504,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
         });
         await processScannedFiles(scannedFiles);
       } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const dropped = snapshotFileList(e.dataTransfer.files);
+        const dropped = await snapshotFileListProgressive(e.dataTransfer.files, {
+          onProgress: handleScanProgress,
+        });
         const scannedFiles = await processInputFiles(dropped, {
           onProgress: handleScanProgress,
         });
@@ -507,8 +540,16 @@ const SenderView: React.FC<SenderViewProps> = () => {
         : { scannedFiles: scannedFiles.length, phase: 'done' }
     );
 
-    // Manifest 생성
-    const { manifest, files } = createManifest(scannedFiles);
+    // Progressive manifest build keeps large mobile selections off the long-task path.
+    const { manifest, files } = await createManifestProgressive(scannedFiles, {
+      onProgress: (built, total) => {
+        setScanProgress({
+          scannedFiles: built,
+          totalHint: total,
+          phase: built >= total ? 'done' : 'listing',
+        });
+      },
+    });
     setManifest(manifest);
 
     debugLog('[SenderView] 📊 [DEBUG] Manifest created:', {
