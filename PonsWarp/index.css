@@ -140,5 +140,15 @@ html.transfer-active body,
 html.transfer-active #root {
   overscroll-behavior-y: none;
   overscroll-behavior: none;
+  /* Allow vertical scroll inside panels, block browser navigation gestures. */
   touch-action: pan-x pan-y;
+  overscroll-behavior-x: none;
+}
+
+/* Soft visual lock: sticky transfer chrome stays readable while locked. */
+html.transfer-active body {
+  /* iOS Safari: reduce rubber-band that can trigger reload */
+  position: relative;
+  height: 100%;
+  overflow: hidden;
 }

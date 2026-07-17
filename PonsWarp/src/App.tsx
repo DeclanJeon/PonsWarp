@@ -24,7 +24,11 @@ import { StatusOverlay } from './components/ui/StatusOverlay';
 import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
 import { normalizeRoomCodeInput } from './utils/roomCode';
-import { usePreventNavigation, isTransferSessionActive } from './hooks/usePreventNavigation';
+import {
+  usePreventNavigation,
+  isTransferSessionActive,
+  leaveTransferSessionIfConfirmed,
+} from './hooks/usePreventNavigation';
 
 const SpaceField = lazy(() => import('./components/SpaceField'));
 
@@ -146,14 +150,11 @@ const App: React.FC = () => {
         <header
           className="absolute top-0 left-0 w-full px-5 py-5 md:px-10 md:py-8 z-50 flex items-center justify-between cursor-pointer"
           onClick={() => {
-            const current = useTransferStore.getState();
-            if (isTransferSessionActive(current.mode, current.status)) {
-              toast.error('Transfer in progress — finish or cancel before leaving.');
-              return;
-            }
-            setCloudShareId(null);
-            setMode(AppMode.INTRO);
-            window.history.pushState({}, '', '/');
+            leaveTransferSessionIfConfirmed(() => {
+              setCloudShareId(null);
+              setMode(AppMode.INTRO);
+              window.history.pushState({}, '', '/');
+            });
           }}
         >
           <div className="flex items-center gap-2 md:gap-4 hover:opacity-80 transition-opacity">
@@ -342,7 +343,11 @@ const App: React.FC = () => {
                 )}
 
                 <button
-                  onClick={() => setMode(AppMode.SELECTION)}
+                  onClick={() => {
+                    leaveTransferSessionIfConfirmed(() => {
+                      setMode(AppMode.SELECTION);
+                    });
+                  }}
                   className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
                   Abort Mission
@@ -361,7 +366,11 @@ const App: React.FC = () => {
                 <CloudSenderView />
 
                 <button
-                  onClick={() => setMode(AppMode.SELECTION)}
+                  onClick={() => {
+                    leaveTransferSessionIfConfirmed(() => {
+                      setMode(AppMode.SELECTION);
+                    });
+                  }}
                   className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
                   Close Drop
@@ -381,9 +390,11 @@ const App: React.FC = () => {
 
                 <button
                   onClick={() => {
-                    setCloudShareId(null);
-                    setMode(AppMode.SELECTION);
-                    window.history.pushState({}, '', '/');
+                    leaveTransferSessionIfConfirmed(() => {
+                      setCloudShareId(null);
+                      setMode(AppMode.SELECTION);
+                      window.history.pushState({}, '', '/');
+                    });
                   }}
                   className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
@@ -410,8 +421,10 @@ const App: React.FC = () => {
 
                 <button
                   onClick={() => {
-                    setMode(AppMode.SELECTION);
-                    setRoomId(null);
+                    leaveTransferSessionIfConfirmed(() => {
+                      setMode(AppMode.SELECTION);
+                      setRoomId(null);
+                    });
                   }}
                   className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
                 >
