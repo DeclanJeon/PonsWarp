@@ -35,6 +35,7 @@ import {
   PREPARE_AHEAD_BYTES,
   PROGRESS_EMIT_MIN_INTERVAL_MS,
   PROGRESS_EMIT_MIN_CHUNKS,
+  CHUNK_SIZE_INITIAL,
   USE_BULK_ENCRYPT_WORKER,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
@@ -526,6 +527,53 @@ export class SwarmManager {
         '[SwarmManager]',
         `Failed to send CRYPTO_SESSION to ${peer.id}`
       );
+    }
+  }
+
+  /**
+   * Re-import AES-GCM key material for partitioned bulk encrypt.
+   * Safe after GC, peer recovery, or resume when CryptoKey was dropped.
+   */
+  private async ensurePartitionCryptoKey(): Promise<CryptoKey | null> {
+    if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
+      return null;
+    }
+    if (this.partitionCryptoKey) {
+      return this.partitionCryptoKey;
+    }
+    const sessionKeyBytes = new Uint8Array(this.sessionKey);
+    const keyCopy = new Uint8Array(sessionKeyBytes.byteLength);
+    keyCopy.set(sessionKeyBytes);
+    this.partitionCryptoKey = await crypto.subtle.importKey(
+      'raw',
+      keyCopy,
+      { name: 'AES-GCM' },
+      false,
+      ['encrypt']
+    );
+    logInfo('[SwarmManager]', '🔐 Partition crypto key re-imported');
+    return this.partitionCryptoKey;
+  }
+
+  /**
+   * Nonce counters are monotonic per transfer. On resume, advance past any
+   * counters that may have been used for already-accepted bytes so AES-GCM
+   * nonces never reuse under the same session key.
+   */
+  private advancePartitionNonceForResume(startOffset: number): void {
+    if (!this.isEncryptionEnabled() || startOffset <= 0) return;
+    const chunkSize = Math.max(
+      1,
+      this.currentTransferTuningProfile?.chunkSize ?? CHUNK_SIZE_INITIAL
+    );
+    // Conservative lower bound: one nonce per max-sized chunk up to offset.
+    const minCounter = Math.ceil(startOffset / chunkSize);
+    if (this.partitionNonceCounter < minCounter) {
+      logInfo(
+        '[SwarmManager]',
+        `🔐 Advancing partition nonce counter ${this.partitionNonceCounter} → ${minCounter} for resume @${startOffset}`
+      );
+      this.partitionNonceCounter = minCounter;
     }
   }
 
@@ -1386,6 +1434,11 @@ export class SwarmManager {
     this.totalBytesSent = msg.offset;
     this.transferStartTime = performance.now();
     this.transferSpeedMeter.reset(msg.offset, this.transferStartTime);
+
+    // Force CRYPTO_SESSION rebind before bulk resumes so a recreated or
+    // backgrounded receiver never decrypts with a missing/stale key.
+    this.ensureTransferEncryption();
+    this.sendCryptoSessionToPeer(peer, { force: true });
 
     this.requestTransferStart({
       offset: msg.offset,
@@ -2845,10 +2898,17 @@ export class SwarmManager {
     if (startOffset === 0) {
       this.partitionCryptoKey = null;
       this.partitionNonceCounter = 0;
-    } else if (this.isEncryptionEnabled() && !this.partitionCryptoKey) {
-      throw new Error(
-        'Cannot resume encrypted transfer without an active crypto key'
-      );
+    } else if (this.isEncryptionEnabled()) {
+      // Resume after screen-off / peer recovery may drop CryptoKey while
+      // sessionKey bytes are still held. Re-import instead of aborting.
+      this.ensureTransferEncryption();
+      this.advancePartitionNonceForResume(startOffset);
+      const key = await this.ensurePartitionCryptoKey();
+      if (!key) {
+        throw new Error(
+          'Cannot resume encrypted transfer without an active crypto key'
+        );
+      }
     }
     this.transferStartTime = performance.now();
     this.transferSpeedMeter.reset(startOffset, this.transferStartTime);
@@ -3178,19 +3238,9 @@ export class SwarmManager {
       return createPlainDataPacket(params);
     }
 
+    await this.ensurePartitionCryptoKey();
     if (!this.partitionCryptoKey) {
-      // Copy into a standalone ArrayBuffer — SharedArrayBuffer-backed views
-      // and detached slices fail SubtleCrypto in some test/runtime paths.
-      const sessionKeyBytes = new Uint8Array(this.sessionKey);
-      const keyCopy = new Uint8Array(sessionKeyBytes.byteLength);
-      keyCopy.set(sessionKeyBytes);
-      this.partitionCryptoKey = await crypto.subtle.importKey(
-        'raw',
-        keyCopy,
-        { name: 'AES-GCM' },
-        false,
-        ['encrypt']
-      );
+      throw new Error('Encrypted packet requires an active crypto key');
     }
 
     const nonceCounter = params.nonceCounter ?? this.partitionNonceCounter++;
