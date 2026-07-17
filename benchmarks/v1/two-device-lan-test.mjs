@@ -106,6 +106,15 @@ async function main() {
   const rctx =
     receiverBrowser.contexts()[0] || (await receiverBrowser.newContext());
   const receiver = rctx.pages()[0] || (await rctx.newPage());
+  const logs = { sender: [], receiver: [] };
+  for (const [name, page] of [['sender', sender], ['receiver', receiver]]) {
+    page.on('console', msg => {
+      logs[name].push(`[console.${msg.type()}] ${msg.text()}`);
+    });
+    page.on('pageerror', err => {
+      logs[name].push(`[pageerror] ${err.message}`);
+    });
+  }
 
   try {
     const cdp = await rctx.newCDPSession(receiver);
@@ -216,6 +225,8 @@ async function main() {
     samples,
     senderTail: lastSend.split('\n').slice(0, 30),
     receiverTail: lastRecv.split('\n').slice(0, 30),
+    senderLogs: logs.sender.slice(-40),
+    receiverLogs: logs.receiver.slice(-40),
   };
   writeFileSync(
     '/tmp/ponswarp-lan-test-result.json',

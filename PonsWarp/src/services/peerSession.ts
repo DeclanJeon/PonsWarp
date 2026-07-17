@@ -161,7 +161,14 @@ export class PeerSession {
     this.pc.onconnectionstatechange = () => {
       if (!this.pc || this.destroyed) return;
       const state = this.pc.connectionState;
-      if (state === 'failed' || state === 'closed') {
+      if (state === 'failed') {
+        this.connected = false;
+        this.emit(
+          'error',
+          new Error(`Peer connection failed on ${this.id}`)
+        );
+        this.emit('close');
+      } else if (state === 'closed') {
         this.connected = false;
         this.emit('close');
       } else if (state === 'disconnected') {
@@ -214,7 +221,19 @@ export class PeerSession {
         }
       };
       channel.onerror = () => {
-        this.emit('error', new Error(`Control channel error on ${this.id}`));
+        // RTCDataChannel "error" often fires during ICE teardown / renegotiation.
+        // Do not hard-fail the peer unless the PC is already failed.
+        const pcState = this.pc?.connectionState;
+        logError(
+          `[Peer ${this.id}]`,
+          `Control channel error (pc=${pcState ?? 'n/a'}, ch=${channel.readyState})`
+        );
+        if (pcState === 'failed' || pcState === 'closed') {
+          this.emit(
+            'error',
+            new Error(`Control channel error on ${this.id}`)
+          );
+        }
       };
       channel.onmessage = event => {
         const data = event.data;
@@ -252,7 +271,14 @@ export class PeerSession {
         }
       };
       channel.onerror = () => {
-        this.emit('error', new Error(`Bulk channel error on ${this.id}`));
+        const pcState = this.pc?.connectionState;
+        logError(
+          `[Peer ${this.id}]`,
+          `Bulk channel error (pc=${pcState ?? 'n/a'}, ch=${channel.readyState})`
+        );
+        if (pcState === 'failed' || pcState === 'closed') {
+          this.emit('error', new Error(`Bulk channel error on ${this.id}`));
+        }
       };
       channel.onmessage = event => {
         const data = event.data;
