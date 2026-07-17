@@ -2955,6 +2955,8 @@ export class SwarmManager {
     this.hybridBytesUploaded = 0;
     this.hybridPackets = [];
     this.hybridPrebuilt = false;
+    // Default WebRTC-direct. Path-aware hybrid may arm after ICE diagnostics
+    // for relay/elevated-RTT/slow paths only — never blocks LAN host primary.
     this.hybridArmed = false;
     this.hybridArmReason = 'webrtc-direct';
 
@@ -2969,11 +2971,15 @@ export class SwarmManager {
     this.emit('status', 'TRANSFERRING');
     this.startAdaptiveControl();
     // Sample path once for UI/diagnostics; do not stall the send pipeline.
-    void this.sampleAdaptiveStats().catch(() => {});
+    void this.sampleAdaptiveStats()
+      .catch(() => {})
+      .finally(() => {
+        this.evaluateHybridArmingForCurrentPath();
+      });
     const pathKind = this.currentTransferDiagnostics.candidatePathKind;
     logInfo(
       '[SwarmManager]',
-      `Transfer path: ${pathKind} protocol=${this.currentTransferDiagnostics.protocol ?? '?'} rtt=${this.currentTransferDiagnostics.rttMs ?? '?'} mode=webrtc-direct`
+      `Transfer path: ${pathKind} protocol=${this.currentTransferDiagnostics.protocol ?? '?'} rtt=${this.currentTransferDiagnostics.rttMs ?? '?'} mode=webrtc-direct hybrid=${this.hybridArmReason}`
     );
 
     try {
@@ -4188,6 +4194,38 @@ export class SwarmManager {
       hybridArmReason: this.hybridArmReason,
       hybridBytesUploaded: this.hybridBytesUploaded,
     };
+  }
+
+
+  private evaluateHybridArmingForCurrentPath(observedMBps?: number | null): void {
+    if (!this.pendingManifest) return;
+    const decision = shouldArmHybrid({
+      remoteCaps: this.remoteHybridCaps,
+      totalBytes: this.pendingManifest.totalSize,
+      cloudApiConfigured: cloudApiConfigured(),
+      pathKind: this.currentTransferDiagnostics.candidatePathKind,
+      rttMs: this.currentTransferDiagnostics.rttMs,
+      observedMBps: observedMBps ?? null,
+    });
+    const prev = this.hybridArmed;
+    this.hybridArmed = decision.armed;
+    this.hybridArmReason = decision.reason;
+    if (decision.armed && !prev) {
+      logInfo(
+        '[SwarmManager]',
+        `Hybrid assist ARMED (${decision.reason}) path=${this.currentTransferDiagnostics.candidatePathKind} rtt=${this.currentTransferDiagnostics.rttMs ?? '?'}`
+      );
+    } else if (!decision.armed && prev) {
+      logInfo(
+        '[SwarmManager]',
+        `Hybrid assist disarmed (${decision.reason})`
+      );
+    } else {
+      logDebug(
+        '[SwarmManager]',
+        `Hybrid arm decision: armed=${decision.armed} reason=${decision.reason}`
+      );
+    }
   }
 
   private emitProgress(progressData: WorkerProgressData = {}): void {

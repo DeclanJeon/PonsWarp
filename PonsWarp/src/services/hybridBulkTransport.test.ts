@@ -20,11 +20,20 @@ describe('hybridBulkTransport framing', () => {
   it('rejects truncated frames', () => {
     const framed = frameHybridPackets([new Uint8Array([1, 2, 3, 4]).buffer]);
     const truncated = framed.slice(0, 6).buffer;
-    expect(() => parseHybridFramedObject(truncated)).toThrow(/Invalid hybrid frame/);
+    expect(() => parseHybridFramedObject(truncated)).toThrow(
+      /Invalid hybrid frame/
+    );
   });
 });
 
 describe('hybridBulkTransport arming', () => {
+  const base = {
+    compileEnabled: true,
+    remoteCaps: { hybridHttp: true, version: 1 as const },
+    totalBytes: 20 * 1024 * 1024,
+    cloudApiConfigured: true,
+  };
+
   it('requires compile flag, cloud, remote caps, and min size', () => {
     expect(
       shouldArmHybrid({
@@ -34,7 +43,6 @@ describe('hybridBulkTransport arming', () => {
         cloudApiConfigured: true,
       }).armed
     ).toBe(false);
-
     expect(
       shouldArmHybrid({
         compileEnabled: true,
@@ -43,7 +51,6 @@ describe('hybridBulkTransport arming', () => {
         cloudApiConfigured: true,
       }).reason
     ).toBe('remote-caps-missing');
-
     expect(
       shouldArmHybrid({
         compileEnabled: true,
@@ -53,14 +60,70 @@ describe('hybridBulkTransport arming', () => {
         minBytes: 8 * 1024 * 1024,
       }).armed
     ).toBe(false);
+  });
+
+  it('keeps healthy LAN host/srflx on WebRTC-direct (no hybrid)', () => {
+    expect(
+      shouldArmHybrid({
+        ...base,
+        pathKind: 'host',
+        rttMs: 12,
+        observedMBps: 12,
+      })
+    ).toMatchObject({ armed: false, reason: 'direct-path:host' });
 
     expect(
       shouldArmHybrid({
-        compileEnabled: true,
-        remoteCaps: { hybridHttp: true, version: 1 },
-        totalBytes: 20 * 1024 * 1024,
-        cloudApiConfigured: true,
+        ...base,
+        pathKind: 'srflx',
+        rttMs: 30,
       })
-    ).toEqual({ armed: true, reason: 'ok' });
+    ).toMatchObject({ armed: false, reason: 'direct-path:srflx' });
+  });
+
+  it('arms on TURN relay paths', () => {
+    expect(
+      shouldArmHybrid({
+        ...base,
+        pathKind: 'relay',
+      })
+    ).toMatchObject({ armed: true, reason: 'path-relay' });
+  });
+
+  it('arms elevated-RTT host (CGNAT/VPN overlay) and slow direct', () => {
+    expect(
+      shouldArmHybrid({
+        ...base,
+        pathKind: 'host',
+        rttMs: 240,
+      }).armed
+    ).toBe(true);
+
+    expect(
+      shouldArmHybrid({
+        ...base,
+        pathKind: 'host',
+        rttMs: 20,
+        observedMBps: 1.5,
+        triggerMBps: 4,
+      }).armed
+    ).toBe(true);
+  });
+
+  it('does not arm unknown path unless slow signals present', () => {
+    expect(
+      shouldArmHybrid({
+        ...base,
+        pathKind: 'unknown',
+      })
+    ).toMatchObject({ armed: false, reason: 'path-unknown-not-slow' });
+
+    expect(
+      shouldArmHybrid({
+        ...base,
+        pathKind: 'unknown',
+        rttMs: 300,
+      }).armed
+    ).toBe(true);
   });
 });

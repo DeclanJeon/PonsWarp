@@ -85,8 +85,14 @@ export const HOST_CHECKPOINT_EVERY_BYTES = 0;
 
 // Hybrid bulk assist (WebRTC + encrypted HTTP). Design:
 // docs/design/hybrid-bulk-transport.md
+// Hybrid assist is path-gated in shouldArmHybrid: LAN host/direct stays WebRTC-only.
+// Default ON in production builds when VITE_HYBRID_HTTP_ASSIST is not explicitly false.
 export const HYBRID_HTTP_ASSIST =
-  import.meta.env.VITE_HYBRID_HTTP_ASSIST === 'true';
+  import.meta.env.VITE_HYBRID_HTTP_ASSIST === 'true' ||
+  (import.meta.env.PROD === true &&
+    import.meta.env.VITE_HYBRID_HTTP_ASSIST !== 'false');
 export const HYBRID_MIN_BYTES = 8 * 1024 * 1024; // 8MB
 export const HYBRID_TRIGGER_MBps = 4;
+/** Host path with RTT at/above this is treated as elevated/slow (CGNAT/VPN overlay). */
+export const HYBRID_ELEVATED_RTT_MS = 120;
 export const HYBRID_UPLOAD_CONCURRENCY = 3;
