@@ -51,8 +51,8 @@ if (typeof window !== 'undefined') {
 
 // 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
 // 32MB 이상 쌓이면 PAUSE 요청, 16MB 이하로 떨어지면 RESUME 요청
-const WRITE_BUFFER_HIGH_MARK = 24 * 1024 * 1024;
-const WRITE_BUFFER_LOW_MARK = 8 * 1024 * 1024;
+const WRITE_BUFFER_HIGH_MARK = 48 * 1024 * 1024;
+const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
 const ENCRYPTED_HEADER_SIZE = 38;
 const AUTH_TAG_SIZE = 16;
 const MAX_RESUME_ATTEMPTS = 3;
@@ -117,7 +117,7 @@ export class DirectFileWriter {
   private currentBatchSize = 0;
   // 🚀 [최적화] 디스크 I/O 배치 크기 상향
   // 송신 측의 HIGH_WATER_MARK(12MB)에 맞춰 효율적인 쓰기 수행 (Context Switch 최소화)
-  private readonly BATCH_THRESHOLD = 2 * 1024 * 1024; // 2MB - 더 자주 플러시하여 파이프라인 유지
+  private readonly BATCH_THRESHOLD = 4 * 1024 * 1024; // 4MB batches reduce write syscall churn
 
   // 🚀 [핵심] 버퍼에 적재된 바이트 수 추적 (디스크 쓰기 전 데이터 포함)
   private pendingBytesInBuffer = 0;
@@ -128,6 +128,9 @@ export class DirectFileWriter {
   private sessionKey: Uint8Array | null = null;
   private bulkDecryptWorker: BulkDecryptWorker | null = null;
   private bulkDecryptArmPromise: Promise<void> | null = null;
+  private decryptInFlight = 0;
+  private static readonly MAX_DECRYPT_IN_FLIGHT = 24;
+  private decryptWaiters: Array<() => void> = [];
   private randomPrefix: Uint8Array | null = null;
   private cryptoSession: CryptoSession | null = null;
   private decryptCryptoKey: CryptoKey | null = null;
@@ -233,6 +236,25 @@ export class DirectFileWriter {
     // Prefer off-main-thread decrypt for bulk throughput.
     this.bulkDecryptArmPromise = this.armBulkDecryptWorker();
     logInfo('[DirectFileWriter]', '🔐 Encryption key configured');
+  }
+
+  private async acquireDecryptSlot(): Promise<void> {
+    if (this.decryptInFlight < DirectFileWriter.MAX_DECRYPT_IN_FLIGHT) {
+      this.decryptInFlight++;
+      return;
+    }
+    await new Promise<void>(resolve => {
+      this.decryptWaiters.push(() => {
+        this.decryptInFlight++;
+        resolve();
+      });
+    });
+  }
+
+  private releaseDecryptSlot(): void {
+    this.decryptInFlight = Math.max(0, this.decryptInFlight - 1);
+    const next = this.decryptWaiters.shift();
+    if (next) next();
   }
 
   private async armBulkDecryptWorker(): Promise<void> {
@@ -1052,15 +1074,30 @@ export class DirectFileWriter {
     }
 
     // 🚀 [성능 핵심] 복호화를 큐 밖에서 먼저 수행 (네트워크 수신과 병렬)
+    // Bound concurrent decrypts so worker/main queue cannot explode RAM.
+    await this.acquireDecryptSlot();
     let normalizedPacket: ArrayBuffer;
     try {
       normalizedPacket = await this.normalizePacket(packet);
     } catch (error: unknown) {
+      this.releaseDecryptSlot();
       const writeError = error instanceof Error ? error : new Error('Decryption failed');
       this.writeFailure = writeError;
+      if (queuedPayloadBytes > 0) {
+        this.pendingBytesInBuffer = Math.max(
+          0,
+          this.pendingBytesInBuffer - queuedPayloadBytes
+        );
+        this.queuedAcceptedBytesInBuffer = Math.max(
+          0,
+          this.queuedAcceptedBytesInBuffer - queuedPayloadBytes
+        );
+        this.checkBackpressure();
+      }
       this.onErrorCallback?.(`Decrypt failed: ${writeError.message}`);
       throw writeError;
     }
+    this.releaseDecryptSlot();
 
     // 큐에는 이미 복호화된 패킷만 전달 (가벼운 연산)
     const writeTask = this.writeQueue.then(async () => {
@@ -1079,10 +1116,8 @@ export class DirectFileWriter {
         throw writeError;
       } finally {
         if (queuedPayloadBytes > 0) {
-          this.pendingBytesInBuffer = Math.max(
-            0,
-            this.pendingBytesInBuffer - queuedPayloadBytes
-          );
+          // Leave pendingBytesInBuffer until flushBuffer/disk write.
+          // Only clear the pre-decode admission tracker.
           this.queuedAcceptedBytesInBuffer = Math.max(
             0,
             this.queuedAcceptedBytesInBuffer - queuedPayloadBytes
@@ -1205,9 +1240,9 @@ export class DirectFileWriter {
     // 1:1 ordered bulk: skip WASM reordering when stream is contiguous.
     if (this.orderedBulkFastPath && offset === this.contiguousOffset) {
       // Reuse the decrypted payload view (normalized packet is owned).
+      // pendingBytes already counted at writeChunk admission — do not double-count.
       this.writeBuffer.push(data);
       this.currentBatchSize += data.byteLength;
-      this.pendingBytesInBuffer += data.byteLength;
       this.contiguousOffset = offset + size;
     } else if (this.reorderingBuffer) {
       // Gap / out-of-order: fall back to reordering buffer.
@@ -1219,14 +1254,12 @@ export class DirectFileWriter {
       for (const chunk of chunksToWrite) {
         this.writeBuffer.push(new Uint8Array(chunk));
         this.currentBatchSize += chunk.byteLength;
-        this.pendingBytesInBuffer += chunk.byteLength;
       }
       this.contiguousOffset = this.reorderingBuffer.getNextExpectedOffset();
     } else {
       const copy = data.slice();
       this.writeBuffer.push(copy);
       this.currentBatchSize += copy.byteLength;
-      this.pendingBytesInBuffer += copy.byteLength;
       this.contiguousOffset = Math.max(this.contiguousOffset, offset + size);
     }
 

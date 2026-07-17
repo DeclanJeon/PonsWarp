@@ -189,11 +189,11 @@ const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
   chunkSizeBytes: 128 * KIB,
-  minInFlightBytes: 4 * MIB,
-  initialInFlightBytes: 8 * MIB,
-  // Balanced: enough BDP for ≥8 MB/s LAN, low enough to survive decrypt lag.
-  maxInFlightBytes: 12 * MIB,
-  lowWaterBytes: 2 * MIB,
+  minInFlightBytes: 6 * MIB,
+  initialInFlightBytes: 12 * MIB,
+  // False PAUSE fixed; open host window for ≥8 MB/s LAN bulk.
+  maxInFlightBytes: 20 * MIB,
+  lowWaterBytes: 3 * MIB,
   // Host: no mid-transfer partition barrier (reliable SCTP + end checkpoint)
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
