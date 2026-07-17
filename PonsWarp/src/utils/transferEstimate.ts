@@ -44,11 +44,23 @@ export type RollingSpeedSample = {
   bytesPerSecond: number;
 };
 
+/** Default UI smoothing: slower reaction reduces "speed bounce". */
+export const DEFAULT_SPEED_SMOOTHING = 0.18;
+/** Ignore micro-bursts shorter than this when sampling. */
+export const MIN_SPEED_SAMPLE_MS = 250;
+/** Rolling window used by TransferSpeedMeter (recent throughput). */
+export const SPEED_WINDOW_MS = 2500;
+
+/**
+ * EMA over successive progress samples.
+ * Prefer TransferSpeedMeter for continuous transfers — it also windows the
+ * recent byte rate so bufferedAmount pauses do not collapse the display.
+ */
 export const updateRollingSpeedSample = (
   previousSample: RollingSpeedSample | null,
   bytesTransferred: number,
   timestampMs: number,
-  smoothing = 0.35
+  smoothing = DEFAULT_SPEED_SMOOTHING
 ): RollingSpeedSample => {
   const nextBytesTransferred = Math.max(0, bytesTransferred);
 
@@ -63,10 +75,15 @@ export const updateRollingSpeedSample = (
   const elapsedMs = timestampMs - previousSample.timestampMs;
   const bytesDelta = nextBytesTransferred - previousSample.bytesTransferred;
 
-  if (elapsedMs <= 0 || bytesDelta < 0) {
+  // Non-forward / tiny intervals: keep last smoothed value (no flicker).
+  if (elapsedMs < MIN_SPEED_SAMPLE_MS || bytesDelta < 0) {
     return {
-      bytesTransferred: nextBytesTransferred,
-      timestampMs,
+      bytesTransferred:
+        bytesDelta < 0
+          ? previousSample.bytesTransferred
+          : nextBytesTransferred,
+      timestampMs:
+        elapsedMs < 0 ? previousSample.timestampMs : timestampMs,
       bytesPerSecond: previousSample.bytesPerSecond,
     };
   }
@@ -85,6 +102,109 @@ export const updateRollingSpeedSample = (
     bytesPerSecond,
   };
 };
+
+type SpeedPoint = { t: number; bytes: number };
+
+/**
+ * Display-oriented throughput meter for live transfers.
+ * Uses a short rolling window + EMA so UI speed does not bounce with every
+ * SCTP fill/drain or multipart part completion.
+ */
+export class TransferSpeedMeter {
+  private points: SpeedPoint[] = [];
+  private smoothedBps = 0;
+  private lastSampleAt = 0;
+  private windowMs: number;
+  private smoothing: number;
+  private minSampleMs: number;
+
+  constructor(options?: {
+    windowMs?: number;
+    smoothing?: number;
+    minSampleMs?: number;
+  }) {
+    this.windowMs = options?.windowMs ?? SPEED_WINDOW_MS;
+    this.smoothing = options?.smoothing ?? DEFAULT_SPEED_SMOOTHING;
+    this.minSampleMs = options?.minSampleMs ?? MIN_SPEED_SAMPLE_MS;
+  }
+
+  reset(bytesTransferred = 0, timestampMs = nowMs()): void {
+    const bytes = Math.max(0, bytesTransferred);
+    this.points = [{ t: timestampMs, bytes }];
+    this.smoothedBps = 0;
+    this.lastSampleAt = timestampMs;
+  }
+
+  /** Current smoothed bytes/sec (does not mutate). */
+  get bytesPerSecond(): number {
+    return this.smoothedBps;
+  }
+
+  /**
+   * Feed cumulative transferred bytes. Returns smoothed B/s for UI.
+   */
+  update(bytesTransferred: number, timestampMs = nowMs()): number {
+    const bytes = Math.max(0, bytesTransferred);
+
+    if (this.points.length === 0) {
+      this.reset(bytes, timestampMs);
+      return 0;
+    }
+
+    const last = this.points[this.points.length - 1];
+
+    // Monotonic guard: progress regressions (multipart retry) keep last speed.
+    if (bytes < last.bytes) {
+      return this.smoothedBps;
+    }
+
+    // Throttle sample cadence so 16-chunk bursts do not dominate the window.
+    if (
+      timestampMs - this.lastSampleAt < this.minSampleMs &&
+      bytes === last.bytes
+    ) {
+      return this.smoothedBps;
+    }
+
+    if (timestampMs - this.lastSampleAt >= this.minSampleMs || bytes > last.bytes) {
+      this.points.push({ t: timestampMs, bytes });
+      this.lastSampleAt = timestampMs;
+    } else {
+      return this.smoothedBps;
+    }
+
+    const cutoff = timestampMs - this.windowMs;
+    while (this.points.length > 2 && this.points[0].t < cutoff) {
+      this.points.shift();
+    }
+
+    const oldest = this.points[0];
+    const newest = this.points[this.points.length - 1];
+    const elapsedMs = newest.t - oldest.t;
+    if (elapsedMs < this.minSampleMs) {
+      return this.smoothedBps;
+    }
+
+    const windowBps = ((newest.bytes - oldest.bytes) / elapsedMs) * 1000;
+    if (!Number.isFinite(windowBps) || windowBps < 0) {
+      return this.smoothedBps;
+    }
+
+    const alpha = this.smoothing;
+    this.smoothedBps =
+      this.smoothedBps > 0
+        ? this.smoothedBps * (1 - alpha) + windowBps * alpha
+        : windowBps;
+
+    return this.smoothedBps;
+  }
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
 
 export const getTransferFeedbackLabel = (
   bytesTransferred: number,

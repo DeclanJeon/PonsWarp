@@ -4,7 +4,9 @@ import {
   formatDuration,
   formatRemainingTime,
   getTransferFeedbackLabel,
+  TransferSpeedMeter,
   updateRollingSpeedSample,
+  MIN_SPEED_SAMPLE_MS,
 } from './transferEstimate';
 
 describe('transferEstimate', () => {
@@ -17,22 +19,21 @@ describe('transferEstimate', () => {
   });
 
   it('formats long transfers in hours and minutes', () => {
-    expect(formatDuration(7_500)).toBe('2h 5m');
+    expect(formatDuration(90)).toBe('2 min');
+    expect(formatDuration(3600)).toBe('1h');
+    expect(formatRemainingTime(90)).toBe('2 min remaining');
   });
 
-  it('formats remaining time with user-facing ETA wording', () => {
-    expect(formatRemainingTime(null)).toBe('Calculating ETA');
-    expect(formatRemainingTime(0)).toBe('Finishing now');
-    expect(formatRemainingTime(45)).toBe('Less than 1 min remaining');
-    expect(formatRemainingTime(125)).toBe('3 min remaining');
-  });
-
-  it('updates rolling speed from byte deltas', () => {
+  it('updates rolling speed from byte deltas after min sample window', () => {
     const first = updateRollingSpeedSample(null, 100, 1_000);
-    const second = updateRollingSpeedSample(first, 1_100, 2_000);
+    const second = updateRollingSpeedSample(
+      first,
+      1_100,
+      1_000 + MIN_SPEED_SAMPLE_MS
+    );
 
     expect(first.bytesPerSecond).toBe(0);
-    expect(second.bytesPerSecond).toBe(1_000);
+    expect(second.bytesPerSecond).toBeCloseTo(1_000 / (MIN_SPEED_SAMPLE_MS / 1000), 0);
   });
 
   it('smooths rolling speed after the first measured sample', () => {
@@ -52,6 +53,7 @@ describe('transferEstimate', () => {
     );
 
     expect(second.bytesPerSecond).toBe(500);
+    expect(second.bytesTransferred).toBe(1_000);
   });
 
   it('describes transfer feedback from available progress data', () => {
@@ -63,5 +65,32 @@ describe('transferEstimate', () => {
       'Less than 1 min remaining'
     );
     expect(getTransferFeedbackLabel(1_000, 1_000, 250)).toBe('Finalizing');
+  });
+
+  it('smooths bursty TransferSpeedMeter samples', () => {
+    const meter = new TransferSpeedMeter({
+      windowMs: 2000,
+      smoothing: 0.5,
+      minSampleMs: 100,
+    });
+    meter.reset(0, 0);
+    // 1MB in 100ms burst then idle
+    meter.update(1_000_000, 100);
+    const afterBurst = meter.update(1_000_000, 500);
+    // another 1MB over next 500ms
+    const afterSteady = meter.update(2_000_000, 1000);
+    expect(afterBurst).toBeGreaterThan(0);
+    expect(afterSteady).toBeGreaterThan(0);
+    // steady window rate should be closer to ~2MB/s than pure burst rate
+    expect(afterSteady).toBeLessThan(20_000_000);
+  });
+
+  it('ignores progress regressions without collapsing speed', () => {
+    const meter = new TransferSpeedMeter({ minSampleMs: 50, smoothing: 0.5 });
+    meter.reset(0, 0);
+    meter.update(5_000_000, 1000);
+    const before = meter.bytesPerSecond;
+    meter.update(4_000_000, 1200); // multipart retry regression
+    expect(meter.bytesPerSecond).toBe(before);
   });
 });

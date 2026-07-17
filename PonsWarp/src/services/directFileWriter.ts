@@ -28,6 +28,7 @@ import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
 import { HEADER_SIZE } from '../utils/constants';
 import { calculateReceiverBufferedProgress } from '../utils/transferProgress';
+import { TransferSpeedMeter } from '../utils/transferEstimate';
 import {
   shouldUseBlobFallbackBeforeStreaming,
   isHeadlessBrowser,
@@ -83,6 +84,7 @@ export class DirectFileWriter {
   private totalSize = 0;
   private startTime = 0;
   private lastProgressTime = 0;
+  private speedMeter = new TransferSpeedMeter();
   private isFinalized = false;
 
   // 파일 Writer
@@ -164,6 +166,7 @@ export class DirectFileWriter {
     this.manifest = manifest;
     this.totalSize = manifest.totalSize;
     this.startTime = Date.now();
+    this.speedMeter.reset(0, this.startTime);
     this.totalBytesWritten = 0;
     this.outputBytesWritten = 0;
     this.isFinalized = false;
@@ -1556,15 +1559,17 @@ export class DirectFileWriter {
    */
   private reportProgress(): void {
     const now = Date.now();
-    if (now - this.lastProgressTime < 100) return;
+    if (now - this.lastProgressTime < 150) return;
 
-    const elapsed = (now - this.startTime) / 1000;
     const visibleProgress = calculateReceiverBufferedProgress({
       bytesWritten: this.totalBytesWritten,
       pendingBytes: this.pendingBytesInBuffer,
       totalBytes: this.totalSize,
     });
-    const speed = elapsed > 0 ? visibleProgress.bytesTransferred / elapsed : 0;
+    const speed = this.speedMeter.update(
+      visibleProgress.bytesTransferred,
+      now
+    );
 
     this.onProgressCallback?.({
       progress: visibleProgress.progress,

@@ -35,8 +35,7 @@ import {
   estimateRemainingSeconds,
   formatRemainingTime,
   getTransferFeedbackLabel,
-  updateRollingSpeedSample,
-  type RollingSpeedSample,
+  TransferSpeedMeter,
 } from '../utils/transferEstimate';
 import { TransferManifest, AppMode } from '../types/types';
 import { formatCloudShareCode } from '../utils/cloudShareCode';
@@ -153,7 +152,7 @@ const CloudSenderView: React.FC = () => {
   const [fileProgress, setFileProgress] = useState<Record<string, number>>({});
   const [cloudPlans, setCloudPlans] =
     useState<CloudPlansResponse>(FALLBACK_CLOUD_PLANS);
-  const uploadSpeedSampleRef = useRef<RollingSpeedSample | null>(null);
+  const uploadSpeedMeterRef = useRef(new TransferSpeedMeter());
   const [uploadSpeed, setUploadSpeed] = useState(0);
 
   const uploadedBytes = useMemo(
@@ -177,15 +176,9 @@ const CloudSenderView: React.FC = () => {
   const freePlan = cloudPlans.free;
 
   useEffect(() => {
-    if (status !== 'UPLOADING' || !uploadSpeedSampleRef.current) return;
-
-    const nextSample = updateRollingSpeedSample(
-      uploadSpeedSampleRef.current,
-      uploadedBytes,
-      Date.now()
-    );
-    uploadSpeedSampleRef.current = nextSample;
-    setUploadSpeed(nextSample.bytesPerSecond);
+    if (status !== 'UPLOADING') return;
+    const speed = uploadSpeedMeterRef.current.update(uploadedBytes, Date.now());
+    setUploadSpeed(speed);
   }, [status, uploadedBytes]);
 
   useEffect(() => {
@@ -290,7 +283,7 @@ const CloudSenderView: React.FC = () => {
       setExpiresAt(null);
       setCopied(false);
       setFileProgress({});
-      uploadSpeedSampleRef.current = null;
+      uploadSpeedMeterRef.current.reset(0);
       setUploadSpeed(0);
       setCurrentFile(null);
       setError(
@@ -307,7 +300,7 @@ const CloudSenderView: React.FC = () => {
       setExpiresAt(null);
       setCopied(false);
       setFileProgress({});
-      uploadSpeedSampleRef.current = null;
+      uploadSpeedMeterRef.current.reset(0);
       setUploadSpeed(0);
       setCurrentFile(null);
       setError(
@@ -324,7 +317,7 @@ const CloudSenderView: React.FC = () => {
     setCopied(false);
     setError(null);
     setFileProgress({});
-    uploadSpeedSampleRef.current = null;
+    uploadSpeedMeterRef.current.reset(0);
     setUploadSpeed(0);
     setStatus('PREPARING');
     let createdShare: CreateCloudShareResponse | null = null;
@@ -340,11 +333,7 @@ const CloudSenderView: React.FC = () => {
       let nextIndex = 0;
 
       setStatus('UPLOADING');
-      uploadSpeedSampleRef.current = {
-        bytesTransferred: 0,
-        timestampMs: Date.now(),
-        bytesPerSecond: 0,
-      };
+      uploadSpeedMeterRef.current.reset(0, Date.now());
 
       const uploadWorker = async () => {
         while (nextIndex < created.files.length) {
@@ -404,7 +393,7 @@ const CloudSenderView: React.FC = () => {
       setStatus('ERROR');
       setError(getErrorMessage(uploadError, 'Cloud upload failed'));
     } finally {
-      uploadSpeedSampleRef.current = null;
+      uploadSpeedMeterRef.current.reset(0);
     }
   };
 

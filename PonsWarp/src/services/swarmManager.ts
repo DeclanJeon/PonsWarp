@@ -37,6 +37,7 @@ import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { bytesToBase64, CryptoService } from './cryptoService';
 import { networkController, AdaptiveParams } from './networkAdaptiveController';
 import { calculateProgressPercent } from '../utils/transferProgress';
+import { TransferSpeedMeter } from '../utils/transferEstimate';
 import {
   cloudApiConfigured,
   localHybridCaps,
@@ -259,6 +260,7 @@ export class SwarmManager {
   private totalBytesSent = 0;
   private totalBytes = 0;
   private transferStartTime = 0;
+  private transferSpeedMeter = new TransferSpeedMeter();
 
   // Keep-alive/flow-control 타이머
   private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
@@ -1265,6 +1267,7 @@ export class SwarmManager {
     this.isProcessingBatch = false;
     this.totalBytesSent = msg.offset;
     this.transferStartTime = performance.now();
+    this.transferSpeedMeter.reset(msg.offset, this.transferStartTime);
 
     this.requestTransferStart({
       offset: msg.offset,
@@ -2730,6 +2733,7 @@ export class SwarmManager {
       );
     }
     this.transferStartTime = performance.now();
+    this.transferSpeedMeter.reset(startOffset, this.transferStartTime);
     this.workerInitialized = false;
     this.awaitingWorkerResume = false;
     this.pendingWorkerResumeOffset = null;
@@ -3793,8 +3797,10 @@ export class SwarmManager {
   }
 
   private emitProgress(progressData: WorkerProgressData = {}): void {
-    const elapsed = (performance.now() - this.transferStartTime) / 1000;
-    const speed = elapsed > 0 ? this.totalBytesSent / elapsed : 0;
+    const now = performance.now();
+    const bytes = Math.min(this.totalBytesSent, this.totalBytes);
+    // Windowed + EMA speed for UI; average-from-start bounces with every pause.
+    const speed = this.transferSpeedMeter.update(bytes, now);
     const transportProgress = calculateProgressPercent(
       this.totalBytesSent,
       this.totalBytes
@@ -3804,7 +3810,7 @@ export class SwarmManager {
       ...progressData,
       progress: transportProgress,
       overallProgress: transportProgress,
-      bytesTransferred: Math.min(this.totalBytesSent, this.totalBytes),
+      bytesTransferred: bytes,
       totalBytesSent: this.totalBytesSent,
       totalBytes: this.totalBytes,
       speed,
