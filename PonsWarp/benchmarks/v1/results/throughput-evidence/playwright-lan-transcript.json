@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "kind": "playwright-automation-transcript",
+  "tool": "playwright",
+  "actions": [
+    {
+      "type": "goto",
+      "url": "https://warp.ponslink.com/?automation=1"
+    },
+    {
+      "type": "click",
+      "name": "ESTABLISH LINK"
+    },
+    {
+      "type": "click",
+      "name": "MATERIALIZE"
+    },
+    {
+      "type": "wait",
+      "for": "MATERIALIZED"
+    }
+  ],
+  "result": {
+    "status": "COMPLETE",
+    "elapsedSec": 18.57,
+    "peakMBps": 3.52,
+    "overallMBps": 2.692,
+    "build": "c0c53fc"
+  }
+}
