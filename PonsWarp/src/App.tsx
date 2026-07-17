@@ -1,4 +1,6 @@
 import { debugLog } from './utils/logger';
+import { registerAppUpdateServiceWorker } from './utils/appUpdateService';
+import { useTransferStore } from './store/transferStore';
 
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import {
@@ -39,7 +41,26 @@ const App: React.FC = () => {
   usePreventNavigation();
 
   // URL 파라미터 체크 (앱 로드 시)
-  useEffect(() => {
+    useEffect(() => {
+    void registerAppUpdateServiceWorker({
+      isTransferActive: () => {
+        const status = useTransferStore.getState().status;
+        return (
+          status === 'TRANSFERRING' ||
+          status === 'RECEIVING' ||
+          status === 'SCANNING' ||
+          status === 'PREPARING' ||
+          status === 'WAITING' ||
+          status === 'CONNECTING' ||
+          status === 'UPLOADING' ||
+          status === 'REMOTE_PROCESSING' ||
+          status === 'QUEUED'
+        );
+      },
+    });
+  }, []);
+
+useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname;
       const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/i);
