@@ -715,11 +715,25 @@ export class SwarmManager {
         `Active peer ${peerId} dropped. Removed from transfer set.`
       );
 
-      // 만약 이 피어가 나가서 남은 피어가 없다면 완료 처리 시도
       if (this.isTransferring && this.currentTransferPeers.size === 0) {
-        this.checkTransferComplete();
+        // 1:1 drop: pause for reconnect/resume instead of falsely completing.
+        if (this.canResumeSingleFileTransfer()) {
+          this.awaitingReceiverReconnect = true;
+          this.isTransferring = false;
+          this.isProcessingBatch = false;
+          this.pendingAckPeers.clear();
+          this.partitionAckWaiters.clear();
+          this.stopAdaptiveControl();
+          this.emit('status', 'WAITING');
+          this.emit('peer-disconnected', { peerId, reason: reason + ':await-reconnect' });
+          logWarn(
+            '[SwarmManager]',
+            'Paused transfer awaiting receiver reconnect'
+          );
+        } else {
+          this.checkTransferComplete();
+        }
       } else if (this.isTransferring) {
-        // 다른 피어가 있다면 Flow Control 재평가 (나간 피어가 PAUSE 상태였을 수 있음)
         if (this.canRequestMoreChunks()) {
           this.requestMoreChunks();
         }
@@ -818,7 +832,11 @@ export class SwarmManager {
 
     peer.on('error', error => {
       logError('[SwarmManager]', `Peer error (${peer.id}):`, error);
-      this.removePeer(peer.id, 'error');
+      // Soft errors (channel flaps) must not destroy an otherwise live PC.
+      // Hard teardown happens via close/failed path.
+      if (peer.isDestroyed() || !peer.connected) {
+        this.removePeer(peer.id, 'error');
+      }
     });
 
     peer.on('close', () => {

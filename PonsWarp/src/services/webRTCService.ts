@@ -718,13 +718,31 @@ export class ReceiverService {
     // NEVER destroy a live peer for the same remote id on a new offer.
     // Destroying mid-session closes DCs on both sides while the sender's
     // PeerSession can still report send() success into a dead local buffer.
-    if (this.peer && !this.peer.isDestroyed() && this.connectedPeerId === d.from) {
+    if (
+      this.peer &&
+      !this.peer.isDestroyed() &&
+      this.connectedPeerId === d.from &&
+      this.peer.connected
+    ) {
       logInfo(
         '[Receiver]',
-        `Applying offer on existing peer (connected=${this.peer.connected})`
+        'Applying offer on existing connected peer (no destroy)'
       );
       this.peer.signal(signal);
       return;
+    }
+    // Stale peer with closed channels: replace with a fresh PeerSession.
+    if (this.peer && this.connectedPeerId === d.from && !this.peer.connected) {
+      logWarn(
+        '[Receiver]',
+        'Replacing disconnected peer for fresh offer'
+      );
+      try {
+        this.peer.destroy();
+      } catch {
+        // ignore
+      }
+      this.peer = null;
     }
     if (this.peer) {
       logWarn(
@@ -916,12 +934,29 @@ export class ReceiverService {
     peer.on('close', () => {
       if (this.completionEmitted) return;
       logInfo('[Receiver]', 'Peer connection closed');
-      if (this.shouldAttemptReconnect()) {
-        this.scheduleReconnect();
-        return;
-      }
-
-      this.emit('error', 'Connection closed');
+      // Delay hard reconnect: PeerSession may recover DataChannels in-place
+      // while the PeerConnection stays connected.
+      this.setTimeout(() => {
+        if (this.completionEmitted || this.disposed) return;
+        if (this.peer && this.peer !== peer) return; // already replaced
+        if (this.peer === peer && this.peer.connected) {
+          logInfo('[Receiver]', 'Peer recovered without full reconnect');
+          return;
+        }
+        if (this.peer === peer) {
+          try {
+            peer.destroy();
+          } catch {
+            // ignore
+          }
+          this.peer = null;
+        }
+        if (this.shouldAttemptReconnect()) {
+          this.scheduleReconnect();
+          return;
+        }
+        this.emit('error', 'Connection closed');
+      }, 1000);
     });
   }
 
@@ -950,7 +985,7 @@ export class ReceiverService {
     ) {
       this.reconnectAttempts++;
     }
-    this.connectedPeerId = null;
+    // Keep connectedPeerId so the same sender's re-offer is accepted.
 
     const delay = options.immediate
       ? 0
@@ -977,15 +1012,14 @@ export class ReceiverService {
         await this.ensureSignalingService().connect();
         if (this.disposed) return;
 
+        // NEVER leaveRoom during an active transfer reconnect.
+        // leaveRoom notifies the sender (user-left) and destroys the only
+        // live PeerConnection while bulk may still be in flight / resumable.
         try {
-          await this.ensureSignalingService().leaveRoom(roomId);
-        } catch {
-          // Rejoin still has a chance to trigger a fresh offer.
+          await this.ensureSignalingService().joinRoom(roomId);
+        } catch (error) {
+          logWarn('[Receiver]', 'Soft rejoin failed during reconnect', error);
         }
-
-        await new Promise<void>(resolve => this.setTimeout(resolve, 250));
-        if (this.disposed) return;
-        await this.ensureSignalingService().joinRoom(roomId);
         this.reconnectTimer = this.setTimeout(() => {
           this.reconnectTimer = null;
           if (this.disposed) return;

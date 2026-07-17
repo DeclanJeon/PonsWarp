@@ -14,7 +14,7 @@ import {
   CandidatePathKind,
   classifyHostAddressScope,
 } from '../utils/transferFlowControl';
-import { logInfo, logError } from '../utils/logger';
+import { logInfo, logError, logWarn } from '../utils/logger';
 
 type EventHandler = (data: unknown) => void;
 
@@ -79,6 +79,8 @@ export class PeerSession {
   private drainEmitted = false;
   private drainPollInterval: ReturnType<typeof setInterval> | null = null;
   private closeEmitTimer: ReturnType<typeof setTimeout> | null = null;
+  private recoverInFlight = false;
+  private lastRecoverAt = 0;
   private eventListeners: Record<string, EventHandler[]> = {};
   private control: RTCDataChannel | null = null;
   private bulkChannels: RTCDataChannel[] = [];
@@ -213,6 +215,7 @@ export class PeerSession {
     channel.binaryType = 'arraybuffer';
 
     if (channel.label === CONTROL_LABEL || channel.label === 'control') {
+      // Replace any previous control channel reference.
       this.control = channel;
       channel.onopen = () => this.maybeMarkConnected();
       channel.onclose = () => {
@@ -305,7 +308,6 @@ export class PeerSession {
         this.bulkChannels.push(null as unknown as RTCDataChannel);
       }
       this.bulkChannels[idx] = channel;
-      this.bulkChannels = this.bulkChannels.filter(Boolean);
     }
   }
 
@@ -343,7 +345,9 @@ export class PeerSession {
     if (this.control === channel) {
       this.control = null;
     }
-    this.bulkChannels = this.bulkChannels.filter(ch => ch && ch !== channel);
+    this.bulkChannels = this.bulkChannels.map(ch =>
+      ch === channel ? (null as unknown as RTCDataChannel) : ch
+    );
 
     const stillOpen =
       this.control?.readyState === 'open' ||
@@ -356,13 +360,34 @@ export class PeerSession {
     );
 
     if (stillOpen) {
-      // One plane flapped; keep the peer alive while PC is usable.
       return;
     }
 
     this.connected = false;
-    // Debounce: ignore brief single-channel recycle, but if ALL data channels
-    // stay down the peer is unusable even when PC briefly remains "connected".
+
+    // Prefer in-place DataChannel recovery over peer teardown when PC lives.
+    if (pcState === 'connected' || pcState === 'connecting' || pcState === 'new') {
+      if (this.closeEmitTimer) clearTimeout(this.closeEmitTimer);
+      this.closeEmitTimer = setTimeout(() => {
+        this.closeEmitTimer = null;
+        if (this.destroyed) return;
+        const openAgain =
+          this.control?.readyState === 'open' ||
+          this.bulkChannels.some(ch => ch?.readyState === 'open');
+        if (openAgain) {
+          this.maybeMarkConnected();
+          return;
+        }
+        const state = this.pc?.connectionState;
+        if (state === 'connected' || state === 'connecting' || state === 'new') {
+          void this.recoverDataChannels(`all-channels-closed-pc-${state}`);
+          return;
+        }
+        this.emit('close');
+      }, 250);
+      return;
+    }
+
     if (this.closeEmitTimer) clearTimeout(this.closeEmitTimer);
     this.closeEmitTimer = setTimeout(() => {
       this.closeEmitTimer = null;
@@ -380,6 +405,39 @@ export class PeerSession {
       );
       this.emit('close');
     }, 400);
+  }
+
+  private async recoverDataChannels(reason: string): Promise<void> {
+    if (this.destroyed || !this.pc || this.recoverInFlight) return;
+    const now = Date.now();
+    if (now - this.lastRecoverAt < 1500) {
+      logWarn(`[Peer ${this.id}]`, `Skip DC recovery (throttled): ${reason}`);
+      return;
+    }
+    this.lastRecoverAt = now;
+    this.recoverInFlight = true;
+    try {
+      logWarn(
+        `[Peer ${this.id}]`,
+        `Recovering data channels (${reason}) initiator=${this.initiator}`
+      );
+      this.control = null;
+      this.bulkChannels = [];
+      this.connected = false;
+
+      if (this.initiator) {
+        this.createLocalChannels({
+          iceServers: [],
+          bulkChannelCount: this.bulkChannelCount,
+        });
+        await this.createAndSendOffer();
+      }
+    } catch (error) {
+      logError(`[Peer ${this.id}]`, 'DataChannel recovery failed:', error);
+      this.emit('close');
+    } finally {
+      this.recoverInFlight = false;
+    }
   }
 
   private ensureDrainWatchdog(): void {

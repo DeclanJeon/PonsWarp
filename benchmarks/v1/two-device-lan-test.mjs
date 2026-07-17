@@ -81,7 +81,33 @@ async function clickButton(page, pattern, timeout = 15000) {
 }
 
 
-  async function hardLoad(page) {
+  
+  async function installDiagnostics(page, name) {
+    await page.exposeFunction('__ponsLog', (level, msg) => {
+      const line = `[${name}:${level}] ${String(msg).slice(0, 400)}`;
+      logs[name].push(line);
+      if (/error|fail|Peer|channel|closed|TRANSFER|connected|CRYPTO|path|Partition|removePeer|ready/i.test(line)) {
+        console.log(line);
+      }
+    });
+    await page.addInitScript(() => {
+      const wrap = (level) => {
+        const orig = console[level].bind(console);
+        console[level] = (...args) => {
+          try {
+            window.__ponsLog?.(level, args.map(a => {
+              if (a instanceof Error) return a.stack || a.message;
+              try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); }
+            }).join(' '));
+          } catch {}
+          orig(...args);
+        };
+      };
+      ['log','info','warn','error','debug'].forEach(wrap);
+    });
+  }
+
+async function hardLoad(page) {
     await page.goto(APP, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.evaluate(async () => {
       try {
@@ -144,6 +170,8 @@ async function main() {
   };
   hook('sender', sender);
   hook('receiver', receiver);
+  // Re-create pages with init script for richer logs is hard after creation;
+  // rely on page.on('console') plus periodic evaluate of transfer DOM.
 
   try {
     const cdp = await rctx.newCDPSession(receiver);
