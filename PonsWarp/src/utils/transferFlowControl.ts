@@ -179,11 +179,11 @@ const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
   chunkSizeBytes: 240 * KIB,
-  minInFlightBytes: 2 * MIB,
-  initialInFlightBytes: 4 * MIB,
-  // Chromium send-queue sweet spot measured ~4MB; keep headroom to 12MB.
-  maxInFlightBytes: 12 * MIB,
-  lowWaterBytes: 1 * MIB,
+  minInFlightBytes: 4 * MIB,
+  initialInFlightBytes: 8 * MIB,
+  // Keep the SCTP queue filled; 16MB hard stop is the absolute ceiling.
+  maxInFlightBytes: 16 * MIB,
+  lowWaterBytes: 2 * MIB,
   // Host: no mid-transfer partition barrier (reliable SCTP + end checkpoint)
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
@@ -196,14 +196,13 @@ export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'relay',
-  // Mobile same-Wi-Fi often lands on TURN relay (phone AP isolation / CGNAT).
-  // 16MB partition ACK stop-and-wait + 4MB max window caps real Wi-Fi far below radio.
-  chunkSizeBytes: 192 * KIB,
+  // Same-SSID mobile often selects TURN. Keep mid-transfer ACKs off and give
+  // the relay path a real send window so it is not artificially capped.
+  chunkSizeBytes: 240 * KIB,
   minInFlightBytes: 2 * MIB,
-  initialInFlightBytes: 4 * MIB,
-  maxInFlightBytes: 8 * MIB,
-  lowWaterBytes: 1 * MIB,
-  // End/resume checkpoint only — mid-transfer app ACK is the mobile Wi-Fi killer.
+  initialInFlightBytes: 6 * MIB,
+  maxInFlightBytes: 12 * MIB,
+  lowWaterBytes: 2 * MIB,
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {

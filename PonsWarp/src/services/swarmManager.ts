@@ -2762,33 +2762,17 @@ export class SwarmManager {
       }
     }
 
-    // Hybrid HTTP assist: encode+upload ciphertext in parallel with WebRTC.
+    // Always use direct WebRTC bulk for 1:1 transfers.
+    // Hybrid HTTP "primary" (prebuild + cloud upload + wait) blocks real
+    // DataChannel send and collapses same-network speed to public uplink /
+    // object storage rates. Keep hybrid machinery disarmed for the hot path.
     this.hybridUploadPromise = null;
     this.hybridManifest = null;
     this.hybridBytesUploaded = 0;
     this.hybridPackets = [];
     this.hybridPrebuilt = false;
-    if (!this.remoteHybridCaps) {
-      const waitStart = Date.now();
-      while (!this.remoteHybridCaps && Date.now() - waitStart < 1000) {
-        await new Promise(r => setTimeout(r, 50));
-      }
-    }
-    const arm = shouldArmHybrid({
-      remoteCaps: this.remoteHybridCaps,
-      totalBytes: manifest.totalSize,
-      cloudApiConfigured: cloudApiConfigured(),
-    });
-    this.hybridArmed = arm.armed;
-    this.hybridArmReason = arm.reason;
-    if (arm.armed) {
-      logInfo(
-        '[SwarmManager]',
-        `Hybrid HTTP assist ARMED (${arm.reason}); prebuild+parallel upload`
-      );
-    } else {
-      logInfo('[SwarmManager]', `Hybrid HTTP assist OFF (${arm.reason})`);
-    }
+    this.hybridArmed = false;
+    this.hybridArmReason = 'webrtc-direct';
 
     this.emit('progress', {
       progress: 0,
@@ -2800,99 +2784,16 @@ export class SwarmManager {
     });
     this.emit('status', 'TRANSFERRING');
     this.startAdaptiveControl();
-    // Give ICE a short moment to settle selected pair before deciding path policy.
-    for (let i = 0; i < 6; i++) {
-      await this.sampleAdaptiveStats();
-      const kind = this.currentTransferDiagnostics.candidatePathKind;
-      if (kind === 'host' || kind === 'relay' || kind === 'srflx') break;
-      await new Promise(r => setTimeout(r, 150));
-    }
-
+    // Sample path once for UI/diagnostics; do not stall the send pipeline.
+    void this.sampleAdaptiveStats().catch(() => {});
     const pathKind = this.currentTransferDiagnostics.candidatePathKind;
     logInfo(
       '[SwarmManager]',
-      `Transfer path decided: ${pathKind} protocol=${this.currentTransferDiagnostics.protocol ?? '?'} rtt=${this.currentTransferDiagnostics.rttMs ?? '?'} hybridArmed=${this.hybridArmed}`
+      `Transfer path: ${pathKind} protocol=${this.currentTransferDiagnostics.protocol ?? '?'} rtt=${this.currentTransferDiagnostics.rttMs ?? '?'} mode=webrtc-direct`
     );
 
-    // Host LAN path is already SCTP-bound; hybrid HTTP only helps constrained
-    // cross-network (relay/srflx/unknown) paths and would add latency on host.
-    if (this.hybridArmed && pathKind === 'host') {
-      this.hybridArmed = false;
-      this.hybridArmReason = 'host-path-skip';
-      this.hybridPackets = [];
-      this.hybridPrebuilt = false;
-      logInfo('[SwarmManager]', 'Hybrid HTTP assist skipped on host path');
-    }
-
-    // Same Wi-Fi mobile often lands on TURN relay (~public uplink, hundreds of KB/s).
-    // Prefer hybrid HTTP assist there when available; pure WebRTC relay is the slow path.
-    if (
-      !this.hybridArmed &&
-      pathKind !== 'host' &&
-      cloudApiConfigured() &&
-      (this.remoteHybridCaps?.hybridHttp || localHybridCaps().hybridHttp)
-    ) {
-      const rearm = shouldArmHybrid({
-        remoteCaps: this.remoteHybridCaps ?? localHybridCaps(),
-        totalBytes: manifest.totalSize,
-        cloudApiConfigured: true,
-      });
-      if (rearm.armed) {
-        this.hybridArmed = true;
-        this.hybridArmReason = `path-${pathKind}-force`;
-        logInfo(
-          '[SwarmManager]',
-          `Hybrid HTTP assist RE-ARMED for non-host path (${pathKind})`
-        );
-      }
-    }
-
     try {
-      // Cross-network hybrid-primary:
-      // 1) prebuild ciphertext once
-      // 2) upload with full uplink to cloud (no dual saturation with WebRTC bulk)
-      // 3) announce READY so receiver HTTP-downloads
-      // 4) wait for DOWNLOAD_COMPLETE; WebRTC bulk only as fallback
-      if (this.hybridArmed) {
-        await this.prebuildHybridPackets(runId, startOffset);
-        try {
-          await this.runHybridUpload(runId, manifest.totalSize);
-          const completedViaHybrid = await this.waitForHybridReceiverComplete(
-            runId,
-            120_000
-          );
-          if (!completedViaHybrid) {
-            logWarn(
-              '[SwarmManager]',
-              'Hybrid receiver did not complete in time; falling back to WebRTC bulk'
-            );
-            this.hybridArmReason = 'webrtc-fallback';
-            await this.sendPrebuiltHybridPackets(runId, manifest);
-          } else {
-            logInfo(
-              '[SwarmManager]',
-              'Transfer completed via hybrid HTTP assist (WebRTC bulk skipped)'
-            );
-            this.hybridArmReason = 'hybrid-primary-complete';
-            this.totalBytesSent = manifest.totalSize;
-            this.emitProgress();
-          }
-        } catch (error) {
-          logWarn(
-            '[SwarmManager]',
-            'Hybrid primary failed; falling back to WebRTC bulk',
-            error
-          );
-          this.hybridArmReason = 'upload-failed-fallback';
-          if (!this.hybridPrebuilt || this.hybridPackets.length === 0) {
-            await this.sendFilesPartitioned(manifest, startOffset, runId);
-          } else {
-            await this.sendPrebuiltHybridPackets(runId, manifest);
-          }
-        }
-      } else {
-        await this.sendFilesPartitioned(manifest, startOffset, runId);
-      }
+      await this.sendFilesPartitioned(manifest, startOffset, runId);
       if (runId !== this.transferRunId) {
         return;
       }
@@ -3266,7 +3167,7 @@ export class SwarmManager {
       let chunksSinceProgress = 0;
       let lastProgressAt = performance.now();
       // 암호화/읽기를 충분히 앞서 돌려 DataChannel을 굶기지 않는다.
-      const PREPARE_AHEAD = 64;
+      const PREPARE_AHEAD = 96;
 
       const nextDescriptor = (): Descriptor | null => {
         while (
@@ -3370,7 +3271,9 @@ export class SwarmManager {
               : 1;
           const sendCap = Math.min(
             this.getCurrentInFlightTargetBytes(),
-            laneFactor * 4 * 1024 * 1024 // per-association queue cap
+            // Single SCTP association: fill up to the path in-flight target.
+            // The old 4MB hard cap starved high-BDP Wi-Fi and TURN.
+            laneFactor * this.getCurrentInFlightTargetBytes()
           );
           if (this.getHighestBufferedAmount() > sendCap) {
             await this.waitUntilSendWindowOpen(runId, sendCap);
