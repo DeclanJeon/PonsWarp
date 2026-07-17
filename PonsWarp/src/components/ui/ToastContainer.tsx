@@ -21,7 +21,7 @@ export const ToastContainer: React.FC = () => {
   const { toasts, removeToast } = useToastStore();
 
   return (
-    <div className="fixed bottom-8 right-8 z-[100] flex flex-col gap-3 pointer-events-none">
+    <div className="app-toast-stack fixed z-[100] flex flex-col gap-2 pointer-events-none sm:gap-3">
       <AnimatePresence>
         {toasts.map(t => (
           <motion.div
@@ -30,10 +30,10 @@ export const ToastContainer: React.FC = () => {
             animate={{ opacity: 1, x: 0, scale: 1 }}
             exit={{ opacity: 0, x: 20, scale: 0.9 }}
             layout
-            className={`pointer-events-auto flex items-center gap-3 px-5 py-4 bg-black/60 backdrop-blur-xl border ${borderColors[t.type]} rounded-2xl shadow-2xl min-w-[300px] max-w-md`}
+            className={`pointer-events-auto flex w-full items-start gap-3 rounded-2xl border bg-black/70 px-4 py-3 shadow-2xl backdrop-blur-xl sm:min-w-[280px] sm:max-w-md sm:items-center sm:px-5 sm:py-4 ${borderColors[t.type]}`}
           >
             {icons[t.type]}
-            <p className="text-sm font-medium text-white/90 flex-1">
+            <p className="flex-1 text-sm font-medium leading-snug text-white/90 break-words">
               {t.message}
             </p>
             <button

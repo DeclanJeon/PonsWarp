@@ -124,7 +124,7 @@ const App: React.FC = () => {
         - 모바일: p-4, h-screen overflow-hidden
         - 데스크탑: p-8, 레이아웃 중앙 정렬
       */}
-      <div className="relative w-screen h-screen overflow-hidden text-white bg-transparent font-rajdhani select-none">
+      <div className="app-shell relative text-white bg-transparent font-rajdhani select-none">
         {/* 1. 배경 계층 (3D Space) */}
         <Suspense
           fallback={
@@ -148,7 +148,7 @@ const App: React.FC = () => {
 
         {/* 3. Header (Responsive) */}
         <header
-          className="absolute top-0 left-0 w-full px-5 py-5 md:px-10 md:py-8 z-50 flex items-center justify-between cursor-pointer"
+          className="app-header absolute top-0 left-0 z-50 flex w-full items-center justify-between px-4 py-3 sm:px-6 sm:py-4 md:px-10 md:py-6 cursor-pointer"
           onClick={() => {
             leaveTransferSessionIfConfirmed(() => {
               setCloudShareId(null);
@@ -161,7 +161,7 @@ const App: React.FC = () => {
             <div className="w-8 h-8 md:w-10 md:h-10 border-2 border-cyan-500 rounded-full flex items-center justify-center backdrop-blur-sm bg-black/20 shadow-[0_0_15px_rgba(6,182,212,0.5)]">
               <div className="w-2 h-2 md:w-3 md:h-3 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,1)] animate-pulse" />
             </div>
-            <h1 className="text-xl md:text-3xl font-bold tracking-widest brand-font drop-shadow-lg">
+            <h1 className="text-lg sm:text-xl md:text-3xl font-bold tracking-widest brand-font drop-shadow-lg">
               PONS<span className="text-cyan-500">WARP</span>
             </h1>
           </div>
@@ -178,7 +178,7 @@ const App: React.FC = () => {
         </header>
 
         {/* 4. Main Content Area */}
-        <main className="relative z-10 flex h-full w-full flex-col items-center overflow-y-auto p-4">
+        <main className="app-main relative z-10 flex h-full w-full flex-col items-center overflow-y-auto">
           <AnimatePresence mode="wait">
             {/* --- INTRO SCREEN --- */}
             {mode === AppMode.INTRO && (
@@ -187,7 +187,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
-                className="my-auto flex w-full max-w-5xl flex-col items-center justify-center space-y-10 py-20 text-center md:space-y-12"
+                className="my-auto flex w-full max-w-5xl flex-col items-center justify-center space-y-6 py-8 text-center sm:space-y-10 sm:py-16 md:space-y-12 md:py-20"
               >
                 <div className="space-y-5 md:space-y-7">
                   {/* 캐치프레이즈 리뉴얼 */}
@@ -196,7 +196,7 @@ const App: React.FC = () => {
                       <Zap size={13} fill="currentColor" /> Next-Gen P2P
                     </span>
                   </div>
-                  <h2 className="brand-font text-[clamp(2.75rem,8vw,5.75rem)] font-black leading-[0.98] tracking-[-0.04em] drop-shadow-[0_0_40px_rgba(6,182,212,0.4)]">
+                  <h2 className="brand-font text-[clamp(2.1rem,9vw,5.75rem)] font-black leading-[0.98] tracking-[-0.04em] drop-shadow-[0_0_40px_rgba(6,182,212,0.4)]">
                     HYPER-SPEED
                     <br />
                     <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500 animate-gradient-x">
@@ -235,7 +235,7 @@ const App: React.FC = () => {
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 1.05, filter: 'blur(10px)' }}
                 aria-labelledby="transfer-mode-heading"
-                className="w-full max-w-5xl px-1 pb-4 pt-16 sm:px-4 md:my-auto md:py-0"
+                className="my-auto w-full max-w-5xl px-0 pb-2 pt-2 sm:px-2 sm:pt-4 md:px-4 md:py-0"
               >
                 <div className="mb-5 text-center md:mb-7">
                   <p className="mb-2 text-xs font-bold uppercase tracking-[0.24em] text-cyan-300">
@@ -254,7 +254,7 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="grid w-full grid-cols-1 items-stretch gap-4 md:grid-cols-2 md:gap-5">
-                  <div className="group relative flex flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/45 p-5 shadow-2xl backdrop-blur-xl transition-colors duration-300 hover:border-cyan-400/50 sm:p-6 md:min-h-[350px]">
+                  <div className="group relative flex flex-col overflow-hidden rounded-[1.5rem] border border-white/10 bg-black/45 p-4 shadow-2xl backdrop-blur-xl transition-colors duration-300 hover:border-cyan-400/50 sm:rounded-[1.75rem] sm:p-6 md:min-h-[350px]">
                     <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 via-transparent to-emerald-500/10 opacity-60" />
 
                     <div className="relative z-10 flex items-center gap-4">
@@ -274,7 +274,7 @@ const App: React.FC = () => {
                     <div className="relative z-10 mt-5 grid flex-1 gap-3">
                       <button
                         onClick={() => setMode(AppMode.SENDER)}
-                        className="group/p2p flex min-h-[98px] flex-col justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-5 py-4 text-left transition-all hover:border-cyan-300 hover:bg-cyan-500/20"
+                        className="group/p2p flex min-h-[88px] flex-col justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-4 py-3.5 text-left transition-all hover:border-cyan-300 hover:bg-cyan-500/20 sm:min-h-[98px] sm:px-5 sm:py-4"
                       >
                         <span className="flex items-center gap-2 text-base font-bold tracking-[0.12em] text-cyan-100 sm:text-lg">
                           <Zap className="h-5 w-5" />
@@ -287,7 +287,7 @@ const App: React.FC = () => {
 
                       <button
                         onClick={() => setMode(AppMode.CLOUD_SENDER)}
-                        className="group/cloud flex min-h-[98px] flex-col justify-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-left transition-all hover:border-emerald-300 hover:bg-emerald-500/20"
+                        className="group/cloud flex min-h-[88px] flex-col justify-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3.5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-500/20 sm:min-h-[98px] sm:px-5 sm:py-4"
                       >
                         <span className="flex items-center gap-2 text-base font-bold tracking-[0.12em] text-emerald-100 sm:text-lg">
                           <CloudUpload className="h-5 w-5" />
@@ -303,7 +303,7 @@ const App: React.FC = () => {
 
                   <MagneticButton
                     onClick={() => setMode(AppMode.RECEIVER)}
-                    className="group relative flex min-h-[180px] w-full flex-col items-center justify-center overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/45 p-6 shadow-2xl backdrop-blur-xl transition-colors duration-300 hover:border-purple-400/50 md:min-h-[350px]"
+                    className="group relative flex min-h-[150px] w-full flex-col items-center justify-center overflow-hidden rounded-[1.5rem] border border-white/10 bg-black/45 p-5 shadow-2xl backdrop-blur-xl transition-colors duration-300 hover:border-purple-400/50 sm:min-h-[180px] sm:rounded-[1.75rem] sm:p-6 md:min-h-[350px]"
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 via-transparent to-cyan-500/5 opacity-60" />
                     <div className="relative z-10 flex flex-col items-center text-center">
@@ -332,7 +332,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex min-h-full w-full flex-col items-center justify-start pt-12 pb-28 md:justify-center md:pt-20 md:pb-10"
+                className="flex min-h-full w-full flex-col items-center justify-start pb-4 pt-2 sm:pt-4 md:justify-center md:pb-6 md:pt-6"
               >
                 <SenderView />
 
@@ -348,7 +348,7 @@ const App: React.FC = () => {
                       setMode(AppMode.SELECTION);
                     });
                   }}
-                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
+                  className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
                   Abort Mission
                 </button>
@@ -361,7 +361,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex min-h-full w-full flex-col items-center justify-start pt-12 pb-28 md:justify-center md:pt-20 md:pb-10"
+                className="flex min-h-full w-full flex-col items-center justify-start pb-4 pt-2 sm:pt-4 md:justify-center md:pb-6 md:pt-6"
               >
                 <CloudSenderView />
 
@@ -371,7 +371,7 @@ const App: React.FC = () => {
                       setMode(AppMode.SELECTION);
                     });
                   }}
-                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
+                  className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
                   Close Drop
                 </button>
@@ -384,7 +384,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="w-full h-full flex flex-col items-center justify-center pt-20 pb-10"
+                className="flex h-full w-full flex-col items-center justify-center pb-4 pt-2 md:pb-6 md:pt-6"
               >
                 <CloudDownloadView shareId={cloudShareId} />
 
@@ -396,7 +396,7 @@ const App: React.FC = () => {
                       window.history.pushState({}, '', '/');
                     });
                   }}
-                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
+                  className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
                   Close Drop
                 </button>
@@ -409,7 +409,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex min-h-full w-full flex-col items-center justify-start pt-12 pb-28 md:justify-center md:pt-20 md:pb-10"
+                className="flex min-h-full w-full flex-col items-center justify-start pb-4 pt-2 sm:pt-4 md:justify-center md:pb-6 md:pt-6"
               >
                 <ReceiverView
                   onOpenCloudShare={shareId => {
@@ -426,7 +426,7 @@ const App: React.FC = () => {
                       setRoomId(null);
                     });
                   }}
-                  className="fixed bottom-5 rounded-full border border-white/10 bg-black/35 px-5 py-2.5 text-xs uppercase tracking-[0.18em] text-gray-300 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white md:bottom-8"
+                  className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
                   Close Gate
                 </button>

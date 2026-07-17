@@ -566,7 +566,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
     'bg-black/40 backdrop-blur-2xl border border-cyan-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)]';
 
   return (
-    <div className="relative z-10 flex min-h-full w-full flex-col items-center justify-start px-4 pb-20 pt-0 md:justify-center md:px-0 md:py-6">
+    <div className="relative z-10 flex min-h-full w-full flex-col items-center justify-start px-1 pb-4 pt-0 sm:px-3 md:justify-center md:px-0 md:py-4">
       <AnimatePresence>
         {/* --- STATE: SCANNING (bulk metadata listing) --- */}
         {status === 'SCANNING' && (
@@ -798,24 +798,24 @@ const SenderView: React.FC<SenderViewProps> = () => {
             key="transferring"
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-xl space-y-8"
+            className="w-full max-w-xl space-y-5 px-1 sm:space-y-8 sm:px-0"
           >
             {/* Header */}
             <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2 animate-pulse brand-font text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400">
+              <h2 className="mb-2 animate-pulse brand-font text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400 sm:text-3xl">
                 WARPING DATA...
               </h2>
-              <p className="text-6xl font-mono font-black text-white drop-shadow-[0_0_20px_rgba(6,182,212,0.5)]">
+              <p className="font-mono text-5xl font-black text-white drop-shadow-[0_0_20px_rgba(6,182,212,0.5)] sm:text-6xl">
                 {progressData.progress.toFixed(1)}
-                <span className="text-2xl text-gray-500">%</span>
+                <span className="text-xl text-gray-500 sm:text-2xl">%</span>
               </p>
-              <p className="mt-3 text-sm text-cyan-100/70 font-mono">
+              <p className="mt-3 px-2 text-xs text-cyan-100/70 font-mono break-words sm:text-sm">
                 {transferFeedbackLabel}
               </p>
             </div>
 
             {/* Peer Status Badge */}
-            <div className="flex justify-center gap-3">
+            <div className="flex flex-wrap justify-center gap-2 sm:gap-3">
               <div className="flex items-center gap-2 bg-gray-900/60 px-4 py-2 rounded-full border border-gray-700 backdrop-blur-sm">
                 <Users size={14} className="text-cyan-400" />
                 <span className="text-xs text-gray-300 font-mono">
@@ -846,7 +846,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
             {/* Stats Grid */}
             <p
-              className={`text-center text-[11px] font-mono -mt-2 mb-1 ${
+              className={`-mt-1 mb-1 px-2 text-center font-mono text-[10px] leading-relaxed break-words sm:text-[11px] ${
                 progressData.pathKind === 'relay'
                   ? 'text-amber-300'
                   : progressData.pathKind === 'host'
@@ -865,7 +865,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
                   ? ' (TURN relay — not LAN direct)'
                   : ''}
             </p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4 md:gap-4">
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
                   Speed

@@ -76,7 +76,7 @@ const LegalBeacon: React.FC<LegalBeaconProps> = ({ onNavigate }) => {
   return (
     <div
       ref={panelRef}
-      className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] md:right-8 md:bottom-8 z-[60]"
+      className="fixed right-3 bottom-[max(5.25rem,calc(env(safe-area-inset-bottom)+4.5rem))] z-[60] md:right-8 md:bottom-8"
     >
       {open && (
         <div className="mb-3 w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-cyan-400/25 bg-gray-950/90 backdrop-blur-xl shadow-[0_0_30px_rgba(6,182,212,0.16)] overflow-hidden">

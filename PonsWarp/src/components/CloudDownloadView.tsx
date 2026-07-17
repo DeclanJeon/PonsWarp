@@ -188,7 +188,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     downloadAllStatus === 'DOWNLOADING' || !share?.completed;
 
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
+    <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-1 py-2 sm:px-3 sm:py-4 md:px-0">
       <AnimatePresence mode="wait">
         {status === 'LOADING' && (
           <motion.div

@@ -576,10 +576,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
   // Common Styles
   const glassPanelClass =
-    'bg-black/40 p-3 backdrop-blur-2xl border border-white/10 rounded-[2rem] shadow-2xl w-full max-w-md mx-4 overflow-hidden relative';
+    'relative w-full max-w-md overflow-hidden rounded-[1.5rem] border border-white/10 bg-black/40 p-2 shadow-2xl backdrop-blur-2xl sm:mx-0 sm:rounded-[2rem] sm:p-3';
 
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full px-4 md:px-0 z-10 relative">
+    <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-1 sm:px-3 md:px-0">
       <AnimatePresence mode="wait">
         {/* --- STATE: IDLE (Enter Code) --- */}
         {status === 'IDLE' && (
@@ -590,8 +590,8 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
             exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
             className={glassPanelClass}
           >
-            <div className="text-center relative z-10 p-6 md:p-8">
-              <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-6 bg-gradient-to-br from-cyan-500/20 to-purple-500/20 rounded-3xl flex items-center justify-center border border-white/10 shadow-[0_0_30px_rgba(168,85,247,0.2)]">
+            <div className="relative z-10 p-4 text-center sm:p-6 md:p-8">
+              <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-3xl border border-white/10 bg-gradient-to-br from-cyan-500/20 to-purple-500/20 shadow-[0_0_30px_rgba(168,85,247,0.2)] sm:mb-6 sm:h-16 sm:w-16 md:h-20 md:w-20">
                 <Scan className="w-8 h-8 md:w-10 md:h-10 text-white drop-shadow-lg" />
               </div>
 
@@ -605,7 +605,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                   onChange={e => setReceiveInput(e.target.value)}
                   placeholder="CODE OR LINK"
                   maxLength={160}
-                  className="w-full rounded-2xl border border-gray-600 bg-black/30 p-5 text-center font-mono text-xl uppercase tracking-[0.25em] text-white outline-none transition-all placeholder-gray-600 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 sm:p-6 sm:text-3xl sm:tracking-[0.5em]"
+                  className="w-full rounded-2xl border border-gray-600 bg-black/30 p-4 text-center font-mono text-lg uppercase tracking-[0.18em] text-white outline-none transition-all placeholder-gray-600 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 sm:p-5 sm:text-xl sm:tracking-[0.25em] md:p-6 md:text-3xl md:tracking-[0.5em]"
                 />
                 <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-cyan-500/50 rounded-tl-lg -translate-x-2 -translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
                 <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-purple-500/50 rounded-br-lg translate-x-2 translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
@@ -683,17 +683,17 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
             exit={{ opacity: 0, scale: 1.1 }}
             className={glassPanelClass}
           >
-            <div className="text-center relative z-10">
-              <div className="w-20 h-20 mx-auto mb-6 bg-cyan-500/10 rounded-full flex items-center justify-center border border-cyan-500/20">
-                <Archive className="w-10 h-10 text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
+            <div className="relative z-10 p-3 text-center sm:p-4 md:p-0">
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-cyan-500/20 bg-cyan-500/10 sm:mb-6 sm:h-20 sm:w-20">
+                <Archive className="h-8 w-8 text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)] sm:h-10 sm:w-10" />
               </div>
 
-              <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 tracking-wider brand-font">
+              <h2 className="mb-2 brand-font text-xl font-bold tracking-wider text-white sm:text-2xl md:text-3xl">
                 INCOMING TRANSMISSION
               </h2>
 
               {/* File Info Box */}
-              <div className="bg-gray-800/50 p-6 rounded-2xl mb-8 border border-gray-700/50 text-left">
+              <div className="mb-6 rounded-2xl border border-gray-700/50 bg-gray-800/50 p-4 text-left sm:mb-8 sm:p-6">
                 <div className="flex items-start gap-4 mb-4">
                   <div className="bg-gray-700/50 p-3 rounded-lg">
                     {manifest?.isFolder ? (
@@ -755,9 +755,9 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
         {/* 4. RECEIVING (REVERSE WARP VISIBLE) */}
         {status === 'RECEIVING' && (
-          <div className="text-center w-full max-w-2xl relative">
+          <div className="relative w-full max-w-2xl px-1 text-center sm:px-0">
             {/* 중앙 HUD 스타일 프로그레스 */}
-            <div className="relative w-64 h-64 mx-auto mb-8">
+            <div className="relative mx-auto mb-5 h-48 w-48 sm:mb-8 sm:h-64 sm:w-64">
               {/* 배경 링 */}
               <svg
                 className="w-full h-full rotate-[-90deg]"
@@ -800,9 +800,9 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
               </svg>
               {/* 중앙 정보 */}
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-5xl font-black font-rajdhani text-white drop-shadow-lg">
+                <span className="font-rajdhani text-4xl font-black text-white drop-shadow-lg sm:text-5xl">
                   {Math.round(safeProgress)}
-                  <span className="text-2xl text-cyan-400">%</span>
+                  <span className="text-xl text-cyan-400 sm:text-2xl">%</span>
                 </span>
                 <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">
                   INCOMING STREAM
@@ -814,34 +814,34 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
             </div>
 
             {/* 하단 정보 패널 (투명) */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-black/20 backdrop-blur-md rounded-2xl p-6 border border-white/5">
+            <div className="grid grid-cols-1 gap-3 rounded-2xl border border-white/5 bg-black/20 p-4 backdrop-blur-md sm:grid-cols-3 sm:gap-4 sm:p-6">
               <div className="text-left">
                 <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
                   Download Speed
                 </p>
-                <p className="font-mono text-xl text-cyan-400 font-bold">
+                <p className="font-mono text-lg font-bold text-cyan-400 sm:text-xl">
                   {formatBytes(progressData.speed)}/s
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+              <div className="text-left sm:text-right">
+                <p className="mb-1 text-xs uppercase tracking-wider text-gray-500">
                   Data Received
                 </p>
-                <p className="font-mono text-xl text-white">
+                <p className="font-mono text-lg text-white sm:text-xl">
                   {formatBytes(progressData.bytesTransferred)}
                 </p>
               </div>
               <div className="text-left sm:text-right">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">
+                <p className="mb-1 text-xs uppercase tracking-wider text-gray-500">
                   Time Left
                 </p>
-                <p className="font-mono text-xl text-white">
+                <p className="font-mono text-lg text-white sm:text-xl">
                   {formatRemainingTime(estimatedSecondsRemaining)}
                 </p>
               </div>
             </div>
 
-            <p className="mt-8 text-cyan-500/50 text-sm animate-pulse tracking-[0.2em] font-mono">
+            <p className="mt-5 animate-pulse px-2 font-mono text-[11px] tracking-[0.14em] text-cyan-500/50 sm:mt-8 sm:text-sm sm:tracking-[0.2em]">
               &lt;&lt;&lt; RECEIVING MATTER STREAM &lt;&lt;&lt;
             </p>
           </div>
@@ -859,7 +859,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
               <div className="relative w-24 h-24 mx-auto mb-6 bg-green-500/10 rounded-full flex items-center justify-center border border-green-500/20">
                 <CheckCircle className="w-12 h-12 text-green-400 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
               </div>
-              <h2 className="text-3xl font-bold text-white mb-2 tracking-wider brand-font">
+              <h2 className="mb-2 brand-font text-2xl font-bold tracking-wider text-white sm:text-3xl">
                 MATERIALIZED
               </h2>
               <p className="text-gray-400 mb-8">

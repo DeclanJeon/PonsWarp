@@ -429,7 +429,7 @@ const CloudSenderView: React.FC = () => {
     'bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
 
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full px-4 py-6 md:px-0 z-10 relative">
+    <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-1 py-2 sm:px-3 sm:py-4 md:px-0">
       <AnimatePresence mode="wait">
         {status === 'IDLE' && (
           <motion.div

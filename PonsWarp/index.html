@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-P7S8EEK1TX"></script>
@@ -22,7 +22,17 @@
     <meta name="author" content="Declan">
     <meta name="theme-color" content="#000000">
     <meta name="mobile-web-app-capable" content="yes">
-    <style>html, body { overscroll-behavior-y: none; }</style>
+    <style>
+      html, body {
+        overscroll-behavior-y: none;
+        height: 100%;
+        width: 100%;
+      }
+      #root {
+        min-height: 100%;
+        min-height: 100dvh;
+      }
+    </style>
     <link rel="canonical" href="https://warp.ponslink.com/">
 
     <!-- Favicons -->

@@ -37,8 +37,8 @@ export const TransferProgressBar: React.FC = () => {
   }, []);
 
   return (
-    <div className="w-full max-w-md mx-auto">
-      <div className="flex justify-between mb-2 text-cyan-400 font-mono text-sm">
+    <div className="mx-auto w-full max-w-md px-1 sm:px-0">
+      <div className="mb-2 flex justify-between font-mono text-xs text-cyan-400 sm:text-sm">
         <span className="tracking-wider">TRANSFERRING</span>
         <div className="flex gap-4">
           <span ref={speedRef} className="text-cyan-300">

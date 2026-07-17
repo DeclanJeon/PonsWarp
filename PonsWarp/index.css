@@ -152,3 +152,102 @@ html.transfer-active body {
   height: 100%;
   overflow: hidden;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Responsive shell: phone / tablet / desktop                                 */
+/* -------------------------------------------------------------------------- */
+:root {
+  --app-header-h: 4.25rem;
+  --app-bottom-nav-h: 4.75rem;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+@media (min-width: 768px) {
+  :root {
+    --app-header-h: 5.5rem;
+    --app-bottom-nav-h: 5rem;
+  }
+}
+
+html {
+  height: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+/* App shell fills dynamic viewport (mobile browser chrome safe) */
+.app-shell {
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+.app-header {
+  padding-top: max(0.75rem, var(--safe-top));
+  padding-left: max(1rem, var(--safe-left));
+  padding-right: max(1rem, var(--safe-right));
+}
+
+.app-main {
+  /* Leave room for fixed header + bottom action chips */
+  padding-top: calc(var(--app-header-h) + var(--safe-top));
+  padding-bottom: calc(var(--app-bottom-nav-h) + var(--safe-bottom));
+  padding-left: max(0.75rem, var(--safe-left));
+  padding-right: max(0.75rem, var(--safe-right));
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.app-bottom-action {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(1rem, calc(var(--safe-bottom) + 0.75rem));
+  z-index: 40;
+  max-width: calc(100vw - 2rem);
+  white-space: nowrap;
+}
+
+/* Keep toast / legal controls clear of bottom action chips on phones */
+.app-toast-stack {
+  left: max(0.75rem, var(--safe-left));
+  right: max(0.75rem, var(--safe-right));
+  bottom: max(5.5rem, calc(var(--safe-bottom) + 5rem));
+}
+
+@media (min-width: 768px) {
+  .app-toast-stack {
+    left: auto;
+    right: max(2rem, var(--safe-right));
+    bottom: max(2rem, calc(var(--safe-bottom) + 1.5rem));
+    width: auto;
+  }
+}
+
+/* Touch targets */
+@media (pointer: coarse) {
+  button,
+  [role='button'] {
+    min-height: 44px;
+  }
+}
+
+/* Narrow phones: reduce letter-spacing that overflows */
+@media (max-width: 380px) {
+  .brand-font {
+    letter-spacing: 0.02em;
+  }
+}
