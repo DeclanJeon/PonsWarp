@@ -235,7 +235,7 @@ async function main() {
   let lastRecv = '';
   let lastSend = '';
 
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 180; i++) {
     await sleep(1000);
     lastRecv = await body(receiver);
     lastSend = await body(sender);

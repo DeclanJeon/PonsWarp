@@ -191,9 +191,8 @@ export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   chunkSizeBytes: 128 * KIB,
   minInFlightBytes: 4 * MIB,
   initialInFlightBytes: 8 * MIB,
-  // Raised carefully after reliability fixes. 24MiB previously correlated
-  // with DataChannel hard-close under main-thread decrypt pressure.
-  maxInFlightBytes: 16 * MIB,
+  // Balanced: enough BDP for ≥8 MB/s LAN, low enough to survive decrypt lag.
+  maxInFlightBytes: 12 * MIB,
   lowWaterBytes: 2 * MIB,
   // Host: no mid-transfer partition barrier (reliable SCTP + end checkpoint)
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,

@@ -26,6 +26,7 @@ import streamSaver from 'streamsaver';
 import initPonsCore, { CryptoSession, Zip64Stream } from 'pons-core-wasm';
 import { WasmReorderingBuffer } from './wasmReorderingBuffer';
 import { logInfo, logError, logWarn, logDebug } from '../utils/logger';
+import { BulkDecryptWorker } from './bulkDecryptWorker';
 import { HEADER_SIZE } from '../utils/constants';
 import { calculateReceiverBufferedProgress } from '../utils/transferProgress';
 import { TransferSpeedMeter } from '../utils/transferEstimate';
@@ -50,8 +51,8 @@ if (typeof window !== 'undefined') {
 
 // 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
 // 32MB 이상 쌓이면 PAUSE 요청, 16MB 이하로 떨어지면 RESUME 요청
-const WRITE_BUFFER_HIGH_MARK = 32 * 1024 * 1024;
-const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
+const WRITE_BUFFER_HIGH_MARK = 24 * 1024 * 1024;
+const WRITE_BUFFER_LOW_MARK = 8 * 1024 * 1024;
 const ENCRYPTED_HEADER_SIZE = 38;
 const AUTH_TAG_SIZE = 16;
 const MAX_RESUME_ATTEMPTS = 3;
@@ -125,6 +126,8 @@ export class DirectFileWriter {
   // 🚀 버퍼 추적 및 흐름 제어 변수
   private isPaused = false;
   private sessionKey: Uint8Array | null = null;
+  private bulkDecryptWorker: BulkDecryptWorker | null = null;
+  private bulkDecryptArmPromise: Promise<void> | null = null;
   private randomPrefix: Uint8Array | null = null;
   private cryptoSession: CryptoSession | null = null;
   private decryptCryptoKey: CryptoKey | null = null;
@@ -227,7 +230,27 @@ export class DirectFileWriter {
     this.randomPrefix = new Uint8Array(randomPrefix);
     this.cryptoSession = null;
     this.decryptCryptoKey = null;
+    // Prefer off-main-thread decrypt for bulk throughput.
+    this.bulkDecryptArmPromise = this.armBulkDecryptWorker();
     logInfo('[DirectFileWriter]', '🔐 Encryption key configured');
+  }
+
+  private async armBulkDecryptWorker(): Promise<void> {
+    if (!this.sessionKey || !BulkDecryptWorker.isSupported()) return;
+    try {
+      this.bulkDecryptWorker?.close();
+      const worker = new BulkDecryptWorker();
+      await worker.start(this.sessionKey);
+      this.bulkDecryptWorker = worker;
+      logInfo('[DirectFileWriter]', '🔐 Bulk decrypt worker armed');
+    } catch (error) {
+      this.bulkDecryptWorker = null;
+      logWarn(
+        '[DirectFileWriter]',
+        'Bulk decrypt worker unavailable; using main-thread decrypt',
+        error
+      );
+    }
   }
 
   /**
@@ -1308,6 +1331,31 @@ export class DirectFileWriter {
       return packet;
     }
 
+    // Wait for async arm so early bulk packets still hit the worker.
+    if (this.bulkDecryptArmPromise) {
+      try {
+        await this.bulkDecryptArmPromise;
+      } catch {
+        // arm already logged; fall through to main-thread decrypt
+      }
+    }
+    // Off-main-thread decrypt when worker is armed.
+    if (this.bulkDecryptWorker) {
+      try {
+        // Transfer a copy so main-thread fallback still has the original.
+        return await this.bulkDecryptWorker.decrypt(packet.slice(0));
+      } catch (error) {
+        logWarn(
+          '[DirectFileWriter]',
+          'Worker decrypt failed; falling back to main thread',
+          error
+        );
+        this.bulkDecryptWorker?.close();
+        this.bulkDecryptWorker = null;
+        // fall through to main-thread decrypt with original packet
+      }
+    }
+
     if (packet.byteLength < ENCRYPTED_HEADER_SIZE + AUTH_TAG_SIZE) {
       throw new Error('Encrypted packet too short');
     }
@@ -1338,9 +1386,9 @@ export class DirectFileWriter {
     normalizedView.setUint32(14, decrypted.length, true);
     normalizedView.setUint32(18, 0, true);
     normalizedBytes.set(decrypted, HEADER_SIZE);
-
     return normalized;
   }
+
 
   private async decryptEncryptedPacket(bytes: Uint8Array): Promise<Uint8Array> {
     if (this.sessionKey && globalThis.crypto?.subtle) {
@@ -1903,6 +1951,8 @@ export class DirectFileWriter {
    * 🚀 [OPFS 모드] OPFS 파일 정리
    */
   public async cleanup(): Promise<void> {
+    this.bulkDecryptWorker?.close();
+    this.bulkDecryptWorker = null;
     this.isFinalized = true;
     this.writeBuffer = []; // 메모리 해제
     this.blobChunks = []; // Blob 청크 메모리 해제

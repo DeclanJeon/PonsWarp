@@ -76,7 +76,7 @@ describe('transferFlowControl', () => {
   });
   it('starts from a resume cursor with the next nonce', () => {
     const scheduler = new HostTransferScheduler(
-      16 * 1024 * 1024,
+      12 * 1024 * 1024,
       5 * 1024 * 1024,
       7
     );
@@ -89,7 +89,7 @@ describe('transferFlowControl', () => {
     });
   });
   it('clears reservations on downgrade without rewinding the burned cursor', () => {
-    const scheduler = new HostTransferScheduler(16 * 1024 * 1024);
+    const scheduler = new HostTransferScheduler(12 * 1024 * 1024);
     scheduler.enable();
     const first = scheduler.reserve(1024)!;
     scheduler.settle(first);
@@ -142,10 +142,10 @@ describe('transferFlowControl', () => {
     ).toBeLessThanOrEqual(receiverPauseHighBytes);
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(16 * 1024 * 1024);
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
     expect(
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(16 * 1024 * 1024);
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
   });
 
   it('tunes relay for mobile Wi-Fi without mid-transfer partition barriers', () => {
@@ -166,7 +166,7 @@ describe('transferFlowControl', () => {
     // unknown inherits host profile for Wi-Fi first-path optimism
     expect(
       UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes
-    ).toBeLessThanOrEqual(16 * 1024 * 1024);
+    ).toBeLessThanOrEqual(12 * 1024 * 1024);
   });
 
   it('selects direct in-flight targets up to the profile maximum when bitrate stats are absent', () => {
