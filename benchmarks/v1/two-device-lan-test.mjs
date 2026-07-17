@@ -7,7 +7,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const APP = `https://warp.ponslink.com/?automation=1&nocache=1&v=${Date.now()}`;
-const TEST_FILE = '/tmp/ponswarp-lan-test-20mb.bin';
+const TEST_FILE = '/tmp/ponswarp-lan-test-50mb.bin';
 const REMOTE_DL = '/tmp/chrome-downloads';
 const TUNNEL_PORT = 9223;
 const REMOTE_PORT = 9222;
@@ -133,7 +133,7 @@ async function body(page) {
 }
 
 async function main() {
-  ensureFile(20);
+  ensureFile(50);
   await setupRemote();
 
   const senderBrowser = await chromium.launch({
@@ -265,7 +265,7 @@ async function main() {
   const avg = samples.length
     ? samples.reduce((a, b) => a + b.mbps, 0) / samples.length
     : 0;
-  const overall = status === 'COMPLETE' ? 20 / elapsed : avg;
+  const overall = status === 'COMPLETE' ? 50 / elapsed : avg;
   const result = {
     status,
     room,

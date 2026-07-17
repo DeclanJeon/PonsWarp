@@ -20,9 +20,9 @@ export const CHUNK_SIZE_MAX = 192 * 1024; // 192KB ceiling (safe under 256KB)
 // Measured Chromium host path (local loop): high≈2–4MB yields ~25+ MB/s;
 // 32MB high-water overflows the browser send queue and collapses to ~6–9 MB/s.
 // SCTP owns congestion control; app only paces on bufferedAmount.
-export const MAX_BUFFERED_AMOUNT = 10 * 1024 * 1024; // 10MB hard stop
-export const LOW_WATER_MARK = 1 * 1024 * 1024; // 1MB drain — refill sooner
-export const HIGH_WATER_MARK = 6 * 1024 * 1024; // 6MB fill target
+export const MAX_BUFFERED_AMOUNT = 16 * 1024 * 1024; // 16MB hard stop
+export const LOW_WATER_MARK = 2 * 1024 * 1024; // 2MB drain — refill sooner
+export const HIGH_WATER_MARK = 10 * 1024 * 1024; // 10MB fill target
 
 // 파티션 크기: 연속 전송 (ACK 불필요)
 export const TRANSFER_PARTITION_SIZE = 128 * 1024 * 1024;
@@ -77,7 +77,7 @@ export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
 // Native peer transport (control + bulk channels)
 export const NATIVE_PEER_ENABLED = true;
 // Produce ciphertext off main thread (AES-GCM E2E preserved).
-export const USE_BULK_ENCRYPT_WORKER = false;
+export const USE_BULK_ENCRYPT_WORKER = true;
 export const BULK_CHANNEL_COUNT = 1;
 // Host mid-transfer partition ACK wait (0 = disabled; end checkpoint only)
 export const HOST_CHECKPOINT_EVERY_BYTES = 0;
