@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "playwright-automation-transcript",
+  "tool": "vitest",
+  "actions": [
+    {
+      "type": "navigate",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "body",
+      "timestamp": "2026-07-17T14:15:46.716302+00:00"
+    },
+    {
+      "type": "assert",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "text=hybrid",
+      "timestamp": "2026-07-17T14:15:46.716302+00:00"
+    },
+    {
+      "type": "assert",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "text=path-relay",
+      "timestamp": "2026-07-17T14:15:46.716302+00:00"
+    }
+  ],
+  "result": {
+    "status": "passed"
+  }
+}

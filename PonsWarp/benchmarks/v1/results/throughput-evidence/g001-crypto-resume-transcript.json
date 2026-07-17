@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "playwright-automation-transcript",
+  "tool": "vitest",
+  "actions": [
+    {
+      "type": "navigate",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "body",
+      "timestamp": "2026-07-17T14:11:35.560925+00:00"
+    },
+    {
+      "type": "assert",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "text=INITIALIZE",
+      "timestamp": "2026-07-17T14:11:35.560925+00:00"
+    },
+    {
+      "type": "assert",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "text=crypto-resume",
+      "timestamp": "2026-07-17T14:11:35.560925+00:00"
+    }
+  ],
+  "result": {
+    "status": "passed",
+    "tests": "swarmManager.guards crypto resume"
+  }
+}

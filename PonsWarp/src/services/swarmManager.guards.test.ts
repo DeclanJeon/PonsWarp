@@ -737,6 +737,83 @@ describe('SwarmManager guard paths', () => {
     expect(writerInternals.receiverZipFinalized).toBe(true);
     expect(writerInternals.receiverZipFileIndex).toBe(3);
   });
+
+  it('re-imports partition crypto key on encrypted resume instead of aborting', async () => {
+    const { SwarmManager } = await import('./swarmManager');
+    const manager = new SwarmManager();
+    manager.enableEncryption();
+    const sessionKey = new Uint8Array(32).fill(21);
+    const randomPrefix = new Uint8Array(8).fill(34);
+    manager.setSessionKey(sessionKey, randomPrefix);
+
+    const internals = manager as unknown as {
+      partitionCryptoKey: CryptoKey | null;
+      partitionNonceCounter: number;
+      sessionKey: Uint8Array | null;
+      randomPrefix: Uint8Array | null;
+      encryptionEnabled: boolean;
+      currentTransferTuningProfile: { chunkSize: number };
+      ensurePartitionCryptoKey(): Promise<CryptoKey | null>;
+      advancePartitionNonceForResume(startOffset: number): void;
+    };
+
+    // Simulate CryptoKey dropped after background while key bytes remain.
+    internals.partitionCryptoKey = null;
+    internals.partitionNonceCounter = 0;
+    internals.currentTransferTuningProfile = { chunkSize: 64 * 1024 };
+    internals.encryptionEnabled = true;
+
+    const key = await internals.ensurePartitionCryptoKey();
+    expect(key).toBeTruthy();
+    expect(internals.partitionCryptoKey).toBe(key);
+
+    internals.advancePartitionNonceForResume(256 * 1024);
+    expect(internals.partitionNonceCounter).toBe(4);
+  });
+
+  it('force-sends CRYPTO_SESSION when handling resume requests', async () => {
+    const { SwarmManager } = await import('./swarmManager');
+    const manager = new SwarmManager();
+    const sent: string[] = [];
+    manager.enableEncryption();
+    manager.setSessionKey(new Uint8Array(32).fill(5), new Uint8Array(8).fill(6));
+
+    const peer = {
+      id: 'peer-resume',
+      connected: true,
+      send: (msg: string) => {
+        sent.push(msg);
+        return true;
+      },
+    };
+
+    const internals = manager as unknown as {
+      peers: Map<string, typeof peer>;
+      currentTransferPeers: Set<string>;
+      pendingManifest: { totalSize: number; totalFiles: number } | null;
+      files: unknown[];
+      transferRunId: number;
+      handleResumeRequest(peerId: string, msg: { offset: number }): void;
+      requestTransferStart: (intent: unknown) => void;
+      canResumeSingleFileTransfer(): boolean;
+    };
+
+    internals.peers = new Map([['peer-resume', peer]]);
+    internals.currentTransferPeers = new Set(['peer-resume']);
+    internals.pendingManifest = { totalSize: 1024 * 1024, totalFiles: 1 };
+    internals.files = [{}];
+    internals.transferRunId = 1;
+    let startIntent: unknown = null;
+    internals.requestTransferStart = intent => {
+      startIntent = intent;
+    };
+
+    internals.handleResumeRequest('peer-resume', { offset: 128 * 1024 });
+
+    expect(startIntent).toMatchObject({ offset: 128 * 1024, reason: 'resume' });
+    expect(sent.some(m => m.includes('CRYPTO_SESSION'))).toBe(true);
+  });
+
   it('sends resume hints when a connected page returns to the foreground', async () => {
     const { transferService } = await import('./webRTCService');
     const sentMessages: unknown[] = [];

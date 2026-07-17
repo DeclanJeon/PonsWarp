@@ -10,6 +10,8 @@
 import {
   HYBRID_HTTP_ASSIST,
   HYBRID_MIN_BYTES,
+  HYBRID_TRIGGER_MBps,
+  HYBRID_ELEVATED_RTT_MS,
   HYBRID_UPLOAD_CONCURRENCY,
 } from '../utils/constants';
 import { logInfo, logWarn, logError } from '../utils/logger';
@@ -54,12 +56,23 @@ export function isHybridCompileEnabled(): boolean {
   return HYBRID_HTTP_ASSIST === true;
 }
 
+export type HybridPathKind = 'host' | 'srflx' | 'relay' | 'unknown' | string;
+
 export function shouldArmHybrid(params: {
   compileEnabled?: boolean;
   remoteCaps?: HybridPeerCaps | null;
   totalBytes: number;
   cloudApiConfigured: boolean;
   minBytes?: number;
+  /** Selected ICE path. host/srflx LAN stays WebRTC-primary unless slow. */
+  pathKind?: HybridPathKind | null;
+  rttMs?: number | null;
+  /** Observed bulk throughput in MB/s; if below trigger on non-direct paths, arm. */
+  observedMBps?: number | null;
+  triggerMBps?: number;
+  elevatedRttMs?: number;
+  /** Force arm for tests / explicit operator override. */
+  force?: boolean;
 }): HybridArmDecision {
   const compileEnabled = params.compileEnabled ?? isHybridCompileEnabled();
   if (!compileEnabled) {
@@ -75,7 +88,63 @@ export function shouldArmHybrid(params: {
   if (params.totalBytes < minBytes) {
     return { armed: false, reason: `below-min-bytes:${minBytes}` };
   }
-  return { armed: true, reason: 'ok' };
+
+  if (params.force) {
+    return { armed: true, reason: 'force' };
+  }
+
+  const pathKind = (params.pathKind || 'unknown').toLowerCase();
+  const rttMs =
+    typeof params.rttMs === 'number' && Number.isFinite(params.rttMs)
+      ? params.rttMs
+      : null;
+  const elevatedRtt = params.elevatedRttMs ?? HYBRID_ELEVATED_RTT_MS;
+  const trigger = params.triggerMBps ?? HYBRID_TRIGGER_MBps;
+  const observed =
+    typeof params.observedMBps === 'number' && Number.isFinite(params.observedMBps)
+      ? params.observedMBps
+      : null;
+
+  // Never block LAN host/direct WebRTC-primary with hybrid tee pressure.
+  if (pathKind === 'host' || pathKind === 'srflx') {
+    if (rttMs !== null && rttMs >= elevatedRtt) {
+      return {
+        armed: true,
+        reason: `elevated-rtt:${Math.round(rttMs)}ms`,
+      };
+    }
+    if (observed !== null && observed > 0 && observed < trigger) {
+      return {
+        armed: true,
+        reason: `slow-direct:${observed.toFixed(2)}MBps`,
+      };
+    }
+    return { armed: false, reason: `direct-path:${pathKind}` };
+  }
+
+  // relay / unknown / cgnat-like: eligible for hybrid assist.
+  if (pathKind === 'relay') {
+    return { armed: true, reason: 'path-relay' };
+  }
+  if (pathKind === 'unknown') {
+    if (rttMs !== null && rttMs >= elevatedRtt) {
+      return { armed: true, reason: `unknown-elevated-rtt:${Math.round(rttMs)}ms` };
+    }
+    if (observed !== null && observed > 0 && observed < trigger) {
+      return { armed: true, reason: `unknown-slow:${observed.toFixed(2)}MBps` };
+    }
+    // Unknown without slow signals: keep WebRTC-only to avoid surprising LAN cost.
+    return { armed: false, reason: 'path-unknown-not-slow' };
+  }
+
+  // Any other path label (future): arm when slow, else keep off.
+  if (observed !== null && observed > 0 && observed < trigger) {
+    return { armed: true, reason: `path-${pathKind}-slow` };
+  }
+  if (rttMs !== null && rttMs >= elevatedRtt) {
+    return { armed: true, reason: `path-${pathKind}-elevated-rtt` };
+  }
+  return { armed: false, reason: `path-${pathKind}-not-slow` };
 }
 
 /** Length-delimited packet framing for the hybrid HTTP object. */
