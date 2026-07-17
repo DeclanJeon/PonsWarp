@@ -697,8 +697,9 @@ export class SwarmManager {
       this.clearConnectionTimeout(key);
       peer.destroy();
       this.peers.delete(key);
-    this.cryptoSessionAnnouncedPeers.delete(peerId);
+      this.cryptoSessionAnnouncedPeers.delete(key);
     }
+    this.cryptoSessionAnnouncedPeers.delete(baseId);
     // Normalize to base id for state sets below
     peerId = baseId;
 
