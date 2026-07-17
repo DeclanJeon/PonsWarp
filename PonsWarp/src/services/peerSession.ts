@@ -78,6 +78,7 @@ export class PeerSession {
   private destroyed = false;
   private drainEmitted = false;
   private drainPollInterval: ReturnType<typeof setInterval> | null = null;
+  private closeEmitTimer: ReturnType<typeof setTimeout> | null = null;
   private eventListeners: Record<string, EventHandler[]> = {};
   private control: RTCDataChannel | null = null;
   private bulkChannels: RTCDataChannel[] = [];
@@ -215,10 +216,7 @@ export class PeerSession {
       this.control = channel;
       channel.onopen = () => this.maybeMarkConnected();
       channel.onclose = () => {
-        if (!this.destroyed) {
-          this.connected = false;
-          this.emit('close');
-        }
+        this.handleChannelClosed(channel);
       };
       channel.onerror = () => {
         // RTCDataChannel "error" often fires during ICE teardown / renegotiation.
@@ -265,10 +263,7 @@ export class PeerSession {
         this.ensureDrainWatchdog();
       };
       channel.onclose = () => {
-        if (!this.destroyed) {
-          this.connected = false;
-          this.emit('close');
-        }
+        this.handleChannelClosed(channel);
       };
       channel.onerror = () => {
         const pcState = this.pc?.connectionState;
@@ -726,6 +721,10 @@ export class PeerSession {
     this.destroyed = true;
     this.connected = false;
     this.ready = false;
+    if (this.closeEmitTimer) {
+      clearTimeout(this.closeEmitTimer);
+      this.closeEmitTimer = null;
+    }
 
     for (const ch of this.bulkChannels) {
       try {

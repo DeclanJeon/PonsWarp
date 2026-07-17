@@ -104,6 +104,9 @@ function normalizeLaneSignal(raw: unknown): { signal: any; lane: number } {
 export class ReceiverService {
   // 연결 관리
   private peer: SinglePeerConnection | null = null;
+  /** Bulk packets that arrived before writer was armed (MATERIALIZE race). */
+  private pendingBulkPackets: ArrayBuffer[] = [];
+  private static readonly MAX_PENDING_BULK_PACKETS = 512;
   /** Additional bulk PeerConnections keyed by lane (>0) */
   private stripePeers: Map<number, SinglePeerConnection> = new Map();
   private hybridManifest: HybridManifestMsg | null = null;
@@ -495,6 +498,7 @@ export class ReceiverService {
       await this.writer.initStorage(manifest);
 
       debugLog('[Receiver] ✅ Storage ready. Sending TRANSFER_READY...');
+      this.flushPendingBulkPackets();
       await lanEvidenceAdapter.reportPhase('RECEIVER_READY', {
         transferId: manifest.transferId,
         totalBytes: manifest.totalSize,
@@ -564,6 +568,7 @@ export class ReceiverService {
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
+    this.pendingBulkPackets = [];
     }
     for (const stripe of this.stripePeers.values()) {
       try {
@@ -1090,20 +1095,50 @@ export class ReceiverService {
     }
 
     // 2. 파일 데이터 (Binary) -> Writer로 전달
-    if (this.writer) {
-      this.writer
-        .writeChunk(data)
-        .then(() => {
-          // Per-chunk ACKs are disabled. Partition markers carry durability
-          // checkpoints; reliable SCTP already retransmits lost packets.
-        })
-        .catch(err => {
-          console.error('[Receiver] Write error:', err);
-          this.emit(
-            'error',
-            err instanceof Error ? err.message : 'Disk write failed'
-          );
-        });
+    if (!this.writer) {
+      if (
+        this.pendingBulkPackets.length <
+        ReceiverService.MAX_PENDING_BULK_PACKETS
+      ) {
+        this.pendingBulkPackets.push(data);
+      } else {
+        logWarn(
+          '[Receiver]',
+          'Dropping bulk packet: writer not ready and pre-writer queue full'
+        );
+      }
+      return;
+    }
+
+    this.enqueueWriterPacket(data);
+  }
+
+  private enqueueWriterPacket(data: ArrayBuffer): void {
+    if (!this.writer) return;
+    this.writer
+      .writeChunk(data)
+      .then(() => {
+        // Per-chunk ACKs are disabled. Partition markers carry durability
+        // checkpoints; reliable SCTP already retransmits lost packets.
+      })
+      .catch(err => {
+        console.error('[Receiver] Write error:', err);
+        this.emit(
+          'error',
+          err instanceof Error ? err.message : 'Disk write failed'
+        );
+      });
+  }
+
+  private flushPendingBulkPackets(): void {
+    if (!this.writer || this.pendingBulkPackets.length === 0) return;
+    const queued = this.pendingBulkPackets.splice(0);
+    logInfo(
+      '[Receiver]',
+      `Flushing ${queued.length} bulk packets buffered before writer ready`
+    );
+    for (const packet of queued) {
+      this.enqueueWriterPacket(packet);
     }
   }
 
