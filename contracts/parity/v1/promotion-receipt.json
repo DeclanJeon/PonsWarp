@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "contract": "ponswarp-backend-parity/v1",
+  "recordedAt": "2026-07-10",
+  "scriptCommands": [
+    "node scripts/backend-parity.mjs",
+    "node scripts/backend-parity.mjs --routes-only"
+  ],
+  "result": "passed",
+  "routeContractDigest": "e547a75d3591ffdbab03d93d1117fd492834f5fafca4111ac9cd201c5efc04cc",
+  "routeContractFileSha256": "a4f6faf12144d827cddeb901c6a3b52c5d69afdfe5bb189c07fb4e5a7d8de6cc",
+  "canonicalTree": {
+    "path": "ponswarp-signaling-rs",
+    "cargoManifestSha256": "e7f479667e9b5fdf16156edcc2313996b7105d61711fe925e537f19ea299635e"
+  },
+  "evidenceTree": {
+    "path": "PonsWarp/signaling-rs",
+    "cargoManifestSha256": "1e289fb307113645c017949b574628f5246919bc3c4c5d897241819895f6cf71"
+  },
+  "retainedResultPath": "contracts/parity/v1/dual-tree-route-inventory.json",
+  "retainedResultSha256": "addd97e2c3eb9597055d9e2cbfa3644eb68cc14b5e9fd4d472f1750803a9f5d6",
+  "unexplainedDifferences": [],
+  "verifiedSurfaces": {
+    "sourceInventory": true,
+    "exampleEnvironmentKeysAndDefaults": true,
+    "migrationNamesOrderAndChecksums": true,
+    "routeSet": true,
+    "protocolVariantSet": true,
+    "cloudShareRuntimeBehavior": true
+  },
+  "evidenceRefs": [
+    "artifact://103",
+    "artifact://228",
+    "contracts/parity/v1/dual-tree-route-inventory.json",
+    "contracts/parity/v1/route-parity-result.json"
+  ],
+  "notes": "The full dual-tree inventory passed before canonical refactoring (artifact://103). After intentional Stage 5 source divergence, the corrected chained-method extractor revalidated exact HTTP routes and protocol variants against both retained trees with zero unexplained contract differences. The retained dual-tree inventory binds every compared source, migration, example-environment, route, and protocol entry to byte lengths and SHA-256 digests."
+}

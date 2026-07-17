@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "v1-local-evidence",
+  "mode": "local",
+  "releaseEvidence": false,
+  "measuredAt": "2026-07-11T00:30:38.870Z",
+  "warmups": 3,
+  "samples": 10,
+  "machine": {
+    "uname": "7.0.0-27-generic",
+    "architecture": "x86_64",
+    "cpuVendor": "GenuineIntel",
+    "cpuModel": "",
+    "cpuFamily": "",
+    "cpuModelNumber": "126",
+    "cpuStepping": "5",
+    "onlineCpuCount": 8,
+    "totalMemoryBytes": 16043364352,
+    "rootFilesystem": "ext4 /dev/nvme0n1p2"
+  },
+  "fixture": {
+    "id": "ponswarp-benchmark-v1:regular-256MiB",
+    "file": "regular-256MiB.bin",
+    "bytes": 268435456,
+    "sha256": "c76ff7061585e2811f97031bfe9e36c61132f6aacc6a8b05bc3ccbb17c4ccc38"
+  },
+  "tool": {
+    "node": "v24.15.0",
+    "platform": "linux",
+    "arch": "x64",
+    "runner": "benchmarks/v1/run.mjs",
+    "workload": "pons-core-wasm:merkle_hash"
+  },
+  "fingerprint": {
+    "machine": "6c504e0a0b5589d6ba9c51eb5366ce9ac8a3b446456c715daeb6984ea24cedd3",
+    "image": null,
+    "browser": null,
+    "netem": null,
+    "node": "v24.15.0"
+  },
+  "throughputBytesPerSecond": 71195694.4877071,
+  "peakRssBytes": 139214848,
+  "sampleThroughputBytesPerSecond": [
+    66680027.22474055,
+    71860817.53977343,
+    74363045.65895708,
+    69841511.49140999,
+    70542582.30305327,
+    71848806.67236091,
+    71895738.29865228,
+    70285914.62902331,
+    69746405.70848529,
+    73349235.38921984
+  ],
+  "samplePeakRssBytes": [
+    137932800,
+    137003008,
+    137011200,
+    137928704,
+    138067968,
+    138203136,
+    137265152,
+    138366976,
+    138366976,
+    139214848
+  ],
+  "artifact": "baseline"
+}

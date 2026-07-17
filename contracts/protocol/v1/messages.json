@@ -1,0 +1,46 @@
+{
+  "version": "v1",
+  "room_code": "ABC123",
+  "client_messages": [
+    {"type":"Heartbeat"},
+    {"type":"JoinRoom","payload":{"room_id":"ABC123"}},
+    {"type":"LeaveRoom"},
+    {"type":"Offer","payload":{"room_id":"ABC123","sdp":"{\"type\":\"offer\",\"sdp\":\"v=0\\r\\n...\"}","target":"peer-b"}},
+    {"type":"Answer","payload":{"room_id":"ABC123","sdp":"{\"type\":\"answer\",\"sdp\":\"v=0\\r\\n...\"}","target":null}},
+    {"type":"IceCandidate","payload":{"room_id":"ABC123","candidate":"{\"candidate\":\"candidate:1 1 UDP 2122260223 192.0.2.1 54400 typ host\"}","target":"peer-b"}},
+    {"type":"Manifest","payload":{"room_id":"ABC123","manifest":"{\"files\":[{\"name\":\"demo.bin\",\"size\":1024}]}","target":"peer-b"}},
+    {"type":"TransferReady","payload":{"room_id":"ABC123","target":"peer-b"}},
+    {"type":"TransferComplete","payload":{"room_id":"ABC123","target":null}},
+    {"type":"RequestTurnConfig","payload":{"room_id":"ABC123","force_refresh":true}},
+    {"type":"RefreshTurnCredentials","payload":{"room_id":"ABC123","current_username":"user-123"}},
+    {"type":"CheckTurnServerStatus"}
+  ],
+  "server_messages": [
+    {"type":"Connected","payload":{"socket_id":"socket-a"}},
+    {"type":"HeartbeatAck"},
+    {"type":"Error","payload":{"code":"ROOM_NOT_FOUND","message":"room does not exist"}},
+    {"type":"JoinedRoom","payload":{"room_id":"ABC123","socket_id":"socket-a","user_count":2}},
+    {"type":"RoomUsers","payload":{"users":["socket-a","socket-b"]}},
+    {"type":"PeerJoined","payload":{"socket_id":"socket-b","room_id":"ABC123"}},
+    {"type":"UserLeft","payload":{"socket_id":"socket-b"}},
+    {"type":"RoomFull","payload":{"room_id":"ABC123"}},
+    {"type":"Offer","payload":{"from":"socket-b","sdp":"{\"type\":\"offer\",\"sdp\":\"v=0\\r\\n...\"}"}},
+    {"type":"Answer","payload":{"from":"socket-b","sdp":"{\"type\":\"answer\",\"sdp\":\"v=0\\r\\n...\"}"}},
+    {"type":"IceCandidate","payload":{"from":"socket-b","candidate":"{\"candidate\":\"candidate:1 1 UDP 2122260223 192.0.2.1 54400 typ host\"}"}},
+    {"type":"Manifest","payload":{"from":"socket-a","manifest":"{\"files\":[{\"name\":\"demo.bin\",\"size\":1024}]}"}},
+    {"type":"TransferReady","payload":{"from":"socket-b"}},
+    {"type":"TransferComplete","payload":{"from":"socket-b"}},
+    {"type":"TurnConfig","payload":{"success":true,"data":{"ice_servers":[{"urls":["stun:stun.example.com:3478"]},{"urls":["turn:turn.example.com:3478?transport=udp"],"username":"user-123","credential":"secret","credential_type":"password"}],"ttl":600,"timestamp":1700000000,"room_id":"ABC123"},"error":null}},
+    {"type":"TurnServerStatusUpdate","payload":{"room_id":"ABC123","timestamp":1700000000}}
+  ],
+  "data_channel_payloads": {
+    "control": [
+      {"type":"CONTROL","action":"PAUSE"},
+      {"type":"CONTROL","action":"RESUME"},
+      {"type":"CONTROL","action":"ACK"}
+    ],
+    "ack": [{"type":"PARTITION_ACK","offset":524288,"runId":7}],
+    "resume": [{"type":"RESUME_REQUEST","offset":1048576,"reason":"receiver reconnected"}],
+    "complete": [{"type":"DOWNLOAD_COMPLETE","actualSize":1048576}]
+  }
+}

@@ -1,0 +1,15 @@
+FROM ubuntu:24.04
+ARG RELEASE_ID=unknown
+LABEL org.opencontainers.image.title="ponswarp-signaling" \
+      org.opencontainers.image.revision="$RELEASE_ID"
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 10001 -g nogroup ponswarp
+
+COPY ponswarp-signaling-rs /usr/local/bin/ponswarp-signaling-rs
+
+USER ponswarp
+EXPOSE 5502
+ENTRYPOINT ["/usr/local/bin/ponswarp-signaling-rs"]

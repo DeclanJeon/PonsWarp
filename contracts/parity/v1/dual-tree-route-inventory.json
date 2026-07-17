@@ -1,0 +1,2634 @@
+{
+  "contract": "ponswarp-backend-parity/v1",
+  "mode": "routes-only",
+  "passed": true,
+  "readOnly": true,
+  "sources": {
+    "left": "PonsWarp/signaling-rs",
+    "right": "ponswarp-signaling-rs"
+  },
+  "files": {
+    "left": [
+      {
+        "path": ".env.example",
+        "bytes": 3154,
+        "sha256": "6b9a68b5992ae52849be667a848448c02f9caa2cab7410416e7bdaad3d41af02"
+      },
+      {
+        "path": ".env.local.example",
+        "bytes": 2164,
+        "sha256": "7098a5207798bddec083dd4c314f98a338d63289abaa92795e6fb249d056b041"
+      },
+      {
+        "path": ".env.production.example",
+        "bytes": 2828,
+        "sha256": "f7936f1ac6fc15d852410972636c41c38dbb69ad0f59b3de1bfe0ecb267f74be"
+      },
+      {
+        "path": "Cargo.lock",
+        "bytes": 97440,
+        "sha256": "afe5d55026a79b92437fa2295974bf5682f84b7574e9f74f71f2d23eb3c51339"
+      },
+      {
+        "path": "Cargo.toml",
+        "bytes": 1337,
+        "sha256": "1e289fb307113645c017949b574628f5246919bc3c4c5d897241819895f6cf71"
+      },
+      {
+        "path": "README.md",
+        "bytes": 7085,
+        "sha256": "5e1f1167cc93bf493db3d4b0090920a20f86209c681022c020e7974d2453582f"
+      },
+      {
+        "path": "migrations/202605120001_cloud_drop_entitlements.sql",
+        "bytes": 2379,
+        "sha256": "49c188194e555442c441d0929ade4a6568dbebce1ffa56b183e98527e63db2e3"
+      },
+      {
+        "path": "migrations/202605120002_stripe_billing_entitlements.sql",
+        "bytes": 660,
+        "sha256": "fe0dd037121218fc510048b97d12fdca5a5823f2d3e2be87b65040f7cb4046d1"
+      },
+      {
+        "path": "migrations/202605120003_paypal_billing_entitlements.sql",
+        "bytes": 709,
+        "sha256": "5410afc2137f0523e774b512a3c657be94a84a302555aa503280d47ce84d6f4d"
+      },
+      {
+        "path": "migrations/202605120004_google_auth_sessions.sql",
+        "bytes": 1114,
+        "sha256": "89ad37a63b14f740bdb4eeb29321dab106dacaf646e2dfc7fdb0fdddfacb385e"
+      },
+      {
+        "path": "migrations/202605130001_lemonsqueezy_billing.sql",
+        "bytes": 1269,
+        "sha256": "e3ac1b2fc8b9cb399f7e1d316033faaae2920c913265105417f6190496985e63"
+      },
+      {
+        "path": "migrations/202605130002_admin_operations_foundation.sql",
+        "bytes": 1040,
+        "sha256": "47de797a635011b8969a0a7edfd4653de943a983a45c13d4d6d2015e2aa644cb"
+      },
+      {
+        "path": "migrations/202605130003_cloud_download_sessions.sql",
+        "bytes": 496,
+        "sha256": "c468bea63356491d186f8e6322a53bc6b83a7138d5cc2df410fff9c2baabfddc"
+      },
+      {
+        "path": "migrations/202607040001_mesh_repository_foundation.sql",
+        "bytes": 4443,
+        "sha256": "1ff743e9c6ee5a56157620decbfbcacfe30e1a95f3cc6d0af64c5930bf018f3a"
+      },
+      {
+        "path": "src/admin.rs",
+        "bytes": 10102,
+        "sha256": "5053a6665d8d79cabbdd49b5693ef80d23de8c6c1aec844dab3812c11f8d14e6"
+      },
+      {
+        "path": "src/auth.rs",
+        "bytes": 15900,
+        "sha256": "846ec1808fb6c9cecce241280ba45ec6326a25f5a79793619c59380feda4891e"
+      },
+      {
+        "path": "src/billing.rs",
+        "bytes": 46177,
+        "sha256": "370cbef2b6194cd1c094eb5c8a88862c4931473179a6fafbad52aed1db872c87"
+      },
+      {
+        "path": "src/bin/mesh_api.rs",
+        "bytes": 2454,
+        "sha256": "eb7623da0c1658d9f2e56358e947c66ecdc32c325716fd32887129f51c9acc17"
+      },
+      {
+        "path": "src/config.rs",
+        "bytes": 28123,
+        "sha256": "cbc3b7f516550b95f7c909d170aa4261ca0a29ccf9fae91f98c3fd1fe6b5747c"
+      },
+      {
+        "path": "src/database.rs",
+        "bytes": 45931,
+        "sha256": "b655d6e4d6b280db9b0e47222440ec548f76fd7b409c7e18b648c57408123cfb"
+      },
+      {
+        "path": "src/handlers/cloud_share.rs",
+        "bytes": 51930,
+        "sha256": "da59cb08e4728df046968552b30938435c0d31c9208093daf62513cc5ebe40cc"
+      },
+      {
+        "path": "src/handlers/connection.rs",
+        "bytes": 1375,
+        "sha256": "46c24880c2ff0397284771a06f477bc7fe2fbf5f97514a097bd474e201b05509"
+      },
+      {
+        "path": "src/handlers/mod.rs",
+        "bytes": 214,
+        "sha256": "174ea472cbb6e6b95e011acab251f0fad6dce66df38d6a84149dae548b99d87e"
+      },
+      {
+        "path": "src/handlers/room.rs",
+        "bytes": 7329,
+        "sha256": "4ad54c40aaf2aabfe5aa5e1bdbbf885c7e23ad9712db08affd2a02b47780a846"
+      },
+      {
+        "path": "src/handlers/signaling.rs",
+        "bytes": 6373,
+        "sha256": "3f72c14361f7b117614e375c76a266fb5c9d113011fdbd4492f72076fd5d49bf"
+      },
+      {
+        "path": "src/handlers/turn.rs",
+        "bytes": 8989,
+        "sha256": "be4e646c3fcb42059dc06a4e3cfa74be92e82dab386a339c7b108b3cc1a9c197"
+      },
+      {
+        "path": "src/lib.rs",
+        "bytes": 188,
+        "sha256": "d46b425ae58f67d64c3ad2eb809285376182e23ad0186a4843f812e653011d90"
+      },
+      {
+        "path": "src/main.rs",
+        "bytes": 10110,
+        "sha256": "c157bdcf66d97c58587a7451807fa71346b183bb676539ec3a2abee7fb45cd91"
+      },
+      {
+        "path": "src/mesh.rs",
+        "bytes": 125918,
+        "sha256": "1bb8e1a629fa658628b82675cbc9a053f2cb21fb71cec34eda13874c1fd6a4cd"
+      },
+      {
+        "path": "src/mesh_abuse.rs",
+        "bytes": 14666,
+        "sha256": "2b2e0b15ae2a34d3c4198e3c0667f30fcadd16e0069e6b713cdd51b93146d35f"
+      },
+      {
+        "path": "src/mesh_security.rs",
+        "bytes": 17139,
+        "sha256": "e7c6b38169b634192cab1544c9ee35fed2553975dd30fad881f99a86e3f32ccb"
+      },
+      {
+        "path": "src/protocol/messages.rs",
+        "bytes": 5599,
+        "sha256": "223d7c14c4c0aa537655fece032c27391cd406ee13b2685193bc0d9018b45b43"
+      },
+      {
+        "path": "src/protocol/mod.rs",
+        "bytes": 65,
+        "sha256": "7bb9a15640fee961bed78708f7f4de4cb164f0c9736bdf2b1b925e39e5f53168"
+      },
+      {
+        "path": "src/state.rs",
+        "bytes": 8938,
+        "sha256": "509c67ec8d481d4ccc3968d954727715fc5fd53781fdf547a7a4aaf751e37efc"
+      }
+    ],
+    "right": [
+      {
+        "path": ".env.example",
+        "bytes": 3154,
+        "sha256": "6b9a68b5992ae52849be667a848448c02f9caa2cab7410416e7bdaad3d41af02"
+      },
+      {
+        "path": ".env.local.example",
+        "bytes": 2164,
+        "sha256": "7098a5207798bddec083dd4c314f98a338d63289abaa92795e6fb249d056b041"
+      },
+      {
+        "path": ".env.production.example",
+        "bytes": 2828,
+        "sha256": "f7936f1ac6fc15d852410972636c41c38dbb69ad0f59b3de1bfe0ecb267f74be"
+      },
+      {
+        "path": "Cargo.toml",
+        "bytes": 1274,
+        "sha256": "e7f479667e9b5fdf16156edcc2313996b7105d61711fe925e537f19ea299635e"
+      },
+      {
+        "path": "README.md",
+        "bytes": 7094,
+        "sha256": "51d0555bde0692dbd83e9dfdfeda671b5a9d19cd689bf97d167d5c176cda8718"
+      },
+      {
+        "path": "migrations/202605120001_cloud_drop_entitlements.sql",
+        "bytes": 2379,
+        "sha256": "49c188194e555442c441d0929ade4a6568dbebce1ffa56b183e98527e63db2e3"
+      },
+      {
+        "path": "migrations/202605120002_stripe_billing_entitlements.sql",
+        "bytes": 660,
+        "sha256": "fe0dd037121218fc510048b97d12fdca5a5823f2d3e2be87b65040f7cb4046d1"
+      },
+      {
+        "path": "migrations/202605120003_paypal_billing_entitlements.sql",
+        "bytes": 709,
+        "sha256": "5410afc2137f0523e774b512a3c657be94a84a302555aa503280d47ce84d6f4d"
+      },
+      {
+        "path": "migrations/202605120004_google_auth_sessions.sql",
+        "bytes": 1114,
+        "sha256": "89ad37a63b14f740bdb4eeb29321dab106dacaf646e2dfc7fdb0fdddfacb385e"
+      },
+      {
+        "path": "migrations/202605130001_lemonsqueezy_billing.sql",
+        "bytes": 1269,
+        "sha256": "e3ac1b2fc8b9cb399f7e1d316033faaae2920c913265105417f6190496985e63"
+      },
+      {
+        "path": "migrations/202605130002_admin_operations_foundation.sql",
+        "bytes": 1040,
+        "sha256": "47de797a635011b8969a0a7edfd4653de943a983a45c13d4d6d2015e2aa644cb"
+      },
+      {
+        "path": "migrations/202605130003_cloud_download_sessions.sql",
+        "bytes": 496,
+        "sha256": "c468bea63356491d186f8e6322a53bc6b83a7138d5cc2df410fff9c2baabfddc"
+      },
+      {
+        "path": "migrations/202607040001_mesh_repository_foundation.sql",
+        "bytes": 4443,
+        "sha256": "1ff743e9c6ee5a56157620decbfbcacfe30e1a95f3cc6d0af64c5930bf018f3a"
+      },
+      {
+        "path": "src/admin.rs",
+        "bytes": 10102,
+        "sha256": "5053a6665d8d79cabbdd49b5693ef80d23de8c6c1aec844dab3812c11f8d14e6"
+      },
+      {
+        "path": "src/auth.rs",
+        "bytes": 15900,
+        "sha256": "846ec1808fb6c9cecce241280ba45ec6326a25f5a79793619c59380feda4891e"
+      },
+      {
+        "path": "src/billing.rs",
+        "bytes": 46177,
+        "sha256": "370cbef2b6194cd1c094eb5c8a88862c4931473179a6fafbad52aed1db872c87"
+      },
+      {
+        "path": "src/config.rs",
+        "bytes": 28122,
+        "sha256": "ff93f00563782e7e32aa842342855f05613593e235f97b3d80e58170e2f84325"
+      },
+      {
+        "path": "src/database.rs",
+        "bytes": 45931,
+        "sha256": "b655d6e4d6b280db9b0e47222440ec548f76fd7b409c7e18b648c57408123cfb"
+      },
+      {
+        "path": "src/handlers/cloud_share.rs",
+        "bytes": 51931,
+        "sha256": "32cf88fd5107533782a767a26412ec10cda16b5eeae7e03a01738c4d3d70e62a"
+      },
+      {
+        "path": "src/handlers/connection.rs",
+        "bytes": 1375,
+        "sha256": "46c24880c2ff0397284771a06f477bc7fe2fbf5f97514a097bd474e201b05509"
+      },
+      {
+        "path": "src/handlers/mod.rs",
+        "bytes": 214,
+        "sha256": "174ea472cbb6e6b95e011acab251f0fad6dce66df38d6a84149dae548b99d87e"
+      },
+      {
+        "path": "src/handlers/room.rs",
+        "bytes": 7329,
+        "sha256": "4ad54c40aaf2aabfe5aa5e1bdbbf885c7e23ad9712db08affd2a02b47780a846"
+      },
+      {
+        "path": "src/handlers/signaling.rs",
+        "bytes": 6373,
+        "sha256": "3f72c14361f7b117614e375c76a266fb5c9d113011fdbd4492f72076fd5d49bf"
+      },
+      {
+        "path": "src/handlers/turn.rs",
+        "bytes": 8989,
+        "sha256": "be4e646c3fcb42059dc06a4e3cfa74be92e82dab386a339c7b108b3cc1a9c197"
+      },
+      {
+        "path": "src/lib.rs",
+        "bytes": 234,
+        "sha256": "f7ff26124220c7470d2cc29c374b7ba5e9ad292ccbad475bb6608dc96a2fc3ae"
+      },
+      {
+        "path": "src/main.rs",
+        "bytes": 11543,
+        "sha256": "f4a0983d691d7447235645e54a4f668695e4d87068fa0b0250a31205320c7a5b"
+      },
+      {
+        "path": "src/mesh.rs",
+        "bytes": 93113,
+        "sha256": "b22e6a9730377e4c0244ae0effaa2b07260996f66c604e57921eb6226f2b1e6d"
+      },
+      {
+        "path": "src/mesh_abuse.rs",
+        "bytes": 14737,
+        "sha256": "4d24869dbb2f3127645c9bbb9165c12b10a0c07a053403757817e25404a83fa1"
+      },
+      {
+        "path": "src/mesh_domain.rs",
+        "bytes": 3053,
+        "sha256": "d213ca4b3f2daf9aadd126488ae3f01df0a3cc47c71404ebaaf05d286a9aad88"
+      },
+      {
+        "path": "src/mesh_repository.rs",
+        "bytes": 43820,
+        "sha256": "582571c9285b96f3a3978b3cd7160f9983c7bf154975868d2b98acacb344a8b8"
+      },
+      {
+        "path": "src/mesh_security.rs",
+        "bytes": 17288,
+        "sha256": "8773ca76631af07a3b27508ae22ebeee1afc5ea5da16f2d81dd3c58944dab94a"
+      },
+      {
+        "path": "src/protocol/contract.rs",
+        "bytes": 2673,
+        "sha256": "4101b68f593e5b17c638bb538824abe70f4e9652a6b8471cb12899d8e045cf65"
+      },
+      {
+        "path": "src/protocol/messages.rs",
+        "bytes": 5599,
+        "sha256": "223d7c14c4c0aa537655fece032c27391cd406ee13b2685193bc0d9018b45b43"
+      },
+      {
+        "path": "src/protocol/mod.rs",
+        "bytes": 83,
+        "sha256": "2bec0cca7e802b519a3b97f5d272243ba6a7f5ffb74ab768ba222ec3522f9649"
+      },
+      {
+        "path": "src/state.rs",
+        "bytes": 7945,
+        "sha256": "e96bd93857ff619891776db98538ee264e77b5fa9d5aedbbae1ed9b125641479"
+      }
+    ]
+  },
+  "environment": {
+    "left": [
+      {
+        "path": ".env.example",
+        "keys": [
+          {
+            "key": "ADMIN_BOOTSTRAP_EMAILS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_COOKIE_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "AUTH_SESSION_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "CORS_ORIGINS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_MAX_CONNECTIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_RUN_MIGRATIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "GOOGLE_REDIRECT_URI",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "HOST",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LEMONSQUEEZY_STORE_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_100GB_3D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_1TB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_500GB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_PRO_MONTHLY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_WEBHOOK_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LOG_LEVEL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "MAX_ROOM_SIZE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PAYPAL_DEFAULT_CURRENCY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_PRO_PLAN_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_WEBHOOK_ID",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PONSWARP_BILLING_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_INTERVAL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_RUN_ON_STARTUP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_DOWNLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILE_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_TOTAL_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_PREFIX",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_RETENTION_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_UPLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_DEFAULT_PAYMENT_PROVIDER",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_API_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_APP_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PORT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCESS_KEY_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCOUNT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_BUCKET_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ENDPOINT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_REGION",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_SECRET_ACCESS_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "ROOM_TIMEOUT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_CREDENTIAL_TTL",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_ENABLE_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_FALLBACK_SERVERS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_REALM",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "TURN_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_SERVER_URL",
+            "hasValue": false,
+            "secret": false
+          }
+        ]
+      },
+      {
+        "path": ".env.local.example",
+        "keys": [
+          {
+            "key": "ADMIN_BOOTSTRAP_EMAILS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_COOKIE_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "AUTH_SESSION_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "CORS_ORIGINS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_MAX_CONNECTIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_RUN_MIGRATIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "GOOGLE_REDIRECT_URI",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "HOST",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_KEY",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "LEMONSQUEEZY_STORE_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_100GB_3D",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_1TB_7D",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_500GB_7D",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_PRO_MONTHLY",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_WEBHOOK_SECRET",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "LOG_LEVEL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "MAX_ROOM_SIZE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_SECRET",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "PAYPAL_DEFAULT_CURRENCY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_PRO_PLAN_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_WEBHOOK_ID",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "PONSWARP_BILLING_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_INTERVAL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_RUN_ON_STARTUP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_DOWNLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILE_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_TOTAL_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_PREFIX",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_RETENTION_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_UPLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_DEFAULT_PAYMENT_PROVIDER",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_API_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_APP_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PORT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCESS_KEY_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCOUNT_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_BUCKET_NAME",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_ENDPOINT",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_REGION",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_SECRET_ACCESS_KEY",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "ROOM_TIMEOUT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_CREDENTIAL_TTL",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_ENABLE_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_FALLBACK_SERVERS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_REALM",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_SERVER_URL",
+            "hasValue": true,
+            "secret": false
+          }
+        ]
+      },
+      {
+        "path": ".env.production.example",
+        "keys": [
+          {
+            "key": "ADMIN_BOOTSTRAP_EMAILS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_COOKIE_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "AUTH_SESSION_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "CORS_ORIGINS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_MAX_CONNECTIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_RUN_MIGRATIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "GOOGLE_REDIRECT_URI",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "HOST",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LEMONSQUEEZY_STORE_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_100GB_3D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_1TB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_500GB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_PRO_MONTHLY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_WEBHOOK_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LOG_LEVEL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "MAX_ROOM_SIZE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PAYPAL_DEFAULT_CURRENCY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_PRO_PLAN_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_WEBHOOK_ID",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PONSWARP_BILLING_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_INTERVAL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_RUN_ON_STARTUP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_DOWNLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILE_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_TOTAL_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_PREFIX",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_RETENTION_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_UPLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_DEFAULT_PAYMENT_PROVIDER",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_API_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_APP_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PORT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCESS_KEY_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCOUNT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_BUCKET_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ENDPOINT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_REGION",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_SECRET_ACCESS_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "ROOM_TIMEOUT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_CREDENTIAL_TTL",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_ENABLE_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_FALLBACK_SERVERS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_REALM",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_SERVER_URL",
+            "hasValue": true,
+            "secret": false
+          }
+        ]
+      }
+    ],
+    "right": [
+      {
+        "path": ".env.example",
+        "keys": [
+          {
+            "key": "ADMIN_BOOTSTRAP_EMAILS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_COOKIE_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "AUTH_SESSION_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "CORS_ORIGINS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_MAX_CONNECTIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_RUN_MIGRATIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "GOOGLE_REDIRECT_URI",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "HOST",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LEMONSQUEEZY_STORE_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_100GB_3D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_1TB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_500GB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_PRO_MONTHLY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_WEBHOOK_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LOG_LEVEL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "MAX_ROOM_SIZE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PAYPAL_DEFAULT_CURRENCY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_PRO_PLAN_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_WEBHOOK_ID",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PONSWARP_BILLING_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_INTERVAL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_RUN_ON_STARTUP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_DOWNLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILE_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_TOTAL_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_PREFIX",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_RETENTION_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_UPLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_DEFAULT_PAYMENT_PROVIDER",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_API_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_APP_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PORT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCESS_KEY_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCOUNT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_BUCKET_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ENDPOINT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_REGION",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_SECRET_ACCESS_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "ROOM_TIMEOUT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_CREDENTIAL_TTL",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_ENABLE_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_FALLBACK_SERVERS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_REALM",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "TURN_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_SERVER_URL",
+            "hasValue": false,
+            "secret": false
+          }
+        ]
+      },
+      {
+        "path": ".env.local.example",
+        "keys": [
+          {
+            "key": "ADMIN_BOOTSTRAP_EMAILS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_COOKIE_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "AUTH_SESSION_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "CORS_ORIGINS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_MAX_CONNECTIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_RUN_MIGRATIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "GOOGLE_REDIRECT_URI",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "HOST",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_KEY",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "LEMONSQUEEZY_STORE_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_100GB_3D",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_1TB_7D",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_500GB_7D",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_PRO_MONTHLY",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_WEBHOOK_SECRET",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "LOG_LEVEL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "MAX_ROOM_SIZE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_SECRET",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "PAYPAL_DEFAULT_CURRENCY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_PRO_PLAN_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_WEBHOOK_ID",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "PONSWARP_BILLING_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_INTERVAL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_RUN_ON_STARTUP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_DOWNLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILE_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_TOTAL_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_PREFIX",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_RETENTION_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_UPLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_DEFAULT_PAYMENT_PROVIDER",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_API_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_APP_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PORT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCESS_KEY_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCOUNT_ID",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_BUCKET_NAME",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_ENDPOINT",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "R2_REGION",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_SECRET_ACCESS_KEY",
+            "hasValue": false,
+            "secret": true
+          },
+          {
+            "key": "ROOM_TIMEOUT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_CREDENTIAL_TTL",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_ENABLE_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_FALLBACK_SERVERS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_REALM",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_SERVER_URL",
+            "hasValue": true,
+            "secret": false
+          }
+        ]
+      },
+      {
+        "path": ".env.production.example",
+        "keys": [
+          {
+            "key": "ADMIN_BOOTSTRAP_EMAILS",
+            "hasValue": false,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_COOKIE_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "AUTH_SESSION_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "AUTH_SESSION_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "CORS_ORIGINS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_MAX_CONNECTIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_RUN_MIGRATIONS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "DATABASE_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "GOOGLE_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "GOOGLE_REDIRECT_URI",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "HOST",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_API_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LEMONSQUEEZY_STORE_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_100GB_3D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_1TB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_DROP_500GB_7D",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_VARIANT_PRO_MONTHLY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "LEMONSQUEEZY_WEBHOOK_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "LOG_LEVEL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "MAX_ROOM_SIZE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_API_BASE",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_CLIENT_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PAYPAL_DEFAULT_CURRENCY",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_PRO_PLAN_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PAYPAL_WEBHOOK_ID",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "PONSWARP_BILLING_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_INTERVAL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_CLEANUP_RUN_ON_STARTUP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_DOWNLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_ENABLED",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILE_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_FILES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_MAX_TOTAL_BYTES",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_PREFIX",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_RETENTION_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_CLOUD_UPLOAD_URL_TTL_SECONDS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_DEFAULT_PAYMENT_PROVIDER",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_ENV",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_API_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PONSWARP_PUBLIC_APP_URL",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "PORT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCESS_KEY_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ACCOUNT_ID",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_BUCKET_NAME",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_ENDPOINT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_REGION",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "R2_SECRET_ACCESS_KEY",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "ROOM_TIMEOUT",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_CREDENTIAL_TTL",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_ENABLE_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_ENABLE_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_FALLBACK_SERVERS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TCP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_TLS",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_PORT_UDP",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_REALM",
+            "hasValue": true,
+            "secret": false
+          },
+          {
+            "key": "TURN_SECRET",
+            "hasValue": true,
+            "secret": true
+          },
+          {
+            "key": "TURN_SERVER_URL",
+            "hasValue": true,
+            "secret": false
+          }
+        ]
+      }
+    ]
+  },
+  "routeEvidence": {
+    "contractDigest": "e547a75d3591ffdbab03d93d1117fd492834f5fafca4111ac9cd201c5efc04cc",
+    "left": [
+      "DELETE {prefix}/shares/:code",
+      "GET /",
+      "GET /api/admin/me",
+      "GET /api/admin/operations",
+      "GET /api/admin/overview",
+      "GET /api/auth/google/callback",
+      "GET /api/auth/google/start",
+      "GET /api/auth/me",
+      "GET /api/cloud-plans",
+      "GET /api/cloud-share/:share_id",
+      "GET /api/cloud-share/:share_id/files/:file_id/download",
+      "GET /api/mesh/health",
+      "GET /api/mesh/ready",
+      "GET /auth/google/callback",
+      "GET /health",
+      "GET /metrics",
+      "GET /ready",
+      "GET /ws",
+      "GET {prefix}/shares/:code",
+      "GET {prefix}/shares/:code/candidates",
+      "GET {prefix}/workspaces/:workspace_id/files",
+      "GET {prefix}/workspaces/:workspace_id/files/:file_id",
+      "GET {prefix}/workspaces/:workspace_id/files/:file_id/candidates",
+      "POST /api/auth/logout",
+      "POST /api/billing/capture",
+      "POST /api/billing/checkout",
+      "POST /api/billing/lemonsqueezy/webhook",
+      "POST /api/billing/paypal/webhook",
+      "POST /api/billing/webhook",
+      "POST /api/cloud-share",
+      "POST /api/cloud-share/:share_id",
+      "POST /api/cloud-share/:share_id/abort",
+      "POST /api/cloud-share/:share_id/complete",
+      "POST {prefix}/shares/:code/events",
+      "POST {prefix}/workspaces",
+      "POST {prefix}/workspaces/:workspace_id/events",
+      "POST {prefix}/workspaces/:workspace_id/files",
+      "POST {prefix}/workspaces/:workspace_id/nodes",
+      "POST {prefix}/workspaces/:workspace_id/nodes/:node_id/heartbeat",
+      "POST {prefix}/workspaces/:workspace_id/shares",
+      "PUT {prefix}/workspaces/:workspace_id/files/:file_id/availability/:node_id"
+    ],
+    "right": [
+      "DELETE {prefix}/shares/:code",
+      "GET /",
+      "GET /api/admin/me",
+      "GET /api/admin/operations",
+      "GET /api/admin/overview",
+      "GET /api/auth/google/callback",
+      "GET /api/auth/google/start",
+      "GET /api/auth/me",
+      "GET /api/cloud-plans",
+      "GET /api/cloud-share/:share_id",
+      "GET /api/cloud-share/:share_id/files/:file_id/download",
+      "GET /api/mesh/health",
+      "GET /api/mesh/ready",
+      "GET /auth/google/callback",
+      "GET /health",
+      "GET /metrics",
+      "GET /ready",
+      "GET /ws",
+      "GET {prefix}/shares/:code",
+      "GET {prefix}/shares/:code/candidates",
+      "GET {prefix}/workspaces/:workspace_id/files",
+      "GET {prefix}/workspaces/:workspace_id/files/:file_id",
+      "GET {prefix}/workspaces/:workspace_id/files/:file_id/candidates",
+      "POST /api/auth/logout",
+      "POST /api/billing/capture",
+      "POST /api/billing/checkout",
+      "POST /api/billing/lemonsqueezy/webhook",
+      "POST /api/billing/paypal/webhook",
+      "POST /api/billing/webhook",
+      "POST /api/cloud-share",
+      "POST /api/cloud-share/:share_id",
+      "POST /api/cloud-share/:share_id/abort",
+      "POST /api/cloud-share/:share_id/complete",
+      "POST {prefix}/shares/:code/events",
+      "POST {prefix}/workspaces",
+      "POST {prefix}/workspaces/:workspace_id/events",
+      "POST {prefix}/workspaces/:workspace_id/files",
+      "POST {prefix}/workspaces/:workspace_id/nodes",
+      "POST {prefix}/workspaces/:workspace_id/nodes/:node_id/heartbeat",
+      "POST {prefix}/workspaces/:workspace_id/shares",
+      "PUT {prefix}/workspaces/:workspace_id/files/:file_id/availability/:node_id"
+    ],
+    "expected": [
+      "DELETE {prefix}/shares/:code",
+      "GET /",
+      "GET /api/admin/me",
+      "GET /api/admin/operations",
+      "GET /api/admin/overview",
+      "GET /api/auth/google/callback",
+      "GET /api/auth/google/start",
+      "GET /api/auth/me",
+      "GET /api/cloud-plans",
+      "GET /api/cloud-share/:share_id",
+      "GET /api/cloud-share/:share_id/files/:file_id/download",
+      "GET /api/mesh/health",
+      "GET /api/mesh/ready",
+      "GET /auth/google/callback",
+      "GET /health",
+      "GET /metrics",
+      "GET /ready",
+      "GET /ws",
+      "GET {prefix}/shares/:code",
+      "GET {prefix}/shares/:code/candidates",
+      "GET {prefix}/workspaces/:workspace_id/files",
+      "GET {prefix}/workspaces/:workspace_id/files/:file_id",
+      "GET {prefix}/workspaces/:workspace_id/files/:file_id/candidates",
+      "POST /api/auth/logout",
+      "POST /api/billing/capture",
+      "POST /api/billing/checkout",
+      "POST /api/billing/lemonsqueezy/webhook",
+      "POST /api/billing/paypal/webhook",
+      "POST /api/billing/webhook",
+      "POST /api/cloud-share",
+      "POST /api/cloud-share/:share_id",
+      "POST /api/cloud-share/:share_id/abort",
+      "POST /api/cloud-share/:share_id/complete",
+      "POST {prefix}/shares/:code/events",
+      "POST {prefix}/workspaces",
+      "POST {prefix}/workspaces/:workspace_id/events",
+      "POST {prefix}/workspaces/:workspace_id/files",
+      "POST {prefix}/workspaces/:workspace_id/nodes",
+      "POST {prefix}/workspaces/:workspace_id/nodes/:node_id/heartbeat",
+      "POST {prefix}/workspaces/:workspace_id/shares",
+      "PUT {prefix}/workspaces/:workspace_id/files/:file_id/availability/:node_id"
+    ],
+    "runtimeInputsPresent": true
+  },
+  "protocolEvidence": {
+    "left": [
+      "ClientMessage.Answer",
+      "ClientMessage.CheckTurnServerStatus",
+      "ClientMessage.Heartbeat",
+      "ClientMessage.IceCandidate",
+      "ClientMessage.JoinRoom",
+      "ClientMessage.LeaveRoom",
+      "ClientMessage.Manifest",
+      "ClientMessage.Offer",
+      "ClientMessage.RefreshTurnCredentials",
+      "ClientMessage.RequestTurnConfig",
+      "ClientMessage.TransferComplete",
+      "ClientMessage.TransferReady",
+      "ServerMessage.Answer",
+      "ServerMessage.Connected",
+      "ServerMessage.Error",
+      "ServerMessage.HeartbeatAck",
+      "ServerMessage.IceCandidate",
+      "ServerMessage.JoinedRoom",
+      "ServerMessage.Manifest",
+      "ServerMessage.Offer",
+      "ServerMessage.PeerJoined",
+      "ServerMessage.RoomFull",
+      "ServerMessage.RoomUsers",
+      "ServerMessage.TransferComplete",
+      "ServerMessage.TransferReady",
+      "ServerMessage.TurnConfig",
+      "ServerMessage.TurnServerStatusUpdate",
+      "ServerMessage.UserLeft"
+    ],
+    "right": [
+      "ClientMessage.Answer",
+      "ClientMessage.CheckTurnServerStatus",
+      "ClientMessage.Heartbeat",
+      "ClientMessage.IceCandidate",
+      "ClientMessage.JoinRoom",
+      "ClientMessage.LeaveRoom",
+      "ClientMessage.Manifest",
+      "ClientMessage.Offer",
+      "ClientMessage.RefreshTurnCredentials",
+      "ClientMessage.RequestTurnConfig",
+      "ClientMessage.TransferComplete",
+      "ClientMessage.TransferReady",
+      "ServerMessage.Answer",
+      "ServerMessage.Connected",
+      "ServerMessage.Error",
+      "ServerMessage.HeartbeatAck",
+      "ServerMessage.IceCandidate",
+      "ServerMessage.JoinedRoom",
+      "ServerMessage.Manifest",
+      "ServerMessage.Offer",
+      "ServerMessage.PeerJoined",
+      "ServerMessage.RoomFull",
+      "ServerMessage.RoomUsers",
+      "ServerMessage.TransferComplete",
+      "ServerMessage.TransferReady",
+      "ServerMessage.TurnConfig",
+      "ServerMessage.TurnServerStatusUpdate",
+      "ServerMessage.UserLeft"
+    ],
+    "expected": [
+      "ClientMessage.Answer",
+      "ClientMessage.CheckTurnServerStatus",
+      "ClientMessage.Heartbeat",
+      "ClientMessage.IceCandidate",
+      "ClientMessage.JoinRoom",
+      "ClientMessage.LeaveRoom",
+      "ClientMessage.Manifest",
+      "ClientMessage.Offer",
+      "ClientMessage.RefreshTurnCredentials",
+      "ClientMessage.RequestTurnConfig",
+      "ClientMessage.TransferComplete",
+      "ClientMessage.TransferReady",
+      "ServerMessage.Answer",
+      "ServerMessage.Connected",
+      "ServerMessage.Error",
+      "ServerMessage.HeartbeatAck",
+      "ServerMessage.IceCandidate",
+      "ServerMessage.JoinedRoom",
+      "ServerMessage.Manifest",
+      "ServerMessage.Offer",
+      "ServerMessage.PeerJoined",
+      "ServerMessage.RoomFull",
+      "ServerMessage.RoomUsers",
+      "ServerMessage.TransferComplete",
+      "ServerMessage.TransferReady",
+      "ServerMessage.TurnConfig",
+      "ServerMessage.TurnServerStatusUpdate",
+      "ServerMessage.UserLeft"
+    ],
+    "runtimeInputsPresent": true
+  },
+  "migrations": {
+    "left": [
+      {
+        "order": 0,
+        "name": "202605120001_cloud_drop_entitlements.sql",
+        "sha256": "49c188194e555442c441d0929ade4a6568dbebce1ffa56b183e98527e63db2e3"
+      },
+      {
+        "order": 1,
+        "name": "202605120002_stripe_billing_entitlements.sql",
+        "sha256": "fe0dd037121218fc510048b97d12fdca5a5823f2d3e2be87b65040f7cb4046d1"
+      },
+      {
+        "order": 2,
+        "name": "202605120003_paypal_billing_entitlements.sql",
+        "sha256": "5410afc2137f0523e774b512a3c657be94a84a302555aa503280d47ce84d6f4d"
+      },
+      {
+        "order": 3,
+        "name": "202605120004_google_auth_sessions.sql",
+        "sha256": "89ad37a63b14f740bdb4eeb29321dab106dacaf646e2dfc7fdb0fdddfacb385e"
+      },
+      {
+        "order": 4,
+        "name": "202605130001_lemonsqueezy_billing.sql",
+        "sha256": "e3ac1b2fc8b9cb399f7e1d316033faaae2920c913265105417f6190496985e63"
+      },
+      {
+        "order": 5,
+        "name": "202605130002_admin_operations_foundation.sql",
+        "sha256": "47de797a635011b8969a0a7edfd4653de943a983a45c13d4d6d2015e2aa644cb"
+      },
+      {
+        "order": 6,
+        "name": "202605130003_cloud_download_sessions.sql",
+        "sha256": "c468bea63356491d186f8e6322a53bc6b83a7138d5cc2df410fff9c2baabfddc"
+      },
+      {
+        "order": 7,
+        "name": "202607040001_mesh_repository_foundation.sql",
+        "sha256": "1ff743e9c6ee5a56157620decbfbcacfe30e1a95f3cc6d0af64c5930bf018f3a"
+      }
+    ],
+    "right": [
+      {
+        "order": 0,
+        "name": "202605120001_cloud_drop_entitlements.sql",
+        "sha256": "49c188194e555442c441d0929ade4a6568dbebce1ffa56b183e98527e63db2e3"
+      },
+      {
+        "order": 1,
+        "name": "202605120002_stripe_billing_entitlements.sql",
+        "sha256": "fe0dd037121218fc510048b97d12fdca5a5823f2d3e2be87b65040f7cb4046d1"
+      },
+      {
+        "order": 2,
+        "name": "202605120003_paypal_billing_entitlements.sql",
+        "sha256": "5410afc2137f0523e774b512a3c657be94a84a302555aa503280d47ce84d6f4d"
+      },
+      {
+        "order": 3,
+        "name": "202605120004_google_auth_sessions.sql",
+        "sha256": "89ad37a63b14f740bdb4eeb29321dab106dacaf646e2dfc7fdb0fdddfacb385e"
+      },
+      {
+        "order": 4,
+        "name": "202605130001_lemonsqueezy_billing.sql",
+        "sha256": "e3ac1b2fc8b9cb399f7e1d316033faaae2920c913265105417f6190496985e63"
+      },
+      {
+        "order": 5,
+        "name": "202605130002_admin_operations_foundation.sql",
+        "sha256": "47de797a635011b8969a0a7edfd4653de943a983a45c13d4d6d2015e2aa644cb"
+      },
+      {
+        "order": 6,
+        "name": "202605130003_cloud_download_sessions.sql",
+        "sha256": "c468bea63356491d186f8e6322a53bc6b83a7138d5cc2df410fff9c2baabfddc"
+      },
+      {
+        "order": 7,
+        "name": "202607040001_mesh_repository_foundation.sql",
+        "sha256": "1ff743e9c6ee5a56157620decbfbcacfe30e1a95f3cc6d0af64c5930bf018f3a"
+      }
+    ]
+  },
+  "deploymentReferences": [
+    {
+      "path": "deploy/deploy-production.sh",
+      "sha256": "388421c9f97a7f951814ab02d72b856964851a2bce6e87922eb832ab7003730b"
+    },
+    {
+      "path": "deploy/Dockerfile.ponswarp-signaling",
+      "sha256": "57b6854ac6f110bb0be416e49009e99cd1feb432633e20c7ec971d546e5b196b"
+    },
+    {
+      "path": "deploy/nginx/active-backend.inc.example",
+      "sha256": "50bae1491368b25ead7bb7daf58ee9c9f7b708a2706becf34af64550837b1867"
+    },
+    {
+      "path": "deploy/nginx/warp.ponslink.com.conf",
+      "sha256": "9a71b2ed3fdae32ab3f19a79fee5f53e9dc05e9e7bde84982dc08042644cc7ef"
+    },
+    {
+      "path": "PonsWarp/compose.yaml",
+      "sha256": "41b58d3cfa26ae3ec7b80f8d7eb9ec226b78337fc02f60da5dfbb0ee143fb661"
+    },
+    {
+      "path": "PonsWarp/deploy/deploy-production.sh",
+      "sha256": "548ebc28b838980530711b188a82c41bcd38c8b6aa0102e990e32e2905be5bdd"
+    },
+    {
+      "path": "PonsWarp/deploy/Dockerfile.ponswarp-signaling",
+      "sha256": "bb9baa80031ff5f1f223928c4b81670b7b56dfdaef277b9a0341001046684826"
+    },
+    {
+      "path": "PonsWarp/deploy/nginx/warp.ponslink.com.conf",
+      "sha256": "3d0b7717a7426f05f90740b8216a1e6ec0207660efed9a3c327913b4d31d16a8"
+    }
+  ],
+  "unexplainedDifferences": []
+}
