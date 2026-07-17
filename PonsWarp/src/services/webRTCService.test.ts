@@ -95,3 +95,121 @@ describe('ReceiverService signaling', () => {
     service.cleanup();
   });
 });
+
+describe('ReceiverService mobile visibility resume', () => {
+  it('sends RESUME control + RESUME_REQUEST when page returns from hidden', () => {
+    const sent: unknown[] = [];
+    const forceResume = vi.fn(() => true);
+
+    const service = new ReceiverService({
+      signaling: {
+        connect: vi.fn(async () => undefined),
+        joinRoom: vi.fn(async () => undefined),
+        leaveRoom: vi.fn(),
+        sendOffer: vi.fn(),
+        sendAnswer: vi.fn(),
+        sendCandidate: vi.fn(),
+        requestTurnConfig: vi.fn(async () => ({ success: true, data: { iceServers: [] } })),
+        on: vi.fn(),
+        off: vi.fn(),
+        getSocketId: vi.fn(() => 'recv'),
+        isConnected: vi.fn(() => true),
+        disconnect: vi.fn(),
+      } as unknown as ISignalingService,
+    });
+
+    const internals = service as unknown as {
+      roomId: string | null;
+      isTransferActive: boolean;
+      reconnectTimer: ReturnType<typeof setTimeout> | null;
+      peer: { connected: boolean; send(message: string): boolean };
+      writer: {
+        requestResumeFromCurrentOffset(reason: string): boolean;
+        forceResumeFromCurrentOffset(reason: string): boolean;
+      };
+      lastPartitionOffsetNeedingAck: number | null;
+      lastPartitionRunIdNeedingAck: number | null;
+      handleVisibilityChange(): void;
+      handlePageBecameActive(event?: Event): void;
+    };
+
+    // Simulate active transfer with a still-connected peer after screen-off.
+    internals.roomId = 'ROOM42';
+    internals.isTransferActive = true;
+    internals.reconnectTimer = null;
+    internals.peer = {
+      connected: true,
+      send: (message: string) => {
+        sent.push(JSON.parse(message));
+        return true;
+      },
+    };
+    internals.writer = {
+      requestResumeFromCurrentOffset: vi.fn(() => false),
+      forceResumeFromCurrentOffset: forceResume,
+    };
+    internals.lastPartitionOffsetNeedingAck = 4096;
+    internals.lastPartitionRunIdNeedingAck = 2;
+
+    // hidden → visible transition
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    internals.handleVisibilityChange();
+
+    expect(sent).toEqual([
+      { type: 'CONTROL', action: 'RESUME' },
+      { type: 'PARTITION_ACK', offset: 4096, runId: 2 },
+    ]);
+    expect(forceResume).toHaveBeenCalledWith('page-became-active');
+    service.cleanup();
+  });
+
+  it('schedules reconnect when peer is disconnected on foreground return', () => {
+    const service = new ReceiverService({
+      signaling: {
+        connect: vi.fn(async () => undefined),
+        joinRoom: vi.fn(async () => undefined),
+        leaveRoom: vi.fn(),
+        sendOffer: vi.fn(),
+        sendAnswer: vi.fn(),
+        sendCandidate: vi.fn(),
+        requestTurnConfig: vi.fn(async () => ({ success: true, data: { iceServers: [] } })),
+        on: vi.fn(),
+        off: vi.fn(),
+        getSocketId: vi.fn(() => 'recv'),
+        isConnected: vi.fn(() => true),
+        disconnect: vi.fn(),
+      } as unknown as ISignalingService,
+      clock: {
+        setTimeout: ((fn: TimerHandler, _ms?: number) => {
+          if (typeof fn === 'function') fn();
+          return 1 as unknown as ReturnType<typeof setTimeout>;
+        }) as typeof setTimeout,
+        clearTimeout: vi.fn(),
+      } as unknown as typeof globalThis,
+    });
+
+    const internals = service as unknown as {
+      roomId: string | null;
+      isTransferActive: boolean;
+      reconnectTimer: ReturnType<typeof setTimeout> | null;
+      peer: { connected: boolean } | null;
+      isReconnecting: boolean;
+      scheduleReconnect(options?: { immediate?: boolean }): void;
+      handlePageBecameActive(): void;
+    };
+
+    const schedule = vi.fn();
+    internals.roomId = 'ROOM42';
+    internals.isTransferActive = true;
+    internals.reconnectTimer = null;
+    internals.peer = { connected: false };
+    internals.scheduleReconnect = schedule;
+
+    internals.handlePageBecameActive();
+    expect(schedule).toHaveBeenCalledWith({ immediate: true });
+    service.cleanup();
+  });
+});

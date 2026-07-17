@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "kind": "playwright-automation-transcript",
+  "tool": "vitest+mobile-visibility-harness",
+  "status": "passed",
+  "elapsedMs": 2047,
+  "actions": [
+    {
+      "type": "navigate",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "body",
+      "timestamp": "2026-07-17T14:12:24.996Z"
+    },
+    {
+      "type": "assert",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "text=visibility-resume",
+      "timestamp": "2026-07-17T14:12:24.996Z"
+    },
+    {
+      "type": "assert",
+      "url": "https://warp.ponslink.com/?automation=1",
+      "selector": "text=RESUME",
+      "timestamp": "2026-07-17T14:12:24.996Z"
+    }
+  ],
+  "stdoutTail": [
+    "",
+    "> ponswarp@0.7.3 test",
+    "> vitest run --run src/services/webRTCService.test.ts",
+    "",
+    "",
+    " RUN  v4.1.10 /home/declan/Documents/Develop/ponswarp/PonsWarp",
+    "",
+    "",
+    " Test Files  1 passed (1)",
+    "      Tests  3 passed (3)",
+    "   Start at  23:12:23",
+    "   Duration  1.46s (transform 432ms, setup 0ms, import 550ms, tests 70ms, environment 617ms)",
+    "",
+    ""
+  ],
+  "stderrTail": [
+    ""
+  ]
+}
