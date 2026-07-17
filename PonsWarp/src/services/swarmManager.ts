@@ -700,6 +700,8 @@ export class SwarmManager {
       this.cryptoSessionAnnouncedPeers.delete(key);
     }
     this.cryptoSessionAnnouncedPeers.delete(baseId);
+    this.sendFailureCounts.delete(baseId);
+    this.sendFailureCounts.delete(peerId);
     // Normalize to base id for state sets below
     peerId = baseId;
 
@@ -1046,6 +1048,25 @@ export class SwarmManager {
     return pool[idx];
   }
 
+  private sendFailureCounts = new Map<string, number>();
+
+  private noteSendFailure(peerId: string, reason: string): void {
+    const n = (this.sendFailureCounts.get(peerId) || 0) + 1;
+    this.sendFailureCounts.set(peerId, n);
+    logWarn(
+      '[SwarmManager]',
+      `Send failure peer=${peerId} count=${n} reason=${reason}`
+    );
+    if (n >= 8) {
+      this.sendFailureCounts.delete(peerId);
+      this.removePeer(peerId, reason);
+    }
+  }
+
+  private noteSendSuccess(peerId: string): void {
+    this.sendFailureCounts.delete(peerId);
+  }
+
   public broadcastChunk(chunk: ArrayBuffer): BroadcastResult {
     const failedPeers: string[] = [];
     const sentPeers: string[] = [];
@@ -1069,6 +1090,7 @@ export class SwarmManager {
         if (peer.send(chunk)) {
           successCount++;
           sentPeers.push(peerId);
+          this.noteSendSuccess(peerId);
         } else {
           failedPeers.push(peerId);
         }
@@ -2541,7 +2563,7 @@ export class SwarmManager {
             '[SwarmManager] ❌ [DEBUG] Removing failed peer:',
             failedPeerId
           );
-          this.removePeer(failedPeerId, 'send-failed');
+          this.noteSendFailure(failedPeerId, 'send-failed');
         }
       }
 
@@ -3039,10 +3061,18 @@ export class SwarmManager {
 
       const result = this.broadcastChunk(packet);
       for (const failedPeerId of result.failedPeers) {
-        this.removePeer(failedPeerId, 'partitioned-send-failed');
+        this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
       }
       if (result.successCount === 0) {
-        throw new Error('No connected receivers available');
+        if (this.getActiveTransferPeerIds().length === 0) {
+          throw new Error('No connected receivers available');
+        }
+        await this.waitUntilSendWindowOpen(
+          runId,
+          this.getCurrentInFlightTargetBytes()
+        );
+        i -= 1; // retry same packet
+        continue;
       }
 
       const globalOffset = offset + payloadSize;
@@ -3238,14 +3268,29 @@ export class SwarmManager {
           await this.waitUntilSendWindowOpen(runId, sendCap);
         }
 
-        const result = this.broadcastChunk(chunk.packet);
-        producer.credit(chunk.packet.byteLength);
+        let result = this.broadcastChunk(chunk.packet);
         for (const failedPeerId of result.failedPeers) {
-          this.removePeer(failedPeerId, 'partitioned-send-failed');
+          this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
         }
         if (result.successCount === 0) {
-          throw new Error('No connected receivers available');
+          if (this.getActiveTransferPeerIds().length === 0) {
+            producer.credit(chunk.packet.byteLength);
+            throw new Error('No connected receivers available');
+          }
+          await this.waitUntilSendWindowOpen(
+            runId,
+            this.getCurrentInFlightTargetBytes()
+          );
+          result = this.broadcastChunk(chunk.packet);
+          for (const failedPeerId of result.failedPeers) {
+            this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
+          }
+          if (result.successCount === 0) {
+            producer.credit(chunk.packet.byteLength);
+            throw new Error('No connected receivers available');
+          }
         }
+        producer.credit(chunk.packet.byteLength);
 
         globalOffset = chunk.offset + chunk.payloadSize;
         this.totalBytesSent = globalOffset;
@@ -3511,10 +3556,17 @@ export class SwarmManager {
 
           const result = this.broadcastChunk(chunk.packet);
           for (const failedPeerId of result.failedPeers) {
-            this.removePeer(failedPeerId, 'partitioned-send-failed');
+            this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
           }
           if (result.successCount === 0) {
-            throw new Error('No connected receivers available');
+            if (this.getActiveTransferPeerIds().length === 0) {
+              throw new Error('No connected receivers available');
+            }
+            // Put chunk back and wait for send window before retrying.
+            ready.set(chunk.sequence, chunk);
+            nextToSend = chunk.sequence;
+            await this.waitUntilSendWindowOpen(runId, sendCap);
+            continue;
           }
 
           globalOffset = chunk.offset + chunk.payloadSize;
@@ -3639,13 +3691,24 @@ export class SwarmManager {
         }
         this.ensureActiveTransferRun(runId);
         await this.waitUntilSendWindowOpen(runId);
-        const result = this.broadcastChunk(prepared.packet);
+        let result = this.broadcastChunk(prepared.packet);
         for (const failedPeerId of result.failedPeers) {
-          this.removePeer(failedPeerId, 'partitioned-send-failed');
+          this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
         }
         if (result.successCount === 0) {
-          scheduler.abandon(prepared.d.reservation!);
-          throw new Error('No connected receivers available');
+          if (this.getActiveTransferPeerIds().length === 0) {
+            scheduler.abandon(prepared.d.reservation!);
+            throw new Error('No connected receivers available');
+          }
+          await this.waitUntilSendWindowOpen(runId);
+          result = this.broadcastChunk(prepared.packet);
+          for (const failedPeerId of result.failedPeers) {
+            this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
+          }
+          if (result.successCount === 0) {
+            scheduler.abandon(prepared.d.reservation!);
+            throw new Error('No connected receivers available');
+          }
         }
         globalOffset = prepared.d.offset + prepared.payload.byteLength;
         this.totalBytesSent = globalOffset;
@@ -3689,12 +3752,22 @@ export class SwarmManager {
             });
             this.ensureActiveTransferRun(runId);
             await this.waitUntilSendWindowOpen(runId);
-            const result = this.broadcastChunk(packet);
+            let result = this.broadcastChunk(packet);
             for (const failedPeerId of result.failedPeers) {
-              this.removePeer(failedPeerId, 'partitioned-send-failed');
+              this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
             }
             if (result.successCount === 0) {
-              throw new Error('No connected receivers available');
+              if (this.getActiveTransferPeerIds().length === 0) {
+                throw new Error('No connected receivers available');
+              }
+              await this.waitUntilSendWindowOpen(runId);
+              result = this.broadcastChunk(packet);
+              for (const failedPeerId of result.failedPeers) {
+                this.noteSendFailure(failedPeerId, 'partitioned-send-failed');
+              }
+              if (result.successCount === 0) {
+                throw new Error('No connected receivers available');
+              }
             }
             fileOffset += payload.byteLength;
             globalOffset += payload.byteLength;

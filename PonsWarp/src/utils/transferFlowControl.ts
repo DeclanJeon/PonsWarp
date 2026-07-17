@@ -189,11 +189,12 @@ const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
   chunkSizeBytes: 128 * KIB,
-  minInFlightBytes: 6 * MIB,
-  initialInFlightBytes: 12 * MIB,
-  // High-RTT "host" (VPN/Tailscale) still needs a fat send queue for BDP.
-  maxInFlightBytes: 24 * MIB,
-  lowWaterBytes: 3 * MIB,
+  minInFlightBytes: 2 * MIB,
+  initialInFlightBytes: 4 * MIB,
+  // Keep host window fat enough for LAN BDP without tripping browser SCTP
+  // into hard DataChannel close under decrypt/write backpressure.
+  maxInFlightBytes: 8 * MIB,
+  lowWaterBytes: 1 * MIB,
   // Host: no mid-transfer partition barrier (reliable SCTP + end checkpoint)
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
@@ -203,10 +204,10 @@ export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const HOST_ELEVATED_RTT_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   chunkSizeBytes: 64 * KIB,
-  minInFlightBytes: 8 * MIB,
-  initialInFlightBytes: 16 * MIB,
-  maxInFlightBytes: 24 * MIB,
-  lowWaterBytes: 4 * MIB,
+  minInFlightBytes: 3 * MIB,
+  initialInFlightBytes: 6 * MIB,
+  maxInFlightBytes: 10 * MIB,
+  lowWaterBytes: 2 * MIB,
 };
 export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,

@@ -20,9 +20,9 @@ export const CHUNK_SIZE_MAX = 192 * 1024; // 192KB ceiling (safe under 256KB)
 // Measured Chromium host path (local loop): high≈2–4MB yields ~25+ MB/s;
 // 32MB high-water overflows the browser send queue and collapses to ~6–9 MB/s.
 // SCTP owns congestion control; app only paces on bufferedAmount.
-export const MAX_BUFFERED_AMOUNT = 24 * 1024 * 1024; // 24MB hard stop
-export const LOW_WATER_MARK = 3 * 1024 * 1024; // 3MB drain — refill sooner
-export const HIGH_WATER_MARK = 12 * 1024 * 1024; // 12MB fill target
+export const MAX_BUFFERED_AMOUNT = 10 * 1024 * 1024; // 10MB hard stop
+export const LOW_WATER_MARK = 1 * 1024 * 1024; // 1MB drain — refill sooner
+export const HIGH_WATER_MARK = 6 * 1024 * 1024; // 6MB fill target
 
 // 파티션 크기: 연속 전송 (ACK 불필요)
 export const TRANSFER_PARTITION_SIZE = 128 * 1024 * 1024;
