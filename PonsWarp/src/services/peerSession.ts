@@ -327,9 +327,62 @@ export class PeerSession {
     if (!this.channelsReady()) return;
     this.connected = true;
     this.drainEmitted = false;
+    if (this.closeEmitTimer) {
+      clearTimeout(this.closeEmitTimer);
+      this.closeEmitTimer = null;
+    }
     logInfo(`[Peer ${this.id}]`, 'Connected (control+bulk open)');
     this.emit('connected', this.id);
     this.ensureDrainWatchdog();
+  }
+
+
+  private handleChannelClosed(channel: RTCDataChannel): void {
+    if (this.destroyed) return;
+
+    if (this.control === channel) {
+      this.control = null;
+    }
+    this.bulkChannels = this.bulkChannels.filter(ch => ch && ch !== channel);
+
+    const stillOpen =
+      this.control?.readyState === 'open' ||
+      this.bulkChannels.some(ch => ch?.readyState === 'open');
+    const pcState = this.pc?.connectionState;
+
+    logError(
+      `[Peer ${this.id}]`,
+      `Channel closed label=${channel.label} pc=${pcState ?? 'n/a'} stillOpen=${stillOpen}`
+    );
+
+    if (stillOpen) {
+      // One plane flapped; keep the peer alive while PC is usable.
+      return;
+    }
+
+    this.connected = false;
+    // Debounce close emission: brief channel recycle should not kill transfer.
+    if (this.closeEmitTimer) clearTimeout(this.closeEmitTimer);
+    this.closeEmitTimer = setTimeout(() => {
+      this.closeEmitTimer = null;
+      if (this.destroyed) return;
+      const openAgain =
+        this.control?.readyState === 'open' ||
+        this.bulkChannels.some(ch => ch?.readyState === 'open');
+      if (openAgain) {
+        this.maybeMarkConnected();
+        return;
+      }
+      const state = this.pc?.connectionState;
+      if (state === 'connected' || state === 'connecting' || state === 'new') {
+        logError(
+          `[Peer ${this.id}]`,
+          `All data channels closed while pc=${state}`
+        );
+        return;
+      }
+      this.emit('close');
+    }, 750);
   }
 
   private ensureDrainWatchdog(): void {
