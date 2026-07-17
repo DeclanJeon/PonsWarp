@@ -24,6 +24,7 @@ import { StatusOverlay } from './components/ui/StatusOverlay';
 import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
 import { normalizeRoomCodeInput } from './utils/roomCode';
+import { usePreventNavigation, isTransferSessionActive } from './hooks/usePreventNavigation';
 
 const SpaceField = lazy(() => import('./components/SpaceField'));
 
@@ -31,6 +32,7 @@ const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
   const { mode, setMode, setRoomId, status } = useTransferStore();
   const [cloudShareId, setCloudShareId] = useState<string | null>(null);
+  usePreventNavigation();
 
   // URL 파라미터 체크 (앱 로드 시)
   useEffect(() => {
@@ -38,18 +40,39 @@ const App: React.FC = () => {
       const path = window.location.pathname;
       const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/i);
       const cloudMatch = path.match(/^\/cloud\/([A-Za-z0-9-]{8,80})$/);
+      const current = useTransferStore.getState();
 
       if (cloudMatch) {
         setCloudShareId(cloudMatch[1]);
         setMode(AppMode.CLOUD_RECEIVER);
-      } else if (receiveMatch) {
+        return;
+      }
+      if (receiveMatch) {
         const roomId = normalizeRoomCodeInput(receiveMatch[1]);
         setRoomId(roomId);
         setMode(AppMode.RECEIVER);
-      } else {
-        setCloudShareId(null);
-        setMode(AppMode.INTRO);
+        return;
       }
+
+      // Never kick an active transfer session back to INTRO on bare "/".
+      // Mobile back-gesture / logo history can otherwise unmount the transfer UI.
+      if (isTransferSessionActive(current.mode, current.status)) {
+        return;
+      }
+
+      // Only reset when already on a non-transfer route surface.
+      if (
+        current.mode === AppMode.SENDER ||
+        current.mode === AppMode.RECEIVER ||
+        current.mode === AppMode.CLOUD_SENDER ||
+        current.mode === AppMode.CLOUD_RECEIVER ||
+        current.mode === AppMode.SELECTION
+      ) {
+        return;
+      }
+
+      setCloudShareId(null);
+      setMode(AppMode.INTRO);
     };
 
     syncRoute();
@@ -123,6 +146,11 @@ const App: React.FC = () => {
         <header
           className="absolute top-0 left-0 w-full px-5 py-5 md:px-10 md:py-8 z-50 flex items-center justify-between cursor-pointer"
           onClick={() => {
+            const current = useTransferStore.getState();
+            if (isTransferSessionActive(current.mode, current.status)) {
+              toast.error('Transfer in progress — finish or cancel before leaving.');
+              return;
+            }
             setCloudShareId(null);
             setMode(AppMode.INTRO);
             window.history.pushState({}, '', '/');

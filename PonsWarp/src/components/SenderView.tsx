@@ -30,7 +30,7 @@ import {
 } from '../utils/fileScanner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
-import { TransferManifest } from '../types/types';
+import { TransferManifest, AppMode } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
 import {
   estimateRemainingSeconds,
@@ -83,11 +83,25 @@ const SenderView: React.FC<SenderViewProps> = () => {
     (next: SenderStatus | ((prev: SenderStatus) => SenderStatus)) => {
       setStatus(prev => {
         if (prev === 'DONE') return prev;
-        return typeof next === 'function' ? next(prev) : next;
+        const resolved = typeof next === 'function' ? next(prev) : next;
+        // Keep global store in sync so navigation guards know a session is live.
+        useTransferStore.setState({ status: resolved as any });
+        return resolved;
       });
     },
     []
   );
+
+  useEffect(() => {
+    useTransferStore.setState({ mode: AppMode.SENDER });
+    return () => {
+      // Only clear if still on sender status and not actively receiving elsewhere.
+      const current = useTransferStore.getState();
+      if (current.mode === AppMode.SENDER && current.status !== 'TRANSFERRING') {
+        // leave mode as-is; App owns mode transitions
+      }
+    };
+  }, []);
   const [progressData, setProgressData] = useState({
     progress: 0,
     speed: 0,
@@ -433,12 +447,15 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    useTransferStore.setState({ status: 'IDLE' });
+    // Do not force IDLE if a transfer/scan session already started.
+    const current = useTransferStore.getState();
+    if (current.status === 'DRAGGING_FILES') {
+      useTransferStore.setState({ status: 'IDLE' });
+    }
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    useTransferStore.setState({ status: 'IDLE' });
     setScanProgress({ scannedFiles: 0, phase: 'listing' });
     setTransferStatus('SCANNING');
 

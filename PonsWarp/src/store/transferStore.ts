@@ -37,8 +37,10 @@ interface TransferState {
   // 상태
   status:
     | 'IDLE'
+    | 'SCANNING'
     | 'DRAGGING_FILES'
     | 'PREPARING'
+    | 'UPLOADING'
     | 'WAITING'
     | 'CONNECTING'
     | 'TRANSFERRING'
@@ -48,7 +50,8 @@ interface TransferState {
     | 'DONE'
     | 'ERROR'
     | 'QUEUED'
-    | 'ROOM_FULL';
+    | 'ROOM_FULL'
+    | 'LIMIT_EXCEEDED';
   error: string | null;
 
   // 메타데이터

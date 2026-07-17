@@ -1,31 +1,82 @@
 import { useEffect } from 'react';
 import { AppMode } from '../types/types';
+import { useTransferStore, TransferStatus } from '../store/transferStore';
 
-export const usePreventNavigation = (mode: AppMode) => {
+/** Statuses where reloading/navigating away will break the transfer. */
+const PROTECTED_STATUSES = new Set<TransferStatus>([
+  'SCANNING',
+  'PREPARING',
+  'UPLOADING',
+  'WAITING',
+  'CONNECTING',
+  'TRANSFERRING',
+  'RECEIVING',
+  'REMOTE_PROCESSING',
+  'READY_FOR_NEXT',
+  'QUEUED',
+]);
+
+const SESSION_MODES = new Set<AppMode>([
+  AppMode.SENDER,
+  AppMode.RECEIVER,
+  AppMode.CLOUD_SENDER,
+  AppMode.CLOUD_RECEIVER,
+]);
+
+export function isTransferSessionActive(
+  mode: AppMode,
+  status: TransferStatus
+): boolean {
+  if (!SESSION_MODES.has(mode)) return false;
+  return PROTECTED_STATUSES.has(status);
+}
+
+/**
+ * Prevent accidental navigation/reload while a transfer session is live.
+ * Covers beforeunload, browser back, and overscroll-friendly CSS hooks.
+ */
+export const usePreventNavigation = () => {
+  const mode = useTransferStore(s => s.mode);
+  const status = useTransferStore(s => s.status);
+
   useEffect(() => {
-    // 페이지 이탈 방지 기능을 비활성화하여 "사이트에서 나가시겠습니까?" 알림이 나타나지 않도록 함
-    // 필요 시 아래 주석을 해제하여 기능을 다시 활성화할 수 있음
-    /*
-    // 보호가 필요한 상태 정의: 전송 중, 수신 대기 중, 송신 대기 중
-    const shouldPrevent =
-      mode === AppMode.TRANSFERRING ||
-      mode === AppMode.RECEIVER ||
-      mode === AppMode.SENDER;
+    const shouldPrevent = isTransferSessionActive(mode, status);
+    const root = document.documentElement;
+    if (shouldPrevent) {
+      root.classList.add('transfer-active');
+    } else {
+      root.classList.remove('transfer-active');
+    }
 
-    if (!shouldPrevent) return;
+    if (!shouldPrevent) {
+      return () => {
+        root.classList.remove('transfer-active');
+      };
+    }
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // 표준 경고 메시지 트리거 (브라우저 정책상 메시지 커스텀은 불가능할 수 있음)
       e.preventDefault();
-      e.returnValue = ''; // Chrome/Edge 필수 설정
+      e.returnValue = '';
       return '';
     };
 
+    const handlePopState = () => {
+      // Keep the user on the current SPA session instead of dropping to INTRO.
+      try {
+        const url = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.history.pushState({ ponswarpTransferGuard: true }, '', url);
+      } catch {
+        // ignore
+      }
+    };
+
     window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handlePopState);
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+      root.classList.remove('transfer-active');
     };
-    */
-  }, [mode]);
+  }, [mode, status]);
 };

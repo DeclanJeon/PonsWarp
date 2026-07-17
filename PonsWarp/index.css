@@ -132,3 +132,13 @@ h1, h2, h3, .brand-font {
    - CSS variables defined
    - Responsive utilities ready
 */
+
+
+/* Prevent mobile pull-to-refresh / overscroll reload during transfer sessions */
+html.transfer-active,
+html.transfer-active body,
+html.transfer-active #root {
+  overscroll-behavior-y: none;
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+}

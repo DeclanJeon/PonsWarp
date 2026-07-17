@@ -38,8 +38,9 @@ import {
   updateRollingSpeedSample,
   type RollingSpeedSample,
 } from '../utils/transferEstimate';
-import { TransferManifest } from '../types/types';
+import { TransferManifest, AppMode } from '../types/types';
 import { formatCloudShareCode } from '../utils/cloudShareCode';
+import { useTransferStore } from '../store/transferStore';
 
 type CloudUploadStatus =
   | 'IDLE'
@@ -131,9 +132,16 @@ const formatRetention = (seconds: number) => {
 };
 
 const CloudSenderView: React.FC = () => {
+  useEffect(() => {
+    useTransferStore.setState({ mode: AppMode.CLOUD_SENDER });
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const [status, setStatus] = useState<CloudUploadStatus>('IDLE');
+  const [status, setStatusState] = useState<CloudUploadStatus>('IDLE');
+  const setStatus = (next: CloudUploadStatus) => {
+    setStatusState(next);
+    useTransferStore.setState({ status: next as any, mode: AppMode.CLOUD_SENDER });
+  };
   const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(null);
   const [manifest, setManifest] = useState<TransferManifest | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
