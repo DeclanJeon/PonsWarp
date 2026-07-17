@@ -593,10 +593,12 @@ describe('SwarmManager guard paths', () => {
     const flowActions: string[] = [];
     let unblockQueue: () => void = () => undefined;
 
-    const packet = new ArrayBuffer(22 + 32 * 1024 * 1024);
+    // Must reach WRITE_BUFFER_HIGH_MARK (48 MiB).
+    const payload = 48 * 1024 * 1024;
+    const packet = new ArrayBuffer(22 + payload);
     const view = new DataView(packet);
     view.setUint16(0, 0, true);
-    view.setUint32(14, 32 * 1024 * 1024, true);
+    view.setUint32(14, payload, true);
 
     const writerInternals = writer as unknown as {
       writeQueue: Promise<void>;
@@ -614,7 +616,7 @@ describe('SwarmManager guard paths', () => {
       .catch(() => undefined);
 
     expect(flowActions).toEqual(['PAUSE']);
-    expect(writerInternals.pendingBytesInBuffer).toBe(32 * 1024 * 1024);
+    expect(writerInternals.pendingBytesInBuffer).toBe(payload);
 
     unblockQueue();
     await pendingWrite;
@@ -735,17 +737,20 @@ describe('SwarmManager guard paths', () => {
     expect(writerInternals.receiverZipFinalized).toBe(true);
     expect(writerInternals.receiverZipFileIndex).toBe(3);
   });
-  it('does not send resume hints during an active connected foreground event', async () => {
+  it('sends resume hints when a connected page returns to the foreground', async () => {
     const { transferService } = await import('./webRTCService');
     const sentMessages: unknown[] = [];
-    const requestResume = vi.fn();
+    const forceResume = vi.fn(() => true);
 
     const receiverInternals = transferService as unknown as {
       roomId: string | null;
       isTransferActive: boolean;
       reconnectTimer: ReturnType<typeof setTimeout> | null;
       peer: { connected: boolean; send(message: string): void };
-      writer: { requestResumeFromCurrentOffset(reason: string): boolean };
+      writer: {
+        requestResumeFromCurrentOffset(reason: string): boolean;
+        forceResumeFromCurrentOffset(reason: string): boolean;
+      };
       lastPartitionOffsetNeedingAck: number | null;
       lastPartitionRunIdNeedingAck: number | null;
       handlePageBecameActive(event?: Event): void;
@@ -761,14 +766,18 @@ describe('SwarmManager guard paths', () => {
       },
     };
     receiverInternals.writer = {
-      requestResumeFromCurrentOffset: requestResume,
+      requestResumeFromCurrentOffset: vi.fn(() => false),
+      forceResumeFromCurrentOffset: forceResume,
     };
     receiverInternals.lastPartitionOffsetNeedingAck = 1024;
     receiverInternals.lastPartitionRunIdNeedingAck = 3;
 
     receiverInternals.handlePageBecameActive();
 
-    expect(sentMessages).toEqual([]);
-    expect(requestResume).not.toHaveBeenCalled();
+    expect(sentMessages).toEqual([
+      { type: 'CONTROL', action: 'RESUME' },
+      { type: 'PARTITION_ACK', offset: 1024, runId: 3 },
+    ]);
+    expect(forceResume).toHaveBeenCalledWith('page-became-active');
   });
 });
