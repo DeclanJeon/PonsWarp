@@ -25,6 +25,7 @@ import {
   scanFiles,
   processInputFiles,
   ScannedFile,
+  FileScanProgress,
 } from '../utils/fileScanner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
@@ -57,6 +58,7 @@ const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
 const SenderView: React.FC<SenderViewProps> = () => {
   type SenderStatus =
     | 'IDLE'
+    | 'SCANNING'
     | 'WAITING'
     | 'CONNECTING'
     | 'TRANSFERRING'
@@ -69,6 +71,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<SenderStatus>('IDLE');
   const [isOpeningRoom, setIsOpeningRoom] = useState(false);
+  const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(null);
   const setTransferStatus = useCallback(
     (next: SenderStatus | ((prev: SenderStatus) => SenderStatus)) => {
       setStatus(prev => {
@@ -367,11 +370,33 @@ const SenderView: React.FC<SenderViewProps> = () => {
     };
   }, [setTransferStatus]);
 
+  const handleScanProgress = useCallback((progress: FileScanProgress) => {
+    setScanProgress(progress);
+  }, []);
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const scannedFiles = processInputFiles(e.target.files);
-      void processScannedFiles(scannedFiles);
-      e.target.value = '';
+    if (!e.target.files || e.target.files.length === 0) return;
+    const fileList = e.target.files;
+    e.target.value = '';
+    setScanProgress({
+      scannedFiles: 0,
+      totalHint: fileList.length,
+      phase: 'listing',
+    });
+    setTransferStatus('SCANNING');
+    try {
+      const scannedFiles = await processInputFiles(fileList, {
+        onProgress: handleScanProgress,
+      });
+      await processScannedFiles(scannedFiles);
+    } catch (error) {
+      if ((error as DOMException)?.name === 'AbortError') return;
+      console.error('[SenderView] file scan failed:', error);
+      setScanProgress(null);
+      setTransferStatus('IDLE');
+      alert(
+        `Failed to load files: ${getErrorMessage(error, 'Unknown error')}`
+      );
     }
   };
 
@@ -392,20 +417,49 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     useTransferStore.setState({ status: 'IDLE' });
+    setScanProgress({ scannedFiles: 0, phase: 'listing' });
+    setTransferStatus('SCANNING');
 
-    // DataTransferItemList가 있으면 FileSystemEntry 스캔 사용
-    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      const scannedFiles = await scanFiles(e.dataTransfer.items);
-      void processScannedFiles(scannedFiles);
-    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      // Fallback: 단순 파일 처리
-      const scannedFiles = processInputFiles(e.dataTransfer.files);
-      void processScannedFiles(scannedFiles);
+    try {
+      // Prefer FileSystemEntry scan for folder structure.
+      if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        const scannedFiles = await scanFiles(e.dataTransfer.items, {
+          onProgress: handleScanProgress,
+        });
+        await processScannedFiles(scannedFiles);
+      } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const scannedFiles = await processInputFiles(e.dataTransfer.files, {
+          onProgress: handleScanProgress,
+        });
+        await processScannedFiles(scannedFiles);
+      } else {
+        setScanProgress(null);
+        setTransferStatus('IDLE');
+      }
+    } catch (error) {
+      if ((error as DOMException)?.name === 'AbortError') return;
+      console.error('[SenderView] drop scan failed:', error);
+      setScanProgress(null);
+      setTransferStatus('IDLE');
+      alert(
+        `Failed to load files: ${getErrorMessage(error, 'Unknown error')}`
+      );
     }
   };
 
   const processScannedFiles = async (scannedFiles: ScannedFile[]) => {
-    if (scannedFiles.length === 0) return;
+    if (scannedFiles.length === 0) {
+      setScanProgress(null);
+      setTransferStatus('IDLE');
+      alert('No transferable files found (empty or filtered selection).');
+      return;
+    }
+
+    setScanProgress(prev =>
+      prev
+        ? { ...prev, scannedFiles: scannedFiles.length, phase: 'done' }
+        : { scannedFiles: scannedFiles.length, phase: 'done' }
+    );
 
     // Manifest 생성
     const { manifest, files } = createManifest(scannedFiles);
@@ -474,6 +528,37 @@ const SenderView: React.FC<SenderViewProps> = () => {
   return (
     <div className="relative z-10 flex min-h-full w-full flex-col items-center justify-start px-4 pb-20 pt-0 md:justify-center md:px-0 md:py-6">
       <AnimatePresence>
+        {/* --- STATE: SCANNING (bulk metadata listing) --- */}
+        {status === 'SCANNING' && (
+          <motion.div
+            key="scanning"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            className={`w-full max-w-md p-8 flex flex-col items-center text-center ${glassPanelClass}`}
+          >
+            <Loader2 className="w-12 h-12 text-cyan-400 animate-spin mb-5" />
+            <h2 className="text-2xl font-bold brand-font text-white mb-2">
+              LOADING FILES
+            </h2>
+            <p className="text-cyan-100/70 font-mono text-sm mb-4">
+              Building file list without freezing the UI
+            </p>
+            <p className="text-4xl font-mono font-black text-cyan-300">
+              {scanProgress?.scannedFiles ?? 0}
+              {typeof scanProgress?.totalHint === 'number' && scanProgress.totalHint > 0 ? (
+                <span className="text-lg text-gray-500">
+                  {' '}
+                  / {scanProgress.totalHint}
+                </span>
+              ) : null}
+            </p>
+            <p className="mt-2 text-xs text-gray-500 font-mono tracking-wide">
+              files prepared
+            </p>
+          </motion.div>
+        )}
+
         {/* --- STATE: IDLE (File Selection) --- */}
         {status === 'IDLE' && (
           <motion.div

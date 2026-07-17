@@ -1,93 +1,246 @@
 export interface ScannedFile {
   file: File;
-  path: string; // 전체 상대 경로 (예: "folder/subfolder/image.png")
+  path: string; // full relative path (e.g. "folder/subfolder/image.png")
+}
+
+export type FileScanProgress = {
+  scannedFiles: number;
+  totalHint?: number;
+  phase: 'listing' | 'done';
+};
+
+export type FileScanOptions = {
+  /** Files processed before yielding to the main thread. */
+  chunkSize?: number;
+  /** Max concurrent entry.file() / directory reads during drag-drop scan. */
+  concurrency?: number;
+  onProgress?: (progress: FileScanProgress) => void;
+  signal?: AbortSignal;
+};
+
+const DEFAULT_CHUNK_SIZE = 64;
+const DEFAULT_CONCURRENCY = 12;
+
+const SKIP_NAME_EXACT = new Set([
+  '.ds_store',
+  'thumbs.db',
+  'desktop.ini',
+  '.localized',
+]);
+
+const SKIP_PATH_SEGMENTS = [
+  '/node_modules/',
+  '/.git/',
+  '/__macosx/',
+  '/.svn/',
+  '/.hg/',
+];
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException('File scan aborted', 'AbortError');
+  }
+}
+
+async function yieldToMain(): Promise<void> {
+  await new Promise<void>(resolve => {
+    const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+    if (typeof scheduler?.yield === 'function') {
+      void scheduler.yield().then(() => resolve(), () => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 }
 
 /**
- * FileSystemEntry API를 사용한 재귀적 파일 스캔
- * 드래그 앤 드롭 시 폴더 구조를 완벽하게 보존하기 위해 필수적입니다.
+ * Skip junk/system files early so mobile bulk folders stay smaller.
+ * Hidden files (name starts with ".") are excluded except common non-dot junk names.
+ */
+export function shouldSkipScannedPath(name: string, relativePath: string): boolean {
+  const base = name.trim();
+  if (!base) return true;
+  const lowerName = base.toLowerCase();
+  if (SKIP_NAME_EXACT.has(lowerName)) return true;
+  if (base.startsWith('.')) return true;
+
+  const normalized = `/${relativePath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()}/`;
+  return SKIP_PATH_SEGMENTS.some(segment => normalized.includes(segment));
+}
+
+function reportProgress(
+  onProgress: FileScanOptions['onProgress'],
+  progress: FileScanProgress
+): void {
+  onProgress?.(progress);
+}
+
+/**
+ * FileSystemEntry recursive scan for drag-and-drop folder structure.
+ * Uses bounded concurrency and main-thread yields for large trees.
  */
 export const scanFiles = async (
-  items: DataTransferItemList
+  items: DataTransferItemList,
+  options: FileScanOptions = {}
 ): Promise<ScannedFile[]> => {
   const scannedFiles: ScannedFile[] = [];
+  const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY);
+  let inFlight = 0;
+  const waitQueue: Array<() => void> = [];
 
-  // 비동기 큐 처리
+  const acquire = async () => {
+    if (inFlight < concurrency) {
+      inFlight += 1;
+      return;
+    }
+    await new Promise<void>(resolve => waitQueue.push(resolve));
+    inFlight += 1;
+  };
+
+  const release = () => {
+    inFlight = Math.max(0, inFlight - 1);
+    const next = waitQueue.shift();
+    if (next) next();
+  };
+
   const entries: FileSystemEntry[] = [];
   for (let i = 0; i < items.length; i++) {
-    const entry = items[i].webkitGetAsEntry();
+    const entry = items[i].webkitGetAsEntry?.() ?? null;
     if (entry) entries.push(entry);
   }
 
-  await Promise.all(entries.map(entry => scanEntry(entry, '', scannedFiles)));
+  const scanEntry = async (entry: FileSystemEntry, basePath: string): Promise<void> => {
+    throwIfAborted(options.signal);
 
-  return scannedFiles;
-};
-
-const scanEntry = async (
-  entry: FileSystemEntry,
-  basePath: string,
-  list: ScannedFile[]
-): Promise<void> => {
-  if (entry.isFile) {
-    await new Promise<void>(resolve => {
-      (entry as FileSystemFileEntry).file(
-        file => {
-          // 숨겨진 파일(.DS_Store 등) 제외
-          if (file.name.startsWith('.')) {
-            resolve();
-            return;
-          }
-
-          const fullPath = basePath ? `${basePath}${entry.name}` : entry.name;
-          list.push({ file, path: fullPath });
-          resolve();
-        },
-        err => {
-          console.warn(`Failed to read file: ${entry.name}`, err);
-          resolve(); // 에러 발생해도 계속 진행
-        }
-      );
-    });
-  } else if (entry.isDirectory) {
-    const dirReader = (entry as FileSystemDirectoryEntry).createReader();
-    const currentPath = basePath
-      ? `${basePath}${entry.name}/`
-      : `${entry.name}/`;
-
-    // 디렉토리 엔트리 읽기 (한 번에 최대 100개씩 반환될 수 있으므로 루프 필요)
-    const readEntries = async () => {
-      const entries = await new Promise<FileSystemEntry[]>(
-        (resolve, reject) => {
-          dirReader.readEntries(resolve, reject);
-        }
-      );
-
-      if (entries.length > 0) {
-        await Promise.all(entries.map(e => scanEntry(e, currentPath, list)));
-        await readEntries(); // 더 있을 수 있으므로 재귀 호출
+    if (entry.isFile) {
+      await acquire();
+      try {
+        throwIfAborted(options.signal);
+        await new Promise<void>(resolve => {
+          (entry as FileSystemFileEntry).file(
+            file => {
+              const fullPath = basePath ? `${basePath}${entry.name}` : entry.name;
+              if (!shouldSkipScannedPath(file.name, fullPath)) {
+                scannedFiles.push({ file, path: fullPath });
+                if (scannedFiles.length % DEFAULT_CHUNK_SIZE === 0) {
+                  reportProgress(options.onProgress, {
+                    scannedFiles: scannedFiles.length,
+                    phase: 'listing',
+                  });
+                }
+              }
+              resolve();
+            },
+            err => {
+              console.warn(`Failed to read file: ${entry.name}`, err);
+              resolve();
+            }
+          );
+        });
+      } finally {
+        release();
       }
+      return;
+    }
+
+    if (!entry.isDirectory) return;
+
+    const dirReader = (entry as FileSystemDirectoryEntry).createReader();
+    const currentPath = basePath ? `${basePath}${entry.name}/` : `${entry.name}/`;
+
+    const readEntries = async (): Promise<void> => {
+      throwIfAborted(options.signal);
+      const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
+        dirReader.readEntries(resolve, reject);
+      });
+      if (batch.length === 0) return;
+
+      // Bounded parallel scan of this batch, then continue reading more entries.
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(concurrency, batch.length) }, async () => {
+        while (cursor < batch.length) {
+          const index = cursor;
+          cursor += 1;
+          await scanEntry(batch[index], currentPath);
+        }
+      });
+      await Promise.all(workers);
+      await yieldToMain();
+      await readEntries();
     };
 
     await readEntries();
-  }
+  };
+
+  await Promise.all(entries.map(entry => scanEntry(entry, '')));
+  reportProgress(options.onProgress, {
+    scannedFiles: scannedFiles.length,
+    phase: 'done',
+  });
+  return scannedFiles;
 };
 
 /**
- * 일반 Input Element (<input type="file" multiple />) 처리용
- * webkitRelativePath가 있는 경우 이를 우선 사용합니다.
+ * Progressive FileList processing for <input type="file" multiple />.
+ * Yields to the main thread every chunk so mobile UI stays responsive.
  */
-export const processInputFiles = (fileList: FileList): ScannedFile[] => {
+export const processInputFiles = async (
+  fileList: FileList,
+  options: FileScanOptions = {}
+): Promise<ScannedFile[]> => {
   const files: ScannedFile[] = [];
+  const chunkSize = Math.max(8, options.chunkSize ?? DEFAULT_CHUNK_SIZE);
+  const totalHint = fileList.length;
 
   for (let i = 0; i < fileList.length; i++) {
+    throwIfAborted(options.signal);
     const file = fileList[i];
-    // webkitRelativePath가 있으면 사용, 없으면 파일명 (단일 파일 선택 시)
     const path =
       (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
       file.name;
-    files.push({ file, path });
+
+    if (!shouldSkipScannedPath(file.name, path)) {
+      files.push({ file, path });
+    }
+
+    const processed = i + 1;
+    if (processed % chunkSize === 0 || processed === totalHint) {
+      reportProgress(options.onProgress, {
+        scannedFiles: files.length,
+        totalHint,
+        phase: processed === totalHint ? 'done' : 'listing',
+      });
+      if (processed < totalHint) {
+        await yieldToMain();
+      }
+    }
   }
 
+  if (totalHint === 0) {
+    reportProgress(options.onProgress, {
+      scannedFiles: 0,
+      totalHint: 0,
+      phase: 'done',
+    });
+  }
+
+  return files;
+};
+
+/**
+ * Synchronous helper for tiny lists / unit tests.
+ * Prefer the async processInputFiles() on UI paths.
+ */
+export const processInputFilesSync = (fileList: FileList): ScannedFile[] => {
+  const files: ScannedFile[] = [];
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    const path =
+      (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+      file.name;
+    if (!shouldSkipScannedPath(file.name, path)) {
+      files.push({ file, path });
+    }
+  }
   return files;
 };

@@ -26,6 +26,7 @@ import {
   scanFiles,
   processInputFiles,
   ScannedFile,
+  FileScanProgress,
 } from '../utils/fileScanner';
 import { getErrorMessage } from '../utils/errors';
 import { createManifest, formatBytes } from '../utils/fileUtils';
@@ -41,6 +42,7 @@ import { formatCloudShareCode } from '../utils/cloudShareCode';
 
 type CloudUploadStatus =
   | 'IDLE'
+  | 'SCANNING'
   | 'PREPARING'
   | 'UPLOADING'
   | 'DONE'
@@ -131,6 +133,7 @@ const CloudSenderView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<CloudUploadStatus>('IDLE');
+  const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(null);
   const [manifest, setManifest] = useState<TransferManifest | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
@@ -196,25 +199,73 @@ const CloudSenderView: React.FC = () => {
     };
   }, []);
 
+  const handleScanProgress = (progress: FileScanProgress) => {
+    setScanProgress(progress);
+  };
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
-    await processScannedFiles(processInputFiles(e.target.files));
+    const fileList = e.target.files;
     e.target.value = '';
+    setScanProgress({
+      scannedFiles: 0,
+      totalHint: fileList.length,
+      phase: 'listing',
+    });
+    setStatus('SCANNING');
+    try {
+      const scanned = await processInputFiles(fileList, {
+        onProgress: handleScanProgress,
+      });
+      await processScannedFiles(scanned);
+    } catch (error) {
+      if ((error as DOMException)?.name === 'AbortError') return;
+      setScanProgress(null);
+      setStatus('ERROR');
+      setError(getErrorMessage(error, 'Failed to load selected files'));
+    }
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      await processScannedFiles(await scanFiles(e.dataTransfer.items));
-      return;
-    }
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      await processScannedFiles(processInputFiles(e.dataTransfer.files));
+    setScanProgress({ scannedFiles: 0, phase: 'listing' });
+    setStatus('SCANNING');
+    try {
+      if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        const scanned = await scanFiles(e.dataTransfer.items, {
+          onProgress: handleScanProgress,
+        });
+        await processScannedFiles(scanned);
+        return;
+      }
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const scanned = await processInputFiles(e.dataTransfer.files, {
+          onProgress: handleScanProgress,
+        });
+        await processScannedFiles(scanned);
+        return;
+      }
+      setScanProgress(null);
+      setStatus('IDLE');
+    } catch (error) {
+      if ((error as DOMException)?.name === 'AbortError') return;
+      setScanProgress(null);
+      setStatus('ERROR');
+      setError(getErrorMessage(error, 'Failed to load dropped files'));
     }
   };
 
   const processScannedFiles = async (scannedFiles: ScannedFile[]) => {
-    if (scannedFiles.length === 0) return;
+    if (scannedFiles.length === 0) {
+      setScanProgress(null);
+      setError('No transferable files found (empty or filtered selection).');
+      setStatus('ERROR');
+      return;
+    }
+    setScanProgress({
+      scannedFiles: scannedFiles.length,
+      phase: 'done',
+    });
 
     const { manifest: nextManifest } = createManifest(scannedFiles);
     const oversizedFile = scannedFiles.find(
@@ -445,6 +496,33 @@ const CloudSenderView: React.FC = () => {
                 </button>
               </div>
             </div>
+          </motion.div>
+        )}
+
+        {status === 'SCANNING' && (
+          <motion.div
+            key="cloud-scanning"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            className="w-full max-w-md p-8 flex flex-col items-center text-center bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem]"
+          >
+            <Loader2 className="w-12 h-12 text-emerald-400 animate-spin mb-5" />
+            <h2 className="text-2xl font-bold brand-font text-white mb-2">
+              LOADING FILES
+            </h2>
+            <p className="text-emerald-100/70 font-mono text-sm mb-4">
+              Preparing Cloud Drop list
+            </p>
+            <p className="text-4xl font-mono font-black text-emerald-300">
+              {scanProgress?.scannedFiles ?? 0}
+              {typeof scanProgress?.totalHint === 'number' && scanProgress.totalHint > 0 ? (
+                <span className="text-lg text-gray-500">
+                  {' '}
+                  / {scanProgress.totalHint}
+                </span>
+              ) : null}
+            </p>
           </motion.div>
         )}
 
