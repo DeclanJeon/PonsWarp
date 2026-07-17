@@ -35,6 +35,7 @@ import {
   PREPARE_AHEAD_BYTES,
   PROGRESS_EMIT_MIN_INTERVAL_MS,
   PROGRESS_EMIT_MIN_CHUNKS,
+  USE_BULK_ENCRYPT_WORKER,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { BulkEncryptProducer } from './bulkEncryptProducer';
@@ -458,16 +459,19 @@ export class SwarmManager {
     logInfo('[SwarmManager]', '🔐 Transfer encryption session generated');
   }
 
-  private sendCryptoSessionToPeer(peer: SinglePeerConnection): void {
+  private sendCryptoSessionToPeer(
+    peer: SinglePeerConnection,
+    options: { force?: boolean } = {}
+  ): void {
     if (!this.isEncryptionEnabled() || !this.sessionKey || !this.randomPrefix) {
       return;
     }
 
-    if (this.cryptoSessionAnnouncedPeers.has(peer.id)) {
+    if (!options.force && this.cryptoSessionAnnouncedPeers.has(peer.id)) {
       return;
     }
 
-    peer.send(
+    const sent = peer.send(
       JSON.stringify({
         type: 'CRYPTO_SESSION',
         version: 1,
@@ -476,7 +480,15 @@ export class SwarmManager {
         randomPrefix: bytesToBase64(this.randomPrefix),
       })
     );
-    this.cryptoSessionAnnouncedPeers.add(peer.id);
+    if (sent) {
+      this.cryptoSessionAnnouncedPeers.add(peer.id);
+    } else {
+      this.cryptoSessionAnnouncedPeers.delete(peer.id);
+      logWarn(
+        '[SwarmManager]',
+        `Failed to send CRYPTO_SESSION to ${peer.id}`
+      );
+    }
   }
 
   /**
@@ -685,6 +697,7 @@ export class SwarmManager {
       this.clearConnectionTimeout(key);
       peer.destroy();
       this.peers.delete(key);
+    this.cryptoSessionAnnouncedPeers.delete(peerId);
     }
     // Normalize to base id for state sets below
     peerId = baseId;
@@ -2782,6 +2795,9 @@ export class SwarmManager {
       const peer = this.peers.get(peerId);
       if (peer && peer.connected) {
         try {
+          // Re-announce crypto before bulk so a recreated receiver peer
+          // never receives ciphertext without a session key.
+          this.sendCryptoSessionToPeer(peer, { force: true });
           peer.send(JSON.stringify({ type: 'PEER_CAPS', ...localCaps }));
           peer.send(JSON.stringify({ type: 'MANIFEST', manifest }));
           peer.send(JSON.stringify({ type: 'TRANSFER_STARTED' }));
@@ -3135,7 +3151,11 @@ export class SwarmManager {
     initialPartitionEnd: number,
     runId: number
   ): Promise<boolean> {
-    if (!BulkEncryptProducer.isSupported() || this.files.length === 0) {
+    if (
+      !USE_BULK_ENCRYPT_WORKER ||
+      !BulkEncryptProducer.isSupported() ||
+      this.files.length === 0
+    ) {
       return false;
     }
 

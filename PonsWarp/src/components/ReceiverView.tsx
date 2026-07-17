@@ -150,6 +150,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
   const handleProgress = useCallback(
     (p: ReceiverProgressPayload | number) => {
       // 1. 대기 상태 해제 (데이터가 들어오기 시작함)
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
       setIsWaitingForSender(false);
 
       // 2. 상태 강제 동기화
@@ -519,7 +523,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       await transferService.startReceiving(manifest);
       debugLog('[ReceiverView] ✅ Receiver initialization complete');
 
-      // 다운로드 시작 후 새로운 타임아웃 설정 (송신자 응답 대기)
+      // Wait for sender bulk/control after MATERIALIZE. Do NOT cleanup the
+      // peer on a short timer — that tears down a healthy WebRTC session
+      // while the sender is still pumping into a half-open channel.
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+      }
       connectionTimeoutRef.current = setTimeout(() => {
         if (
           statusRef.current === 'RECEIVING' &&
@@ -528,12 +537,13 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
           console.warn(
             '[ReceiverView] Download start timeout - no response from sender'
           );
-          setErrorMsg('Sender did not respond. Please try again.');
-          setStatus('ERROR');
+          setErrorMsg(
+            'Sender did not respond yet. Keep this page open or retry MATERIALIZE.'
+          );
           setIsWaitingForSender(false);
-          transferService.cleanup();
+          // Soft fail only: keep peer alive so late TRANSFER_STARTED/bulk can land.
         }
-      }, 10000); // 10초 타임아웃
+      }, 45000);
     } catch (e) {
       console.error('[ReceiverView] startDirectDownload error:', e);
 

@@ -715,7 +715,22 @@ export class ReceiverService {
     }
 
     // Primary control/data connection
+    // NEVER destroy a live peer for the same remote id on a new offer.
+    // Destroying mid-session closes DCs on both sides while the sender's
+    // PeerSession can still report send() success into a dead local buffer.
+    if (this.peer && !this.peer.isDestroyed() && this.connectedPeerId === d.from) {
+      logInfo(
+        '[Receiver]',
+        `Applying offer on existing peer (connected=${this.peer.connected})`
+      );
+      this.peer.signal(signal);
+      return;
+    }
     if (this.peer) {
+      logWarn(
+        '[Receiver]',
+        'Replacing peer instance for new offer from different/new remote'
+      );
       this.peer.destroy();
     }
     this.peer = this.peerFactory(d.from, false, config);
@@ -1122,11 +1137,20 @@ export class ReceiverService {
         // checkpoints; reliable SCTP already retransmits lost packets.
       })
       .catch(err => {
-        console.error('[Receiver] Write error:', err);
-        this.emit(
-          'error',
-          err instanceof Error ? err.message : 'Disk write failed'
-        );
+        const message =
+          err instanceof Error ? err.message : 'Disk write failed';
+        console.error('[Receiver] Write error:', message);
+        // Decrypt/transient write errors should not immediately kill the
+        // DataChannel session; request resume from contiguous frontier.
+        if (/decrypt|Encrypted packet/i.test(message)) {
+          logWarn('[Receiver]', 'Decrypt failed; requesting resume', message);
+          this.sendResumeHints('decrypt failure', {
+            includePartitionAck: false,
+            requestResume: true,
+          });
+          return;
+        }
+        this.emit('error', message);
       });
   }
 

@@ -6,7 +6,7 @@ import { execSync } from 'node:child_process';
 import { writeFileSync, existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-const APP = `https://warp.ponslink.com/?automation=1&v=${Date.now()}`;
+const APP = `https://warp.ponslink.com/?automation=1&nocache=1&v=${Date.now()}`;
 const TEST_FILE = '/tmp/ponswarp-lan-test-20mb.bin';
 const REMOTE_DL = '/tmp/chrome-downloads';
 const TUNNEL_PORT = 9223;
@@ -80,6 +80,24 @@ async function clickButton(page, pattern, timeout = 15000) {
   await page.getByRole('button', { name: re }).first().click({ timeout });
 }
 
+
+  async function hardLoad(page) {
+    await page.goto(APP, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.evaluate(async () => {
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(r => r.unregister()));
+        }
+        if (window.caches) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map(k => caches.delete(k)));
+        }
+      } catch {}
+    });
+    await page.goto(APP, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  }
+
 async function body(page) {
   try {
     return await page.evaluate(() => document.body?.innerText || '');
@@ -104,19 +122,28 @@ async function main() {
     `http://127.0.0.1:${TUNNEL_PORT}`
   );
 
-  const sender = await (await senderBrowser.newContext()).newPage();
+  const senderContext = await senderBrowser.newContext();
+  const sender = await senderContext.newPage();
   const rctx =
     receiverBrowser.contexts()[0] || (await receiverBrowser.newContext());
-  const receiver = rctx.pages()[0] || (await rctx.newPage());
+  // Prefer a fresh page so console hooks are guaranteed.
+  const receiver = await rctx.newPage();
   const logs = { sender: [], receiver: [] };
-  for (const [name, page] of [['sender', sender], ['receiver', receiver]]) {
+  const hook = (name, page) => {
     page.on('console', msg => {
-      logs[name].push(`[console.${msg.type()}] ${msg.text()}`);
+      const text = msg.text();
+      logs[name].push(`[console.${msg.type()}] ${text}`);
+      if (/error|fail|Peer|channel|TRANSFER|connected/i.test(text)) {
+        console.log(`[${name}] ${text.slice(0, 240)}`);
+      }
     });
     page.on('pageerror', err => {
       logs[name].push(`[pageerror] ${err.message}`);
+      console.log(`[${name} pageerror] ${err.message}`);
     });
-  }
+  };
+  hook('sender', sender);
+  hook('receiver', receiver);
 
   try {
     const cdp = await rctx.newCDPSession(receiver);
@@ -129,7 +156,7 @@ async function main() {
   }
 
   console.log('[sender] open');
-  await sender.goto(APP, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await hardLoad(sender);
   await sleep(1000);
   await clickButton(sender, 'INITIALIZE LINK');
   await sleep(800);
@@ -153,7 +180,7 @@ async function main() {
   );
 
   console.log('[receiver] open/join');
-  await receiver.goto(APP, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await hardLoad(receiver);
   await sleep(1000);
   await clickButton(receiver, 'INITIALIZE LINK');
   await sleep(800);
@@ -180,7 +207,7 @@ async function main() {
   let lastRecv = '';
   let lastSend = '';
 
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 120; i++) {
     await sleep(1000);
     lastRecv = await body(receiver);
     lastSend = await body(sender);
@@ -190,15 +217,10 @@ async function main() {
       samples.push({ t: i + 1, mbps: +mbps.toFixed(3), raw: sm[0] });
       console.log(`[t+${i + 1}s] ${sm[0]}`);
     } else if (i % 5 === 0) {
-      console.log(
-        `[t+${i + 1}s] waiting | ` +
-          lastRecv
-            .split('\n')
-            .map((x) => x.trim())
-            .filter(Boolean)
-            .slice(0, 6)
-            .join(' | ')
-      );
+      const r = lastRecv.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 8).join(' | ');
+      const s = lastSend.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 10).join(' | ');
+      console.log(`[t+${i + 1}s] recv: ${r}`);
+      console.log(`[t+${i + 1}s] send: ${s}`);
     }
     if (/COMPLETE|전송 완료|다운로드 완료/i.test(lastRecv)) {
       status = 'COMPLETE';

@@ -361,7 +361,8 @@ export class PeerSession {
     }
 
     this.connected = false;
-    // Debounce close emission: brief channel recycle should not kill transfer.
+    // Debounce: ignore brief single-channel recycle, but if ALL data channels
+    // stay down the peer is unusable even when PC briefly remains "connected".
     if (this.closeEmitTimer) clearTimeout(this.closeEmitTimer);
     this.closeEmitTimer = setTimeout(() => {
       this.closeEmitTimer = null;
@@ -373,16 +374,12 @@ export class PeerSession {
         this.maybeMarkConnected();
         return;
       }
-      const state = this.pc?.connectionState;
-      if (state === 'connected' || state === 'connecting' || state === 'new') {
-        logError(
-          `[Peer ${this.id}]`,
-          `All data channels closed while pc=${state}`
-        );
-        return;
-      }
+      logError(
+        `[Peer ${this.id}]`,
+        `All data channels closed (pc=${this.pc?.connectionState ?? 'n/a'}) — closing peer`
+      );
       this.emit('close');
-    }, 750);
+    }, 400);
   }
 
   private ensureDrainWatchdog(): void {

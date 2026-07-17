@@ -76,6 +76,8 @@ export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
 
 // Native peer transport (control + bulk channels)
 export const NATIVE_PEER_ENABLED = true;
+// Produce ciphertext off main thread (AES-GCM E2E preserved).
+export const USE_BULK_ENCRYPT_WORKER = false;
 export const BULK_CHANNEL_COUNT = 1;
 // Host mid-transfer partition ACK wait (0 = disabled; end checkpoint only)
 export const HOST_CHECKPOINT_EVERY_BYTES = 0;
