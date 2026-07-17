@@ -21,8 +21,11 @@ export type FileScanOptions = {
 /** Snapshot-friendly list: FileList is live and can be wiped by input.value = ''. */
 export type FileListLike = ArrayLike<File> & { length: number };
 
-const DEFAULT_CHUNK_SIZE = 64;
-const DEFAULT_CONCURRENCY = 12;
+/** Mobile multi-select: larger chunks, fewer yields, less React thrash. */
+const DEFAULT_CHUNK_SIZE = 256;
+const DEFAULT_CONCURRENCY = 16;
+/** Avoid re-rendering progress for every tiny batch on multi-thousand selections. */
+const DEFAULT_PROGRESS_EVERY = 128;
 
 const SKIP_NAME_EXACT = new Set([
   '.ds_store',
@@ -47,9 +50,21 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 async function yieldToMain(): Promise<void> {
   await new Promise<void>(resolve => {
-    const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+    const scheduler = (
+      globalThis as { scheduler?: { yield?: () => Promise<void> } }
+    ).scheduler;
     if (typeof scheduler?.yield === 'function') {
-      void scheduler.yield().then(() => resolve(), () => resolve());
+      void scheduler.yield().then(
+        () => resolve(),
+        () => resolve()
+      );
+      return;
+    }
+    // MessageChannel yields faster than setTimeout(0) on many mobile browsers.
+    if (typeof MessageChannel !== 'undefined') {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => resolve();
+      channel.port2.postMessage(null);
       return;
     }
     setTimeout(resolve, 0);
@@ -60,7 +75,10 @@ async function yieldToMain(): Promise<void> {
  * Skip junk/system files early so mobile bulk folders stay smaller.
  * Hidden files (name starts with ".") are excluded except common non-dot junk names.
  */
-export function shouldSkipScannedPath(name: string, relativePath: string): boolean {
+export function shouldSkipScannedPath(
+  name: string,
+  relativePath: string
+): boolean {
   const base = name.trim();
   if (!base) return true;
   const lowerName = base.toLowerCase();
@@ -79,6 +97,37 @@ function reportProgress(
 }
 
 /**
+ * Copy a live FileList without one giant Array.from allocation pause.
+ * Yields every `chunkSize` so multi-thousand mobile selections stay interactive.
+ * Safe to clear `<input value="">` after this resolves.
+ */
+export async function snapshotFileListProgressive(
+  fileList: FileList | null | undefined,
+  options: Pick<FileScanOptions, 'chunkSize' | 'onProgress' | 'signal'> = {}
+): Promise<File[]> {
+  if (!fileList || fileList.length === 0) return [];
+  const total = fileList.length;
+  const chunkSize = Math.max(32, options.chunkSize ?? DEFAULT_CHUNK_SIZE);
+  const out: File[] = new Array(total);
+  for (let i = 0; i < total; i++) {
+    throwIfAborted(options.signal);
+    out[i] = fileList[i];
+    const processed = i + 1;
+    if (processed % chunkSize === 0 || processed === total) {
+      reportProgress(options.onProgress, {
+        scannedFiles: 0,
+        totalHint: total,
+        phase: processed === total ? 'listing' : 'listing',
+      });
+      if (processed < total) {
+        await yieldToMain();
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * FileSystemEntry recursive scan for drag-and-drop folder structure.
  * Uses bounded concurrency and main-thread yields for large trees.
  */
@@ -88,6 +137,10 @@ export const scanFiles = async (
 ): Promise<ScannedFile[]> => {
   const scannedFiles: ScannedFile[] = [];
   const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY);
+  const progressEvery = Math.max(
+    32,
+    options.chunkSize ?? DEFAULT_PROGRESS_EVERY
+  );
   let inFlight = 0;
   const waitQueue: Array<() => void> = [];
 
@@ -112,7 +165,10 @@ export const scanFiles = async (
     if (entry) entries.push(entry);
   }
 
-  const scanEntry = async (entry: FileSystemEntry, basePath: string): Promise<void> => {
+  const scanEntry = async (
+    entry: FileSystemEntry,
+    basePath: string
+  ): Promise<void> => {
     throwIfAborted(options.signal);
 
     if (entry.isFile) {
@@ -122,10 +178,12 @@ export const scanFiles = async (
         await new Promise<void>(resolve => {
           (entry as FileSystemFileEntry).file(
             file => {
-              const fullPath = basePath ? `${basePath}${entry.name}` : entry.name;
+              const fullPath = basePath
+                ? `${basePath}${entry.name}`
+                : entry.name;
               if (!shouldSkipScannedPath(file.name, fullPath)) {
                 scannedFiles.push({ file, path: fullPath });
-                if (scannedFiles.length % DEFAULT_CHUNK_SIZE === 0) {
+                if (scannedFiles.length % progressEvery === 0) {
                   reportProgress(options.onProgress, {
                     scannedFiles: scannedFiles.length,
                     phase: 'listing',
@@ -149,7 +207,9 @@ export const scanFiles = async (
     if (!entry.isDirectory) return;
 
     const dirReader = (entry as FileSystemDirectoryEntry).createReader();
-    const currentPath = basePath ? `${basePath}${entry.name}/` : `${entry.name}/`;
+    const currentPath = basePath
+      ? `${basePath}${entry.name}/`
+      : `${entry.name}/`;
 
     const readEntries = async (): Promise<void> => {
       throwIfAborted(options.signal);
@@ -160,13 +220,16 @@ export const scanFiles = async (
 
       // Bounded parallel scan of this batch, then continue reading more entries.
       let cursor = 0;
-      const workers = Array.from({ length: Math.min(concurrency, batch.length) }, async () => {
-        while (cursor < batch.length) {
-          const index = cursor;
-          cursor += 1;
-          await scanEntry(batch[index], currentPath);
+      const workers = Array.from(
+        { length: Math.min(concurrency, batch.length) },
+        async () => {
+          while (cursor < batch.length) {
+            const index = cursor;
+            cursor += 1;
+            await scanEntry(batch[index], currentPath);
+          }
         }
-      });
+      );
       await Promise.all(workers);
       await yieldToMain();
       await readEntries();
@@ -186,39 +249,68 @@ export const scanFiles = async (
 /**
  * Progressive FileList processing for <input type="file" multiple />.
  * Yields to the main thread every chunk so mobile UI stays responsive.
+ *
+ * Prefer passing the live FileList (or a progressive snapshot) and avoid an
+ * extra full-array copy when the caller already owns a stable ArrayLike.
  */
 /**
  * Snapshot a live FileList before clearing <input value="">.
  * FileList is a live view; resetting the input empties it immediately.
+ *
+ * For large mobile selections prefer `snapshotFileListProgressive` so the
+ * copy itself does not freeze the tab.
  */
-export function snapshotFileList(fileList: FileList | null | undefined): File[] {
+export function snapshotFileList(
+  fileList: FileList | null | undefined
+): File[] {
   if (!fileList || fileList.length === 0) return [];
-  return Array.from(fileList);
+  // Fast path: small selections copy in one shot.
+  if (fileList.length <= DEFAULT_CHUNK_SIZE) {
+    return Array.from(fileList);
+  }
+  // Large selections: still sync for API compatibility, but avoid Array.from
+  // iterator overhead — indexed copy is cheaper on mobile Safari.
+  const out = new Array<File>(fileList.length);
+  for (let i = 0; i < fileList.length; i++) {
+    out[i] = fileList[i];
+  }
+  return out;
 }
 
 export const processInputFiles = async (
   fileList: FileListLike,
   options: FileScanOptions = {}
 ): Promise<ScannedFile[]> => {
-  const files: ScannedFile[] = [];
-  const chunkSize = Math.max(8, options.chunkSize ?? DEFAULT_CHUNK_SIZE);
   const totalHint = fileList.length;
+  if (totalHint === 0) {
+    reportProgress(options.onProgress, {
+      scannedFiles: 0,
+      totalHint: 0,
+      phase: 'done',
+    });
+    return [];
+  }
 
-  for (let i = 0; i < fileList.length; i++) {
+  const chunkSize = Math.max(32, options.chunkSize ?? DEFAULT_CHUNK_SIZE);
+  const files: ScannedFile[] = [];
+  let accepted = 0;
+  for (let i = 0; i < totalHint; i++) {
     throwIfAborted(options.signal);
     const file = fileList[i];
-    const path =
-      (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
-      file.name;
+    // Avoid repeated property access / string work when possible.
+    const relative =
+      (file as File & { webkitRelativePath?: string }).webkitRelativePath || '';
+    const path = relative.length > 0 ? relative : file.name;
 
     if (!shouldSkipScannedPath(file.name, path)) {
       files.push({ file, path });
+      accepted += 1;
     }
 
     const processed = i + 1;
     if (processed % chunkSize === 0 || processed === totalHint) {
       reportProgress(options.onProgress, {
-        scannedFiles: files.length,
+        scannedFiles: accepted,
         totalHint,
         phase: processed === totalHint ? 'done' : 'listing',
       });
@@ -228,14 +320,6 @@ export const processInputFiles = async (
     }
   }
 
-  if (totalHint === 0) {
-    reportProgress(options.onProgress, {
-      scannedFiles: 0,
-      totalHint: 0,
-      phase: 'done',
-    });
-  }
-
   return files;
 };
 
@@ -243,7 +327,9 @@ export const processInputFiles = async (
  * Synchronous helper for tiny lists / unit tests.
  * Prefer the async processInputFiles() on UI paths.
  */
-export const processInputFilesSync = (fileList: FileListLike): ScannedFile[] => {
+export const processInputFilesSync = (
+  fileList: FileListLike
+): ScannedFile[] => {
   const files: ScannedFile[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];
