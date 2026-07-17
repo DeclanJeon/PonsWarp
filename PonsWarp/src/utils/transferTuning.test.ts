@@ -13,8 +13,8 @@ describe('transfer tuning constants', () => {
     expect(CHUNK_SIZE_INITIAL).toBe(240 * 1024);
     expect(CHUNK_SIZE_INITIAL).toBeLessThanOrEqual(256 * 1024);
     // Keep the SCTP queue filled without multi-tens-of-MB overflow.
-    expect(HIGH_WATER_MARK).toBe(8 * 1024 * 1024);
-    expect(LOW_WATER_MARK).toBe(2 * 1024 * 1024);
+    expect(HIGH_WATER_MARK).toBe(12 * 1024 * 1024);
+    expect(LOW_WATER_MARK).toBe(3 * 1024 * 1024);
   });
 
   it('acks larger partitions while staying under receiver pause threshold', () => {

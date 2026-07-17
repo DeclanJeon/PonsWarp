@@ -9,6 +9,7 @@ import { LOW_WATER_MARK } from '../utils/constants';
 import {
   TransferDiagnostics,
   CandidatePathKind,
+  classifyHostAddressScope,
 } from '../utils/transferFlowControl';
 import { logInfo, logError } from '../utils/logger';
 
@@ -602,11 +603,16 @@ export class PeerSession {
         sampledAtMs: Date.now(),
       };
 
+      const pathKind = this.normalizeCandidatePath(
+        localCandidate?.candidateType,
+        remoteCandidate?.candidateType
+      );
+      const localAddress =
+        localCandidate?.address ?? localCandidate?.ip ?? null;
+      const remoteAddress =
+        remoteCandidate?.address ?? remoteCandidate?.ip ?? null;
       return {
-        candidatePathKind: this.normalizeCandidatePath(
-          localCandidate?.candidateType,
-          remoteCandidate?.candidateType
-        ),
+        candidatePathKind: pathKind,
         protocol: localCandidate?.protocol ?? remoteCandidate?.protocol ?? null,
         relayProtocol:
           localCandidate?.relayProtocol ??
@@ -618,6 +624,10 @@ export class PeerSession {
         ),
         bufferedAmountBytes: this.getBufferedAmount(),
         candidateTuple: tuple,
+        hostAddressScope:
+          pathKind === 'host'
+            ? classifyHostAddressScope(localAddress, remoteAddress)
+            : null,
       };
     } catch {
       return fallback;
@@ -633,6 +643,7 @@ export class PeerSession {
       availableOutgoingBitrateBps: null,
       bufferedAmountBytes: this.getBufferedAmount(),
       candidateTuple: null,
+      hostAddressScope: null,
     };
   }
 

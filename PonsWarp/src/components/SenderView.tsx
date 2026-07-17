@@ -108,6 +108,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
     bytesTransferred: 0,
     totalBytes: 0,
     pathKind: 'unknown' as string,
+    hostAddressScope: null as string | null,
     protocol: null as string | null,
     rttMs: null as number | null,
     hybridArmed: false,
@@ -349,6 +350,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
     swarmManager.on('progress', (data: SenderProgressPayload) => {
       const pathMeta = {
         pathKind: data.candidatePathKind || 'unknown',
+        hostAddressScope:
+          typeof data.hostAddressScope === 'string'
+            ? data.hostAddressScope
+            : null,
         protocol: data.protocol ?? null,
         rttMs: typeof data.rttMs === 'number' ? data.rttMs : null,
         hybridArmed: data.hybridArmed === true,
@@ -856,6 +861,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
             >
               path={progressData.pathKind}
               {progressData.protocol ? `/${progressData.protocol}` : ''}
+              {progressData.hostAddressScope
+                ? `/${progressData.hostAddressScope}`
+                : ''}
               {typeof progressData.rttMs === 'number'
                 ? ` rtt=${Math.round(progressData.rttMs)}ms`
                 : ''}
@@ -863,7 +871,13 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 ? ` hybrid=${progressData.hybridArmReason || 'on'}`
                 : progressData.pathKind === 'relay'
                   ? ' (TURN relay — not LAN direct)'
-                  : ''}
+                  : progressData.pathKind === 'host' &&
+                      typeof progressData.rttMs === 'number' &&
+                      progressData.rttMs >= 80
+                    ? progressData.hostAddressScope === 'cgnat'
+                      ? ' (host over VPN/Tailscale — high latency)'
+                      : ' (host path but high RTT — not local LAN speed)'
+                    : ''}
             </p>
             <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4 md:gap-4">
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyHostAddressScope,
+  isElevatedHostRtt,
   DEFAULT_FLOW_CONTROL_PROFILE,
   DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   DIRECT_SRFLX_TRANSFER_TUNING_PROFILE,
@@ -120,10 +122,10 @@ describe('transferFlowControl', () => {
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE
     );
     expect(DIRECT_HOST_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      8 * 1024 * 1024
+      12 * 1024 * 1024
     );
     expect(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.initialInFlightBytes).toBe(
-      8 * 1024 * 1024
+      12 * 1024 * 1024
     );
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.chunkSizeBytes + 38 + 16
@@ -139,10 +141,10 @@ describe('transferFlowControl', () => {
     ).toBeLessThanOrEqual(receiverPauseHighBytes);
     expect(
       DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(16 * 1024 * 1024);
+    ).toBeLessThanOrEqual(24 * 1024 * 1024);
     expect(
       DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.maxInFlightBytes
-    ).toBeLessThanOrEqual(16 * 1024 * 1024);
+    ).toBeLessThanOrEqual(24 * 1024 * 1024);
   });
 
   it('tunes relay for mobile Wi-Fi without mid-transfer partition barriers', () => {
@@ -163,7 +165,7 @@ describe('transferFlowControl', () => {
     // unknown inherits host profile for Wi-Fi first-path optimism
     expect(
       UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes
-    ).toBeLessThanOrEqual(16 * 1024 * 1024);
+    ).toBeLessThanOrEqual(24 * 1024 * 1024);
   });
 
   it('selects direct in-flight targets up to the profile maximum when bitrate stats are absent', () => {
@@ -179,14 +181,14 @@ describe('transferFlowControl', () => {
     ).toBe(RELAY_TRANSFER_TUNING_PROFILE.maxInFlightBytes);
   });
 
-  it('uses available bitrate and RTT to clamp in-flight targets within profile bounds', () => {
+  it('keeps host/srflx at max window even with pessimistic bitrate/RTT', () => {
     expect(
-      selectInFlightTargetBytes(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE, {
-        candidatePathKind: 'srflx',
-        availableOutgoingBitrateBps: 200_000_000,
-        rttMs: 100,
+      selectInFlightTargetBytes(DIRECT_HOST_TRANSFER_TUNING_PROFILE, {
+        candidatePathKind: 'host',
+        availableOutgoingBitrateBps: 1_000_000,
+        rttMs: 328,
       })
-    ).toBeGreaterThan(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE.minInFlightBytes);
+    ).toBe(DIRECT_HOST_TRANSFER_TUNING_PROFILE.maxInFlightBytes);
 
     expect(
       selectInFlightTargetBytes(DIRECT_SRFLX_TRANSFER_TUNING_PROFILE, {
@@ -356,5 +358,17 @@ describe('transferFlowControl', () => {
     bytes.set([1, 2, 3], 22);
 
     expect(getPacketPayloadSize(packet)).toBe(3);
+  });
+
+  it('classifies host address scopes for LAN vs CGNAT/Tailscale', () => {
+    expect(classifyHostAddressScope('192.168.0.10', '192.168.0.20')).toBe('lan');
+    expect(classifyHostAddressScope('100.109.210.63', '100.64.1.2')).toBe('cgnat');
+    expect(classifyHostAddressScope('10.0.0.1', '8.8.8.8')).toBe('public');
+    expect(isElevatedHostRtt({ candidatePathKind: 'host', rttMs: 328 })).toBe(
+      true
+    );
+    expect(isElevatedHostRtt({ candidatePathKind: 'host', rttMs: 12 })).toBe(
+      false
+    );
   });
 });

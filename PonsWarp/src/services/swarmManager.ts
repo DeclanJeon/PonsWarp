@@ -55,6 +55,7 @@ import {
   selectPartitionSize,
   selectInFlightTargetBytes,
   selectTransferTuningProfile,
+  isElevatedHostRtt,
   shouldRequestMoreChunks,
   UNKNOWN_TRANSFER_TUNING_PROFILE,
   TransferDiagnostics,
@@ -1161,6 +1162,17 @@ export class SwarmManager {
       this.currentTransferTuningProfile,
       selected
     );
+    if (isElevatedHostRtt(selected)) {
+      // Do not shrink the window on high-RTT host — BDP needs more, not less.
+      this.currentInFlightTargetBytes = Math.max(
+        this.currentInFlightTargetBytes,
+        this.currentTransferTuningProfile.maxInFlightBytes
+      );
+      logDebug(
+        '[SwarmManager]',
+        `Elevated host RTT ${selected.rttMs}ms scope=${selected.hostAddressScope ?? '?'} — using max window ${this.currentInFlightTargetBytes}`
+      );
+    }
     if (selected.candidateTuple) {
       this.hostRouteSamples = [
         ...this.hostRouteSamples,
@@ -3782,6 +3794,8 @@ export class SwarmManager {
       protocol: this.currentTransferDiagnostics.protocol ?? null,
       relayProtocol: this.currentTransferDiagnostics.relayProtocol ?? null,
       rttMs: this.currentTransferDiagnostics.rttMs ?? null,
+      hostAddressScope:
+        this.currentTransferDiagnostics.hostAddressScope ?? null,
       availableOutgoingBitrateBps:
         this.currentTransferDiagnostics.availableOutgoingBitrateBps ?? null,
       bufferedAmountBytes: this.getHighestBufferedAmount(),

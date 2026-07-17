@@ -151,6 +151,13 @@ export class HostTransferScheduler {
   }
 }
 
+export type HostAddressScope =
+  | 'lan'
+  | 'cgnat'
+  | 'link-local'
+  | 'public'
+  | 'unknown';
+
 export interface TransferDiagnostics {
   candidatePathKind: CandidatePathKind;
   protocol?: string | null;
@@ -159,6 +166,8 @@ export interface TransferDiagnostics {
   availableOutgoingBitrateBps?: number | null;
   bufferedAmountBytes?: number | null;
   candidateTuple?: CandidateEligibilityTuple | null;
+  /** Best-effort classification of host candidate addresses (VPN vs LAN). */
+  hostAddressScope?: HostAddressScope | null;
 }
 
 export interface TransferTuningProfile {
@@ -179,11 +188,11 @@ const RECEIVER_PAUSE_LOW_BYTES = 16 * MIB;
 export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   pathKind: 'host',
   chunkSizeBytes: 240 * KIB,
-  minInFlightBytes: 4 * MIB,
-  initialInFlightBytes: 8 * MIB,
-  // Keep the SCTP queue filled; 16MB hard stop is the absolute ceiling.
-  maxInFlightBytes: 16 * MIB,
-  lowWaterBytes: 2 * MIB,
+  minInFlightBytes: 6 * MIB,
+  initialInFlightBytes: 12 * MIB,
+  // High-RTT "host" (VPN/Tailscale) still needs a fat send queue for BDP.
+  maxInFlightBytes: 24 * MIB,
+  lowWaterBytes: 3 * MIB,
   // Host: no mid-transfer partition barrier (reliable SCTP + end checkpoint)
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
   receiverPauseHighBytes: RECEIVER_PAUSE_HIGH_BYTES,
@@ -225,15 +234,79 @@ export function selectTransferTuningProfile(
       return UNKNOWN_TRANSFER_TUNING_PROFILE;
   }
 }
+/**
+ * Host with high RTT is still "host" ICE type (VPN/Tailscale/CGNAT overlay,
+ * bad Wi-Fi, or cross-subnet) — not a true low-latency LAN path.
+ */
+export const HOST_LAN_LIKE_RTT_MS = 40;
+export const HOST_ELEVATED_RTT_MS = 80;
+
+export function classifyHostAddressScope(
+  localAddress?: string | null,
+  remoteAddress?: string | null
+): HostAddressScope {
+  const scopes = [localAddress, remoteAddress].map(scopeOfIpAddress);
+  if (scopes.includes('cgnat')) return 'cgnat';
+  if (scopes.every(s => s === 'lan')) return 'lan';
+  if (scopes.includes('link-local')) return 'link-local';
+  if (scopes.includes('public')) return 'public';
+  if (scopes.includes('lan')) return 'lan';
+  return 'unknown';
+}
+
+function scopeOfIpAddress(address?: string | null): HostAddressScope {
+  if (!address || typeof address !== 'string') return 'unknown';
+  const host = address.split('%')[0].trim().toLowerCase();
+  // IPv4
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 10) return 'lan';
+    if (a === 192 && b === 168) return 'lan';
+    if (a === 172 && b >= 16 && b <= 31) return 'lan';
+    // RFC6598 CGNAT / Tailscale carrier-grade (100.64.0.0/10)
+    if (a === 100 && b >= 64 && b <= 127) return 'cgnat';
+    if (a === 127) return 'lan';
+    if (a === 169 && b === 254) return 'link-local';
+    return 'public';
+  }
+  // IPv6 ULA fc00::/7, link-local fe80::/10
+  if (host.startsWith('fc') || host.startsWith('fd')) return 'lan';
+  if (host.startsWith('fe80:')) return 'link-local';
+  if (host === '::1') return 'lan';
+  if (host.includes(':')) return 'public';
+  return 'unknown';
+}
+
+export function isElevatedHostRtt(
+  diagnostics?: Partial<TransferDiagnostics> | null
+): boolean {
+  return (
+    diagnostics?.candidatePathKind === 'host' &&
+    typeof diagnostics.rttMs === 'number' &&
+    Number.isFinite(diagnostics.rttMs) &&
+    diagnostics.rttMs >= HOST_ELEVATED_RTT_MS
+  );
+}
+
 export function selectInFlightTargetBytes(
   profile: TransferTuningProfile,
   diagnostics?: Partial<TransferDiagnostics> | null
 ): number {
-  const direct =
+  // True host/srflx: always fill to profile max. Chrome's
+  // availableOutgoingBitrate is often wildly pessimistic mid-transfer and
+  // high RTT (VPN host, busy Wi-Fi) needs MORE window, not less.
+  if (
     diagnostics?.candidatePathKind === 'host' ||
-    diagnostics?.candidatePathKind === 'srflx';
-  const b = diagnostics?.availableOutgoingBitrateBps,
-    r = diagnostics?.rttMs;
+    diagnostics?.candidatePathKind === 'srflx' ||
+    diagnostics?.candidatePathKind === 'unknown'
+  ) {
+    return profile.maxInFlightBytes;
+  }
+
+  const b = diagnostics?.availableOutgoingBitrateBps;
+  const r = diagnostics?.rttMs;
   if (
     typeof b === 'number' &&
     Number.isFinite(b) &&
@@ -242,16 +315,13 @@ export function selectInFlightTargetBytes(
     Number.isFinite(r) &&
     r > 0
   ) {
-    // Use a generous BDP multiple. Chrome's availableOutgoingBitrate is often
-    // pessimistic on LAN and would otherwise starve the send pipeline.
-    const bdp = Math.floor((b / 8) * Math.max(r, 10) / 1000 * (direct ? 16 : 4));
+    // Relay only: modest BDP multiple; still floor at initial.
+    const bdp = Math.floor((b / 8) * Math.max(r, 10) / 1000 * 8);
     return Math.max(
       profile.minInFlightBytes,
       Math.min(profile.maxInFlightBytes, Math.max(bdp, profile.initialInFlightBytes))
     );
   }
-  // Without bitrate samples, prefer max window so mobile Wi-Fi/TURN is not
-  // stuck at the conservative initial value for the whole transfer.
   return profile.maxInFlightBytes;
 }
 export function calculateSendBudget(p: {
