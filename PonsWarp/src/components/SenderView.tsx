@@ -24,6 +24,7 @@ import { createManifest, formatBytes } from '../utils/fileUtils';
 import {
   scanFiles,
   processInputFiles,
+  snapshotFileList,
   ScannedFile,
   FileScanProgress,
 } from '../utils/fileScanner';
@@ -375,9 +376,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
   }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const fileList = e.target.files;
+    // Snapshot first: input.value = '' clears the live FileList.
+    const fileList = snapshotFileList(e.target.files);
     e.target.value = '';
+    if (fileList.length === 0) return;
     setScanProgress({
       scannedFiles: 0,
       totalHint: fileList.length,
@@ -428,7 +430,8 @@ const SenderView: React.FC<SenderViewProps> = () => {
         });
         await processScannedFiles(scannedFiles);
       } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const scannedFiles = await processInputFiles(e.dataTransfer.files, {
+        const dropped = snapshotFileList(e.dataTransfer.files);
+        const scannedFiles = await processInputFiles(dropped, {
           onProgress: handleScanProgress,
         });
         await processScannedFiles(scannedFiles);

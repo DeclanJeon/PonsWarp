@@ -18,6 +18,9 @@ export type FileScanOptions = {
   signal?: AbortSignal;
 };
 
+/** Snapshot-friendly list: FileList is live and can be wiped by input.value = ''. */
+export type FileListLike = ArrayLike<File> & { length: number };
+
 const DEFAULT_CHUNK_SIZE = 64;
 const DEFAULT_CONCURRENCY = 12;
 
@@ -184,8 +187,17 @@ export const scanFiles = async (
  * Progressive FileList processing for <input type="file" multiple />.
  * Yields to the main thread every chunk so mobile UI stays responsive.
  */
+/**
+ * Snapshot a live FileList before clearing <input value="">.
+ * FileList is a live view; resetting the input empties it immediately.
+ */
+export function snapshotFileList(fileList: FileList | null | undefined): File[] {
+  if (!fileList || fileList.length === 0) return [];
+  return Array.from(fileList);
+}
+
 export const processInputFiles = async (
-  fileList: FileList,
+  fileList: FileListLike,
   options: FileScanOptions = {}
 ): Promise<ScannedFile[]> => {
   const files: ScannedFile[] = [];
@@ -231,7 +243,7 @@ export const processInputFiles = async (
  * Synchronous helper for tiny lists / unit tests.
  * Prefer the async processInputFiles() on UI paths.
  */
-export const processInputFilesSync = (fileList: FileList): ScannedFile[] => {
+export const processInputFilesSync = (fileList: FileListLike): ScannedFile[] => {
   const files: ScannedFile[] = [];
   for (let i = 0; i < fileList.length; i++) {
     const file = fileList[i];

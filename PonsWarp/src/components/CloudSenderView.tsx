@@ -25,6 +25,7 @@ import {
 import {
   scanFiles,
   processInputFiles,
+  snapshotFileList,
   ScannedFile,
   FileScanProgress,
 } from '../utils/fileScanner';
@@ -204,9 +205,10 @@ const CloudSenderView: React.FC = () => {
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const fileList = e.target.files;
+    // Snapshot first: input.value = '' clears the live FileList.
+    const fileList = snapshotFileList(e.target.files);
     e.target.value = '';
+    if (fileList.length === 0) return;
     setScanProgress({
       scannedFiles: 0,
       totalHint: fileList.length,
@@ -239,7 +241,8 @@ const CloudSenderView: React.FC = () => {
         return;
       }
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const scanned = await processInputFiles(e.dataTransfer.files, {
+        const dropped = snapshotFileList(e.dataTransfer.files);
+        const scanned = await processInputFiles(dropped, {
           onProgress: handleScanProgress,
         });
         await processScannedFiles(scanned);

@@ -3,6 +3,7 @@ import {
   processInputFiles,
   processInputFilesSync,
   shouldSkipScannedPath,
+  snapshotFileList,
 } from './fileScanner';
 
 function makeFileList(files: File[]): FileList {
@@ -67,5 +68,21 @@ describe('processInputFiles progressive', () => {
     const sync = processInputFilesSync(makeFileList([file, junk]));
     expect(sync).toHaveLength(1);
     expect(sync[0].path).toBe('ok.bin');
+  });
+});
+
+
+describe('snapshotFileList', () => {
+  it('copies files so later FileList mutation does not empty the scan', async () => {
+    const a = new File(['1'], 'one.txt');
+    const b = new File(['22'], 'two.txt');
+    const live = makeFileList([a, b]);
+    const snapshot = snapshotFileList(live as unknown as FileList);
+
+    // Simulate input.value = '' wiping the live list length.
+    Object.defineProperty(live, 'length', { value: 0, configurable: true });
+
+    const scanned = await processInputFiles(snapshot, { chunkSize: 1 });
+    expect(scanned.map(x => x.path).sort()).toEqual(['one.txt', 'two.txt']);
   });
 });
