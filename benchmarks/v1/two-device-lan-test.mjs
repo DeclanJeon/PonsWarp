@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { chromium } from 'playwright';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { chromium } = require('playwright');
 import { execSync } from 'node:child_process';
 import { writeFileSync, existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';

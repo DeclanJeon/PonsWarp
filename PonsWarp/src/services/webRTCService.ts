@@ -16,6 +16,7 @@ import {
 import { createEosPacket } from '../utils/plainPacket';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
 import { base64ToBytes, CryptoService } from './cryptoService';
+import { orderIceServersPreferDirect } from '../utils/iceServers';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
 import { shouldKeepReceiverReconnectAlive } from '../utils/mobileResumePolicy';
@@ -653,7 +654,7 @@ export class ReceiverService {
         roomId
       )) as TurnConfigResponse;
       if (response?.success && response?.data) {
-        this.iceServers = this.orderIceServersPreferDirect(
+        this.iceServers = orderIceServersPreferDirect(
           response.data.iceServers
         );
       }

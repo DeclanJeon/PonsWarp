@@ -38,6 +38,7 @@ import {
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { BulkEncryptProducer } from './bulkEncryptProducer';
+import { orderIceServersPreferDirect } from '../utils/iceServers';
 import { bytesToBase64, CryptoService } from './cryptoService';
 import { networkController, AdaptiveParams } from './networkAdaptiveController';
 import { calculateProgressPercent } from '../utils/transferProgress';
@@ -4035,7 +4036,7 @@ export class SwarmManager {
       const response =
         await this.getSignalingService().requestTurnConfig(roomId);
       if (response?.success && response?.data) {
-        this.iceServers = this.orderIceServersPreferDirect(
+        this.iceServers = orderIceServersPreferDirect(
           response.data.iceServers
         );
       }
@@ -4044,20 +4045,6 @@ export class SwarmManager {
     }
   }
 
-  /** Keep STUN before TURN so local candidates gather aggressively. */
-  private orderIceServersPreferDirect(servers: RTCIceServer[]): RTCIceServer[] {
-    const stun: RTCIceServer[] = [];
-    const turn: RTCIceServer[] = [];
-    const other: RTCIceServer[] = [];
-    for (const server of servers) {
-      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-      const joined = urls.map(u => String(u).toLowerCase()).join(' ');
-      if (joined.includes('turn:')) turn.push(server);
-      else if (joined.includes('stun:')) stun.push(server);
-      else other.push(server);
-    }
-    return [...stun, ...other, ...turn];
-  }
 
   /**
    * Keep-alive 시작 (연결 유지용)
