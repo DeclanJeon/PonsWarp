@@ -362,7 +362,13 @@ export class SwarmManager {
     if (document.visibilityState === 'visible') {
       logInfo('[SwarmManager]', '📱 Page became visible');
       this.requestWakeLock();
-      if (this.isTransferring) {
+      // Resume even when isTransferring=false after peer drop (awaiting reconnect).
+      if (
+        this.isTransferring ||
+        this.awaitingReceiverReconnect ||
+        this.currentTransferPeers.size > 0 ||
+        this.peers.size > 0
+      ) {
         this.checkConnectionAfterResume();
       }
     } else {
@@ -393,17 +399,49 @@ export class SwarmManager {
 
   private checkConnectionAfterResume(): void {
     const connectedPeers = this.getConnectedPeers();
-    if (connectedPeers.length === 0 && this.currentTransferPeers.size > 0) {
-      logWarn('[SwarmManager]', '📱 All peers disconnected during background');
-      this.emit('status', 'RECONNECTING');
-      const signaling = this.getSignalingService();
-      void signaling.connect().then(() => {
+    if (connectedPeers.length === 0) {
+      if (
+        this.currentTransferPeers.size > 0 ||
+        this.awaitingReceiverReconnect ||
+        this.files.length > 0
+      ) {
+        logWarn('[SwarmManager]', '📱 All peers disconnected during background');
+        this.emit('status', 'RECONNECTING');
+        this.recoverSignalingAfterBackground();
+      }
+      return;
+    }
+
+    // Peers still marked connected after screen-off: unpause and kick the send loop.
+    for (const peerId of connectedPeers) {
+      this.pausedPeers.delete(peerId);
+    }
+    this.notifySendWindowWaiters();
+
+    if (this.awaitingReceiverReconnect) {
+      // Wait for receiver RESUME_REQUEST; still ensure signaling is healthy.
+      this.recoverSignalingAfterBackground();
+      return;
+    }
+
+    if (this.isTransferring && this.canRequestMoreChunks()) {
+      logInfo('[SwarmManager]', '📱 Foreground: restarting chunk pipeline');
+      this.updateAdaptiveTransferConfig();
+      this.requestMoreChunks();
+    }
+  }
+
+  private recoverSignalingAfterBackground(): void {
+    const signaling = this.getSignalingService();
+    void signaling
+      .connect()
+      .then(() => {
         if (this.roomId) return signaling.joinRoom(this.roomId);
-      }).catch(error => {
+      })
+      .catch(error => {
         logError('[SwarmManager]', 'Reconnect failed:', error);
         this.emit('error', 'Connection lost. Please restart the transfer.');
       });
-    }
   }
 
   constructor(options: SwarmManagerOptions = {}) {

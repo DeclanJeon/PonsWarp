@@ -69,6 +69,7 @@ export interface IFileWriter {
   onFlowControl?(cb: (action: 'PAUSE' | 'RESUME') => void): void;
   onResumeRequest?(cb: (offset: number, reason: string) => void): void;
   requestResumeFromCurrentOffset?(reason: string): boolean;
+  forceResumeFromCurrentOffset?(reason: string): boolean;
   waitForIdle?(): Promise<void>;
   getContiguousReceivedOffset?(): number;
   // 🔐 [E2E] 암호화 키 설정
@@ -223,7 +224,16 @@ export class ReceiverService {
   private readonly handlePageBecameActive = (_event?: Event) => {
     if (this.disposed || !this.roomId || !this.isTransferActive) return;
 
+    // Mobile screen-off / app switch: always re-arm wake lock and re-nudge the
+    // sender. "peer.connected === true" is not enough — the DataChannel can
+    // still be stalled after background freeze.
+    void this.requestWakeLock();
+
     if (this.peer && this.peer.connected) {
+      this.sendResumeHints('page-became-active', {
+        includePartitionAck: true,
+        requestResume: true,
+      });
       return;
     }
 
@@ -293,7 +303,10 @@ export class ReceiverService {
     }
 
     if (options.requestResume) {
-      this.writer?.requestResumeFromCurrentOffset?.(reason);
+      const forced = this.writer?.forceResumeFromCurrentOffset?.(reason);
+      if (forced === undefined) {
+        this.writer?.requestResumeFromCurrentOffset?.(reason);
+      }
     }
   }
 
@@ -941,6 +954,12 @@ export class ReceiverService {
         if (this.peer && this.peer !== peer) return; // already replaced
         if (this.peer === peer && this.peer.connected) {
           logInfo('[Receiver]', 'Peer recovered without full reconnect');
+          if (this.isTransferActive) {
+            this.sendResumeHints('peer recovered after channel close', {
+              includePartitionAck: true,
+              requestResume: true,
+            });
+          }
           return;
         }
         if (this.peer === peer) {

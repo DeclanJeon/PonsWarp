@@ -55,7 +55,8 @@ const WRITE_BUFFER_HIGH_MARK = 48 * 1024 * 1024;
 const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
 const ENCRYPTED_HEADER_SIZE = 38;
 const AUTH_TAG_SIZE = 16;
-const MAX_RESUME_ATTEMPTS = 3;
+// Mobile screen-off can stall the channel multiple times in one transfer.
+const MAX_RESUME_ATTEMPTS = 12;
 
 import type { EvidenceFsaHandleContext } from './lanEvidenceAdapter';
 export class DirectFileWriter {
@@ -1913,6 +1914,12 @@ export class DirectFileWriter {
     return this.requestResume(this.totalBytesWritten, reason);
   }
 
+  /** Foreground recovery: allow a fresh RESUME_REQUEST even if one is in-flight. */
+  public forceResumeFromCurrentOffset(reason: string): boolean {
+    this.awaitingResume = false;
+    return this.requestResume(this.totalBytesWritten, reason);
+  }
+
   private requestResume(offset: number, reason: string): boolean {
     if (!this.canRequestResume()) {
       return false;
@@ -1933,12 +1940,12 @@ export class DirectFileWriter {
   }
 
   private canRequestResume(): boolean {
+    // Any active transfer with a callback is resumable from contiguous offset.
+    // Multi-file ZIP path already tracks totalBytesWritten contiguously.
     return (
       !!this.onResumeRequestCallback &&
-      (this.isReceiverZipMode() ||
-        (!this.manifest.isSizeEstimated &&
-          (this.manifest.totalFiles ?? this.manifest.files?.length ?? 0) ===
-            1)) &&
+      !!this.manifest &&
+      (this.manifest.totalFiles ?? this.manifest.files?.length ?? 0) > 0 &&
       this.resumeAttempts < MAX_RESUME_ATTEMPTS
     );
   }
