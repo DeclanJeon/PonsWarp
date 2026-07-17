@@ -653,7 +653,9 @@ export class ReceiverService {
         roomId
       )) as TurnConfigResponse;
       if (response?.success && response?.data) {
-        this.iceServers = response.data.iceServers;
+        this.iceServers = this.orderIceServersPreferDirect(
+          response.data.iceServers
+        );
       }
     } catch (error) {
       logError('[Receiver]', 'Failed to fetch TURN config:', error);
@@ -687,7 +689,11 @@ export class ReceiverService {
     }
 
     const { signal, lane } = normalizeLaneSignal(d.offer ?? d.sdp);
-    const config: PeerConfig = { iceServers: this.iceServers };
+    const config: PeerConfig = {
+      iceServers: this.iceServers,
+      iceTransportPolicy: 'all',
+      iceCandidatePoolSize: 4,
+    };
 
     if (lane > 0) {
       // Bulk stripe PeerConnection — do not tear down primary

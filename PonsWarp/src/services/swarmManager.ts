@@ -537,6 +537,8 @@ export class SwarmManager {
 
     const config: PeerConfig = {
       iceServers: this.iceServers,
+      iceTransportPolicy: 'all',
+      iceCandidatePoolSize: 4,
     };
 
     const peer = this.peerFactory(peerKey, initiator, config);
@@ -2798,19 +2800,51 @@ export class SwarmManager {
     });
     this.emit('status', 'TRANSFERRING');
     this.startAdaptiveControl();
-    await this.sampleAdaptiveStats();
+    // Give ICE a short moment to settle selected pair before deciding path policy.
+    for (let i = 0; i < 6; i++) {
+      await this.sampleAdaptiveStats();
+      const kind = this.currentTransferDiagnostics.candidatePathKind;
+      if (kind === 'host' || kind === 'relay' || kind === 'srflx') break;
+      await new Promise(r => setTimeout(r, 150));
+    }
+
+    const pathKind = this.currentTransferDiagnostics.candidatePathKind;
+    logInfo(
+      '[SwarmManager]',
+      `Transfer path decided: ${pathKind} protocol=${this.currentTransferDiagnostics.protocol ?? '?'} rtt=${this.currentTransferDiagnostics.rttMs ?? '?'} hybridArmed=${this.hybridArmed}`
+    );
 
     // Host LAN path is already SCTP-bound; hybrid HTTP only helps constrained
     // cross-network (relay/srflx/unknown) paths and would add latency on host.
-    if (
-      this.hybridArmed &&
-      this.currentTransferDiagnostics.candidatePathKind === 'host'
-    ) {
+    if (this.hybridArmed && pathKind === 'host') {
       this.hybridArmed = false;
       this.hybridArmReason = 'host-path-skip';
       this.hybridPackets = [];
       this.hybridPrebuilt = false;
       logInfo('[SwarmManager]', 'Hybrid HTTP assist skipped on host path');
+    }
+
+    // Same Wi-Fi mobile often lands on TURN relay (~public uplink, hundreds of KB/s).
+    // Prefer hybrid HTTP assist there when available; pure WebRTC relay is the slow path.
+    if (
+      !this.hybridArmed &&
+      pathKind !== 'host' &&
+      cloudApiConfigured() &&
+      (this.remoteHybridCaps?.hybridHttp || localHybridCaps().hybridHttp)
+    ) {
+      const rearm = shouldArmHybrid({
+        remoteCaps: this.remoteHybridCaps ?? localHybridCaps(),
+        totalBytes: manifest.totalSize,
+        cloudApiConfigured: true,
+      });
+      if (rearm.armed) {
+        this.hybridArmed = true;
+        this.hybridArmReason = `path-${pathKind}-force`;
+        logInfo(
+          '[SwarmManager]',
+          `Hybrid HTTP assist RE-ARMED for non-host path (${pathKind})`
+        );
+      }
     }
 
     try {
@@ -3906,11 +3940,28 @@ export class SwarmManager {
       const response =
         await this.getSignalingService().requestTurnConfig(roomId);
       if (response?.success && response?.data) {
-        this.iceServers = response.data.iceServers;
+        this.iceServers = this.orderIceServersPreferDirect(
+          response.data.iceServers
+        );
       }
     } catch (error) {
       logError('[SwarmManager]', 'Failed to fetch TURN config:', error);
     }
+  }
+
+  /** Keep STUN before TURN so local candidates gather aggressively. */
+  private orderIceServersPreferDirect(servers: RTCIceServer[]): RTCIceServer[] {
+    const stun: RTCIceServer[] = [];
+    const turn: RTCIceServer[] = [];
+    const other: RTCIceServer[] = [];
+    for (const server of servers) {
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      const joined = urls.map(u => String(u).toLowerCase()).join(' ');
+      if (joined.includes('turn:')) turn.push(server);
+      else if (joined.includes('stun:')) stun.push(server);
+      else other.push(server);
+    }
+    return [...stun, ...other, ...turn];
   }
 
   /**

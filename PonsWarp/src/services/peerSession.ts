@@ -23,6 +23,13 @@ export interface PeerConfig {
   iceServers: RTCIceServer[];
   channelConfig?: RTCDataChannelInit;
   bulkChannelCount?: number;
+  /**
+   * Prefer LAN host candidates first. Keep all ICE servers, but do not force
+   * relay-only. Mobile same-Wi-Fi often fails host UDP due to AP isolation and
+   * falls back to TURN — that path is ~public uplink speed, not LAN.
+   */
+  iceTransportPolicy?: RTCIceTransportPolicy;
+  iceCandidatePoolSize?: number;
 }
 
 export interface PeerState {
@@ -108,7 +115,14 @@ export class PeerSession {
 
   private initialize(config: PeerConfig): void {
     try {
-      this.pc = new RTCPeerConnection({ iceServers: config.iceServers });
+      this.pc = new RTCPeerConnection({
+        iceServers: config.iceServers,
+        // Prefer direct candidates when possible; still allow TURN fallback.
+        iceTransportPolicy: config.iceTransportPolicy ?? 'all',
+        iceCandidatePoolSize: config.iceCandidatePoolSize ?? 4,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+      });
       this.wirePcEvents();
 
       if (this.initiator) {
@@ -629,10 +643,10 @@ export class PeerSession {
     if (typeof localType !== 'string' || typeof remoteType !== 'string') {
       return 'unknown';
     }
-    const types = [localType, remoteType];
-    if (types.includes('relay')) return 'relay';
-    if (types.includes('srflx')) return 'srflx';
-    if (types.every(type => type === 'host')) return 'host';
+    // Path is constrained by the worse candidate on the selected pair.
+    if (localType === 'relay' || remoteType === 'relay') return 'relay';
+    if (localType === 'srflx' || remoteType === 'srflx') return 'srflx';
+    if (localType === 'host' && remoteType === 'host') return 'host';
     return 'unknown';
   }
 

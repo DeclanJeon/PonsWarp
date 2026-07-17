@@ -845,7 +845,15 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             {/* Stats Grid */}
-            <p className="text-center text-[11px] font-mono text-cyan-200/70 -mt-2 mb-1">
+            <p
+              className={`text-center text-[11px] font-mono -mt-2 mb-1 ${
+                progressData.pathKind === 'relay'
+                  ? 'text-amber-300'
+                  : progressData.pathKind === 'host'
+                    ? 'text-emerald-300'
+                    : 'text-cyan-200/70'
+              }`}
+            >
               path={progressData.pathKind}
               {progressData.protocol ? `/${progressData.protocol}` : ''}
               {typeof progressData.rttMs === 'number'
@@ -853,7 +861,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 : ''}
               {progressData.hybridArmed
                 ? ` hybrid=${progressData.hybridArmReason || 'on'}`
-                : ''}
+                : progressData.pathKind === 'relay'
+                  ? ' (TURN relay — not LAN direct)'
+                  : ''}
             </p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
