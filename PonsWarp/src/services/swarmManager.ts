@@ -3569,7 +3569,9 @@ export class SwarmManager {
     // Host/same-Wi-Fi: disable mid-transfer partition barriers.
     // Reliable SCTP + end-of-file checkpoint is enough for 1:1.
     const path = this.currentTransferDiagnostics.candidatePathKind;
-    if (path === 'host' || path === 'unknown') {
+    // 1:1 reliable SCTP: avoid mid-transfer partition barriers on host/unknown/relay.
+    // Mobile Wi-Fi frequently selects TURN relay even on the same SSID.
+    if (path === 'host' || path === 'unknown' || path === 'relay') {
       return Number.MAX_SAFE_INTEGER;
     }
     if (this.stripeEnabled && LAN_STRIPE_LANES > 1) {
@@ -3625,7 +3627,7 @@ export class SwarmManager {
     // Host / unknown: skip mid-transfer ACK barrier entirely.
     // Reliable SCTP owns reliability; waiting for app ACK only hurts Wi-Fi bulk.
     const path = this.currentTransferDiagnostics.candidatePathKind;
-    if (path === 'host' || path === 'unknown') {
+    if (path === 'host' || path === 'unknown' || path === 'relay') {
       const peerIds = this.getActiveTransferPeerIds();
       const msg = JSON.stringify({ type: 'PARTITION', offset, runId });
       for (const peerId of peerIds) {

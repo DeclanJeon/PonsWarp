@@ -52,6 +52,12 @@ type SenderProgressPayload = {
   totalBytesSent?: number;
   bytesTransferred?: number;
   totalBytes?: number;
+  candidatePathKind?: string;
+  protocol?: string | null;
+  relayProtocol?: string | null;
+  rttMs?: number | null;
+  hybridArmed?: boolean;
+  hybridArmReason?: string;
 };
 
 const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
@@ -87,6 +93,11 @@ const SenderView: React.FC<SenderViewProps> = () => {
     speed: 0,
     bytesTransferred: 0,
     totalBytes: 0,
+    pathKind: 'unknown' as string,
+    protocol: null as string | null,
+    rttMs: null as number | null,
+    hybridArmed: false,
+    hybridArmReason: '',
   });
   const estimatedSecondsRemaining = estimateRemainingSeconds(
     progressData.bytesTransferred,
@@ -322,6 +333,13 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
     // 🚀 [Multi-Receiver] 진행률 리셋 (새 전송 시작 시)
     swarmManager.on('progress', (data: SenderProgressPayload) => {
+      const pathMeta = {
+        pathKind: data.candidatePathKind || 'unknown',
+        protocol: data.protocol ?? null,
+        rttMs: typeof data.rttMs === 'number' ? data.rttMs : null,
+        hybridArmed: data.hybridArmed === true,
+        hybridArmReason: data.hybridArmReason || '',
+      };
       // 진행률이 0으로 리셋되면 새 전송 시작
       if (data.progress === 0 && data.totalBytesSent === 0) {
         setProgressData({
@@ -329,17 +347,19 @@ const SenderView: React.FC<SenderViewProps> = () => {
           speed: 0,
           bytesTransferred: 0,
           totalBytes: data.totalBytes || 0,
+          ...pathMeta,
         });
       } else {
         setProgressData({
           progress:
             data.progress ||
             (data.totalBytes > 0
-              ? (data.totalBytesSent / data.totalBytes) * 100
+              ? ((data.totalBytesSent || 0) / data.totalBytes) * 100
               : 0),
           speed: data.speed || 0,
           bytesTransferred: data.totalBytesSent || data.bytesTransferred || 0,
           totalBytes: data.totalBytes || 0,
+          ...pathMeta,
         });
       }
     });
@@ -808,6 +828,16 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             {/* Stats Grid */}
+            <p className="text-center text-[11px] font-mono text-cyan-200/70 -mt-2 mb-1">
+              path={progressData.pathKind}
+              {progressData.protocol ? `/${progressData.protocol}` : ''}
+              {typeof progressData.rttMs === 'number'
+                ? ` rtt=${Math.round(progressData.rttMs)}ms`
+                : ''}
+              {progressData.hybridArmed
+                ? ` hybrid=${progressData.hybridArmReason || 'on'}`
+                : ''}
+            </p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">
                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">

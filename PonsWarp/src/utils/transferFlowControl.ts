@@ -196,12 +196,15 @@ export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'relay',
-  chunkSizeBytes: 128 * KIB,
-  minInFlightBytes: 1 * MIB,
-  initialInFlightBytes: 2 * MIB,
-  maxInFlightBytes: 4 * MIB,
+  // Mobile same-Wi-Fi often lands on TURN relay (phone AP isolation / CGNAT).
+  // 16MB partition ACK stop-and-wait + 4MB max window caps real Wi-Fi far below radio.
+  chunkSizeBytes: 192 * KIB,
+  minInFlightBytes: 2 * MIB,
+  initialInFlightBytes: 4 * MIB,
+  maxInFlightBytes: 8 * MIB,
   lowWaterBytes: 1 * MIB,
-  partitionSizeBytes: 16 * MIB,
+  // End/resume checkpoint only — mid-transfer app ACK is the mobile Wi-Fi killer.
+  partitionSizeBytes: Number.MAX_SAFE_INTEGER,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
@@ -248,9 +251,9 @@ export function selectInFlightTargetBytes(
       Math.min(profile.maxInFlightBytes, Math.max(bdp, profile.initialInFlightBytes))
     );
   }
-  return direct || diagnostics?.candidatePathKind === 'unknown'
-    ? profile.maxInFlightBytes
-    : profile.initialInFlightBytes;
+  // Without bitrate samples, prefer max window so mobile Wi-Fi/TURN is not
+  // stuck at the conservative initial value for the whole transfer.
+  return profile.maxInFlightBytes;
 }
 export function calculateSendBudget(p: {
   targetInFlightBytes: number;

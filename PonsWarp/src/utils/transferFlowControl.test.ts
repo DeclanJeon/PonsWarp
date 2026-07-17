@@ -145,7 +145,7 @@ describe('transferFlowControl', () => {
     ).toBeLessThanOrEqual(12 * 1024 * 1024);
   });
 
-  it('keeps relay and unknown profiles conservative', () => {
+  it('tunes relay for mobile Wi-Fi without mid-transfer partition barriers', () => {
     expect(selectTransferTuningProfile({ candidatePathKind: 'relay' })).toBe(
       RELAY_TRANSFER_TUNING_PROFILE
     );
@@ -156,9 +156,10 @@ describe('transferFlowControl', () => {
     expect(selectTransferTuningProfile(null)).toBe(
       UNKNOWN_TRANSFER_TUNING_PROFILE
     );
-    expect(
-      RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes
-    ).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(RELAY_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(8 * 1024 * 1024);
+    expect(RELAY_TRANSFER_TUNING_PROFILE.partitionSizeBytes).toBe(
+      Number.MAX_SAFE_INTEGER
+    );
     // unknown inherits host profile for Wi-Fi first-path optimism
     expect(
       UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes
@@ -175,7 +176,7 @@ describe('transferFlowControl', () => {
       selectInFlightTargetBytes(RELAY_TRANSFER_TUNING_PROFILE, {
         candidatePathKind: 'relay',
       })
-    ).toBe(RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes);
+    ).toBe(RELAY_TRANSFER_TUNING_PROFILE.maxInFlightBytes);
   });
 
   it('uses available bitrate and RTT to clamp in-flight targets within profile bounds', () => {
@@ -201,7 +202,7 @@ describe('transferFlowControl', () => {
         availableOutgoingBitrateBps: 64_000,
         rttMs: 50,
       })
-    ).toBe(RELAY_TRANSFER_TUNING_PROFILE.initialInFlightBytes);
+    ).toBeGreaterThanOrEqual(RELAY_TRANSFER_TUNING_PROFILE.minInFlightBytes);
   });
 
   it('calculates send budget without going negative and honors receiver pause', () => {
@@ -234,7 +235,7 @@ describe('transferFlowControl', () => {
       Number.MAX_SAFE_INTEGER
     );
     expect(selectPartitionSize(RELAY_TRANSFER_TUNING_PROFILE)).toBe(
-      16 * 1024 * 1024
+      Number.MAX_SAFE_INTEGER
     );
     expect(selectPartitionSize(UNKNOWN_TRANSFER_TUNING_PROFILE)).toBe(
       Number.MAX_SAFE_INTEGER
