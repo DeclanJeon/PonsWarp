@@ -810,7 +810,7 @@ Mapped recommendations → PonsWarp status after this pass:
 | P1 chunk not fixed 240KiB | **done** | 128KiB host, 64KiB relay/high-RTT |
 | P1 control vs bulk channels | **done** | PeerSession control + bulk-0 |
 | P1 multi bulk channels | freeze | BULK_CHANNEL_COUNT=1 until proven |
-| P1 crypto/CRC off main | partial | WebCrypto AES-GCM; CRC removed on hot path |
+| P1 crypto/CRC off main | **done (sender)** | `bulk-encrypt.worker` + Transferable packets; CRC removed; receiver decrypt still main |
 | P1 UI throttle 4–10 Hz | **done** | 200ms / 32 chunks |
 | P1 bounded prepare-ahead | **done** | PREPARE_AHEAD_BYTES=12MiB |
 | P2 adaptive profiles | **done** | host / elevated-host / srflx / relay |

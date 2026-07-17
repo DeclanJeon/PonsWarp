@@ -37,6 +37,7 @@ import {
   PROGRESS_EMIT_MIN_CHUNKS,
 } from '../utils/constants';
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
+import { BulkEncryptProducer } from './bulkEncryptProducer';
 import { bytesToBase64, CryptoService } from './cryptoService';
 import { networkController, AdaptiveParams } from './networkAdaptiveController';
 import { calculateProgressPercent } from '../utils/transferProgress';
@@ -306,6 +307,7 @@ export class SwarmManager {
   private currentInFlightTargetBytes =
     UNKNOWN_TRANSFER_TUNING_PROFILE.initialInFlightBytes;
   private partitionCryptoKey: CryptoKey | null = null;
+  private bulkEncryptProducer: BulkEncryptProducer | null = null;
   private partitionNonceCounter = 0;
   private transferPauseCount = 0;
   private partitionAckCount = 0;
@@ -2764,10 +2766,9 @@ export class SwarmManager {
     this.stopTransferPumpWatchdog();
     this.stopAdaptiveControl();
 
-    // Keep encrypt/read worker alive when present. Main-thread partitioned
-    // path still owns send pacing; worker is available for future ciphertext
-    // production without terminate-on-start thrash.
-    // (Do not terminate healthy worker at transfer start.)
+    // Close prior bulk encrypt producer; a fresh one is armed per transfer.
+    this.bulkEncryptProducer?.close();
+    this.bulkEncryptProducer = null;
 
     const manifest = this.pendingManifest;
 
@@ -3116,6 +3117,145 @@ export class SwarmManager {
     packetBytes.set(new Uint8Array(ciphertextWithTag), 38);
     return packet;
   }
+
+  /**
+   * Worker produces encrypted packets (Transferable); main only sends.
+   * Returns false to fall back to main-thread prepare path.
+   */
+  private async sendFilesPartitionedViaWorker(
+    manifest: TransferManifest,
+    cursor: {
+      fileIndex: number;
+      fileOffset: number;
+      globalOffset: number;
+      sequence: number;
+      nextPartitionEnd: number;
+    },
+    initialPartitionEnd: number,
+    runId: number
+  ): Promise<boolean> {
+    if (!BulkEncryptProducer.isSupported() || this.files.length === 0) {
+      return false;
+    }
+
+    const producer = new BulkEncryptProducer();
+    this.bulkEncryptProducer?.close();
+    this.bulkEncryptProducer = producer;
+
+    try {
+      await producer.start({
+        files: this.files,
+        totalSize: manifest.totalSize,
+        startOffset: cursor.globalOffset,
+        startSequence: cursor.sequence,
+        startFileIndex: cursor.fileIndex,
+        startFileOffset: cursor.fileOffset,
+        chunkSize: this.getCurrentChunkSizeBytes(),
+        prepareAheadBytes: PREPARE_AHEAD_BYTES,
+        encryptionEnabled: this.isEncryptionEnabled(),
+        sessionKey: this.sessionKey,
+        randomPrefix: this.randomPrefix,
+        startNonce: this.partitionNonceCounter,
+      });
+    } catch (error) {
+      logWarn(
+        '[SwarmManager]',
+        'Bulk encrypt worker unavailable, falling back to main thread',
+        error
+      );
+      producer.close();
+      if (this.bulkEncryptProducer === producer) {
+        this.bulkEncryptProducer = null;
+      }
+      return false;
+    }
+
+    logInfo(
+      '[SwarmManager]',
+      `Bulk encrypt worker armed (E2E=${this.isEncryptionEnabled()})`
+    );
+
+    let globalOffset = cursor.globalOffset;
+    let partitionEnd = initialPartitionEnd;
+    let chunksSinceProgress = 0;
+    let lastProgressAt = performance.now();
+
+    try {
+      for (;;) {
+        this.ensureActiveTransferRun(runId);
+        const chunk = await producer.next();
+        if (!chunk) break;
+
+        const laneFactor =
+          this.stripeEnabled && LAN_STRIPE_LANES > 1
+            ? Math.max(1, this.verifiedStripeKeys.size || 1)
+            : 1;
+        const sendCap = Math.min(
+          this.getCurrentInFlightTargetBytes(),
+          laneFactor * this.getCurrentInFlightTargetBytes()
+        );
+        if (this.getHighestBufferedAmount() > sendCap) {
+          await this.waitUntilSendWindowOpen(runId, sendCap);
+        }
+
+        const result = this.broadcastChunk(chunk.packet);
+        producer.credit(chunk.packet.byteLength);
+        for (const failedPeerId of result.failedPeers) {
+          this.removePeer(failedPeerId, 'partitioned-send-failed');
+        }
+        if (result.successCount === 0) {
+          throw new Error('No connected receivers available');
+        }
+
+        globalOffset = chunk.offset + chunk.payloadSize;
+        this.totalBytesSent = globalOffset;
+        this.partitionNonceCounter = Math.max(
+          this.partitionNonceCounter,
+          producer.getNextNonce()
+        );
+        networkController.recordSend(chunk.packet.byteLength);
+        chunksSinceProgress++;
+
+        const now = performance.now();
+        if (
+          chunksSinceProgress >= PROGRESS_EMIT_MIN_CHUNKS ||
+          now - lastProgressAt >= PROGRESS_EMIT_MIN_INTERVAL_MS
+        ) {
+          this.emitProgress();
+          chunksSinceProgress = 0;
+          lastProgressAt = now;
+        }
+
+        if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
+          this.emitProgress();
+          await this.sendPartitionMarkerAndWait(globalOffset, runId);
+          partitionEnd = Math.min(
+            globalOffset + this.getActivePartitionSize(),
+            manifest.totalSize
+          );
+        }
+      }
+
+      this.emitProgress();
+      if (globalOffset !== manifest.totalSize) {
+        throw new Error(
+          `Transfer size mismatch: sent ${globalOffset}, expected ${manifest.totalSize}`
+        );
+      }
+      this.partitionNonceCounter = Math.max(
+        this.partitionNonceCounter,
+        producer.getNextNonce()
+      );
+      await this.sendPartitionMarkerAndWait(globalOffset, runId);
+      return true;
+    } finally {
+      producer.close();
+      if (this.bulkEncryptProducer === producer) {
+        this.bulkEncryptProducer = null;
+      }
+    }
+  }
+
   private async sendFilesPartitioned(
     manifest: TransferManifest,
     startOffset: number,
@@ -3144,9 +3284,18 @@ export class SwarmManager {
     let partitionEnd = cursor.nextPartitionEnd;
 
     if (!scheduler) {
-      // 🚀 [Performance] 올바른 윈도우 전송 파이프라인
-      // 이전 병렬 구현은 암호화 Promise 완료 시 pending map에서 먼저 삭제되어
-      // readyQueue에 들어가지 못하고 0 B/s로 무한 루프에 빠질 수 있었다.
+      // Prefer worker read+encrypt (E2E stays on); main thread only paces send.
+      const usedWorker = await this.sendFilesPartitionedViaWorker(
+        manifest,
+        cursor,
+        partitionEnd,
+        runId
+      );
+      if (usedWorker) {
+        return;
+      }
+
+      // Fallback: main-thread prepare pipeline (tests / worker unavailable).
       const READ_BLOCK_SIZE = 8 * 1024 * 1024;
       let readBlockCache: {
         fileIndex: number;
@@ -4027,6 +4176,8 @@ export class SwarmManager {
     this.cryptoSessionAnnouncedPeers.clear();
     this.partitionCryptoKey = null;
     this.partitionNonceCounter = 0;
+    this.bulkEncryptProducer?.close();
+    this.bulkEncryptProducer = null;
     if (this.sessionKey) {
       this.sessionKey.fill(0);
     }
