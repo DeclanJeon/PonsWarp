@@ -3,6 +3,7 @@ import {
   frameHybridPackets,
   parseHybridFramedObject,
   shouldArmHybrid,
+  formatSlowPathBanner,
 } from './hybridBulkTransport';
 
 describe('hybridBulkTransport framing', () => {
@@ -90,6 +91,25 @@ describe('hybridBulkTransport arming', () => {
     ).toMatchObject({ armed: true, reason: 'path-relay' });
   });
 
+  it('uses lower min size for TURN relay paths', () => {
+    expect(
+      shouldArmHybrid({
+        ...base,
+        totalBytes: 2 * 1024 * 1024,
+        pathKind: 'relay',
+      })
+    ).toMatchObject({ armed: true, reason: 'path-relay' });
+
+    expect(
+      shouldArmHybrid({
+        ...base,
+        totalBytes: 2 * 1024 * 1024,
+        pathKind: 'host',
+        rttMs: 10,
+      }).armed
+    ).toBe(false);
+  });
+
   it('arms elevated-RTT host (CGNAT/VPN overlay) and slow direct', () => {
     expect(
       shouldArmHybrid({
@@ -125,5 +145,21 @@ describe('hybridBulkTransport arming', () => {
         rttMs: 300,
       }).armed
     ).toBe(true);
+  });
+});
+
+describe('formatSlowPathBanner', () => {
+  it('mentions hybrid assist when armed on relay', () => {
+    const text = formatSlowPathBanner({
+      pathKind: 'relay',
+      protocol: 'udp',
+      rttMs: 500,
+      hybridArmed: true,
+      hybridArmReason: 'path-relay',
+      hybridBytesUploaded: 2048,
+    });
+    expect(text).toContain('path=relay/udp');
+    expect(text).toContain('hybrid=path-relay');
+    expect(text).toContain('assist↑=2KiB');
   });
 });

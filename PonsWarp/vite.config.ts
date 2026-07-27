@@ -45,7 +45,6 @@ export default defineConfig(({ mode }) => {
             }
 
             if (
-              id.includes('/simple-peer/') ||
               id.includes('/socket.io-client/')
             ) {
               return 'transport-vendor';

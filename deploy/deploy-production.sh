@@ -242,21 +242,8 @@ else
 fi
 echo "starting backend $name on port $new_port"
 docker run "${docker_args[@]}" "$image_identity" >/dev/null
-for path in health ready; do
-  ok=0
-  for attempt in {1..45}; do
-    if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${new_port}/$path" >/dev/null; then
-      ok=1
-      break
-    fi
-    sleep 1
-  done
-  [[ "$ok" -eq 1 ]] || {
-    echo "backend health check failed for http://127.0.0.1:${new_port}/$path" >&2
-    docker logs "$name" >&2 || true
-    exit 1
-  }
-done
+wait_http "http://127.0.0.1:${new_port}/health" 45 1 || { docker logs "$name" >&2 || true; exit 1; }
+wait_http "http://127.0.0.1:${new_port}/ready" 45 1 || { docker logs "$name" >&2 || true; exit 1; }
 rm -f "$current.new"; ln -s "$activation" "$current.new"; mv -Tf "$current.new" "$current"; swapped=1
 install -m 0644 "$release/warp.ponslink.com.conf" /etc/nginx/sites-available/warp.ponslink.com
 ln -sfn /etc/nginx/sites-available/warp.ponslink.com /etc/nginx/sites-enabled/warp.ponslink.com

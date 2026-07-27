@@ -10,6 +10,7 @@
 import {
   HYBRID_HTTP_ASSIST,
   HYBRID_MIN_BYTES,
+  HYBRID_RELAY_MIN_BYTES,
   HYBRID_TRIGGER_MBps,
   HYBRID_ELEVATED_RTT_MS,
   HYBRID_UPLOAD_CONCURRENCY,
@@ -84,7 +85,10 @@ export function shouldArmHybrid(params: {
   if (!params.remoteCaps?.hybridHttp) {
     return { armed: false, reason: 'remote-caps-missing' };
   }
-  const minBytes = params.minBytes ?? HYBRID_MIN_BYTES;
+  const pathKind = (params.pathKind || 'unknown').toLowerCase();
+  const minBytes =
+    params.minBytes ??
+    (pathKind === 'relay' ? HYBRID_RELAY_MIN_BYTES : HYBRID_MIN_BYTES);
   if (params.totalBytes < minBytes) {
     return { armed: false, reason: `below-min-bytes:${minBytes}` };
   }
@@ -93,7 +97,6 @@ export function shouldArmHybrid(params: {
     return { armed: true, reason: 'force' };
   }
 
-  const pathKind = (params.pathKind || 'unknown').toLowerCase();
   const rttMs =
     typeof params.rttMs === 'number' && Number.isFinite(params.rttMs)
       ? params.rttMs
@@ -145,6 +148,54 @@ export function shouldArmHybrid(params: {
     return { armed: true, reason: `path-${pathKind}-elevated-rtt` };
   }
   return { armed: false, reason: `path-${pathKind}-not-slow` };
+}
+
+/** User-facing path/hybrid status line for sender/receiver HUD. */
+export function formatSlowPathBanner(params: {
+  pathKind?: string | null;
+  protocol?: string | null;
+  hostAddressScope?: string | null;
+  rttMs?: number | null;
+  hybridArmed?: boolean;
+  hybridArmReason?: string | null;
+  hybridBytesUploaded?: number | null;
+  hybridBytesReceived?: number | null;
+}): string {
+  const kind = (params.pathKind || 'unknown').toLowerCase();
+  const parts: string[] = [`path=${kind}`];
+  if (params.protocol) parts[0] += `/${params.protocol}`;
+  if (params.hostAddressScope) parts[0] += `/${params.hostAddressScope}`;
+  if (typeof params.rttMs === 'number' && Number.isFinite(params.rttMs)) {
+    parts.push(`rtt=${Math.round(params.rttMs)}ms`);
+  }
+  if (params.hybridArmed) {
+    parts.push(`hybrid=${params.hybridArmReason || 'on'}`);
+    if (
+      typeof params.hybridBytesUploaded === 'number' &&
+      params.hybridBytesUploaded > 0
+    ) {
+      parts.push(`assist↑=${Math.round(params.hybridBytesUploaded / 1024)}KiB`);
+    }
+    if (
+      typeof params.hybridBytesReceived === 'number' &&
+      params.hybridBytesReceived > 0
+    ) {
+      parts.push(`assist↓=${Math.round(params.hybridBytesReceived / 1024)}KiB`);
+    }
+  } else if (kind === 'relay') {
+    parts.push('(TURN relay — not LAN direct)');
+  } else if (
+    kind === 'host' &&
+    typeof params.rttMs === 'number' &&
+    params.rttMs >= 80
+  ) {
+    parts.push(
+      params.hostAddressScope === 'cgnat'
+        ? '(host over VPN/Tailscale — high latency)'
+        : '(host path but high RTT — not local LAN speed)'
+    );
+  }
+  return parts.join(' ');
 }
 
 /** Length-delimited packet framing for the hybrid HTTP object. */

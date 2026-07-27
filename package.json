@@ -13,7 +13,8 @@
     "benchmark:verify": "node benchmarks/v1/run.mjs",
     "verify:wasm-provenance": "node scripts/verify-wasm-provenance.mjs",
     "verify": "pnpm run wasm:test && pnpm run wasm:build && pnpm run verify:wasm-provenance && pnpm run benchmark:verify && pnpm run preflight && pnpm run frontend:build && pnpm run backend:build",
-    "preflight": "pnpm run frontend:type-check && pnpm run frontend:test && pnpm run backend:test"
+    "preflight": "pnpm run frontend:type-check && pnpm run frontend:test && pnpm run backend:test",
+    "qa:prod-transfer": "pnpm --dir PonsWarp run qa:prod-transfer"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

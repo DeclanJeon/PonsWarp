@@ -1,4 +1,7 @@
 import { TurnConfigResponse } from './signaling';
+import { normalizeLaneSignal } from './stripeSignal';
+import type { IFileWriter, ReceiverServiceOptions, ReceiverSignalMessage, ReceiverProgressPayload } from './receiverTypes';
+export type { IFileWriter, ReceiverServiceOptions, ReceiverSignalMessage, ReceiverProgressPayload } from './receiverTypes';
 import { getSignalingService, ISignalingService } from './signaling-factory';
 const defaultSignalingService = () => getSignalingService();
 import {
@@ -22,85 +25,11 @@ import { getErrorMessage } from '../utils/errors';
 import { shouldKeepReceiverReconnectAlive } from '../utils/mobileResumePolicy';
 
 import { lanEvidenceAdapter } from './lanEvidenceAdapter';
-export interface ReceiverServiceOptions {
-  signaling?: ISignalingService;
-  peerFactory?: (
-    peerId: string,
-    initiator: boolean,
-    config: PeerConfig
-  ) => SinglePeerConnection;
-  writer?: IFileWriter;
-  clock?: Pick<typeof globalThis, 'setTimeout' | 'clearTimeout'>;
-  output?: { emit?: (event: { type: string; data: unknown }) => void };
-}
 type EventHandler = (data: unknown) => void;
 type PeerSignalData = Parameters<SinglePeerConnection['signal']>[0];
-type ReceiverSignalMessage = {
-  from: string;
-  offer?: PeerSignalData;
-  candidate?: PeerSignalData;
-  sdp?: unknown;
-};
-type ReceiverProgressPayload =
-  | number
-  | {
-      progress: number;
-      speed: number;
-      bytesTransferred: number;
-      totalBytes: number;
-    };
-
-// Writer 인터페이스 정의
-export interface IFileWriter {
-  initStorage(manifest: TransferManifest): Promise<void>;
-  writeChunk(packet: ArrayBuffer): Promise<void>;
-  cleanup(): Promise<void>;
-  onProgress(
-    cb: (progress: {
-      progress: number;
-      speed: number;
-      bytesTransferred: number;
-      totalBytes: number;
-    }) => void
-  ): void;
-  onComplete(cb: (actualSize: number) => void): void;
-  onError(cb: (err: string) => void): void;
-  // 🚀 [추가] 흐름 제어 인터페이스
-  onFlowControl?(cb: (action: 'PAUSE' | 'RESUME') => void): void;
-  onResumeRequest?(cb: (offset: number, reason: string) => void): void;
-  requestResumeFromCurrentOffset?(reason: string): boolean;
-  forceResumeFromCurrentOffset?(reason: string): boolean;
-  waitForIdle?(): Promise<void>;
-  getContiguousReceivedOffset?(): number;
-  // 🔐 [E2E] 암호화 키 설정
-  setEncryptionKey?(sessionKey: Uint8Array, randomPrefix: Uint8Array): void;
-}
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
-
-
-const STRIPE_SEP = '::stripe::';
-function normalizeLaneSignal(raw: unknown): { signal: any; lane: number } {
-  let value: unknown = raw;
-  if (typeof value === 'string') {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return { signal: raw, lane: 0 };
-    }
-  }
-  if (value && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const lane = Number(obj.lane ?? 0);
-    if ('lane' in obj) {
-      const { lane: _l, ...rest } = obj;
-      return { signal: rest, lane: Number.isFinite(lane) ? lane : 0 };
-    }
-    return { signal: obj, lane: Number.isFinite(lane) ? lane : 0 };
-  }
-  return { signal: raw, lane: 0 };
-}
 
 export class ReceiverService {
   // 연결 관리
@@ -425,12 +354,22 @@ export class ReceiverService {
 
     // Writer 이벤트 연결
     this.writer.onProgress((progressData: ReceiverProgressPayload) => {
+      const hybridFields =
+        this.hybridManifest || this.hybridBytesReceived > 0
+          ? {
+              hybridArmed: true,
+              hybridArmReason: 'http-assist',
+              hybridBytesReceived: this.hybridBytesReceived,
+              pathKind: 'hybrid' as const,
+            }
+          : {};
       // 객체 형태면 그대로, 숫자면 변환
       if (typeof progressData === 'object') {
-        this.emit('progress', progressData);
+        this.emit('progress', { ...progressData, ...hybridFields });
       } else {
         this.emit('progress', {
           progress: progressData,
+          ...hybridFields,
         });
       }
     });

@@ -1,0 +1,30 @@
+# Coturn TURN server example configuration (production-aligned)
+# Copy to /etc/turnserver.conf on the host; never commit secrets.
+
+listening-port=3478
+tls-listening-port=5349
+fingerprint
+lt-cred-mech
+use-auth-secret
+realm=example.org
+
+# External / relay IP configuration (replace with host values)
+external-ip=YOUR_PUBLIC_IP
+relay-ip=YOUR_PUBLIC_IP
+
+# Channel lifetime and denial ranges typical for production
+channel-lifetime=3600
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+
+# No max-bps limit by default
+# max-bps=0
+
+# Logging (adjust as needed)
+verbose
+syslog
+
+# Static auth secret (DO NOT commit real value; load via env/file)
+# static-auth-secret=REPLACE_WITH_SECRET

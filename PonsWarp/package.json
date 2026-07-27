@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts,.tsx --fix",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "qa:prod-transfer": "node ./scripts/prod-transfer-qa.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -31,7 +32,6 @@
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "simple-peer": "^9.11.1",
     "socket.io-client": "^4.8.1",
     "streamsaver": "^2.0.6",
     "tar-stream": "3.1.7",

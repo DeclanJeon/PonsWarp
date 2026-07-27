@@ -75,7 +75,7 @@ export const DATA_CHANNEL_COUNT = 4; // legacy constant
 export const PRODUCER_CONCURRENCY = 12;
 export const READY_QUEUE_MAX_CHUNKS = 32;
 // Parallel RTCPeerConnections for host LAN bulk transfer (separate SCTP associations)
-export const LAN_STRIPE_LANES = 1; // multi-PC striping disabled: app-path still black-holes under simple-peer demux
+export const LAN_STRIPE_LANES = 1; // multi-PC striping intentionally disabled; native PeerSession is transfer path; multi-lane reserved/off
 /** Partition barrier size while multi-PC striping is active (faster gap detection). */
 export const LAN_STRIPE_PARTITION_BYTES = 4 * 1024 * 1024;
 
@@ -97,6 +97,7 @@ export const HYBRID_HTTP_ASSIST =
   (import.meta.env.PROD === true &&
     import.meta.env.VITE_HYBRID_HTTP_ASSIST !== 'false');
 export const HYBRID_MIN_BYTES = 8 * 1024 * 1024; // 8MB
+export const HYBRID_RELAY_MIN_BYTES = 1 * 1024 * 1024; // 1MB for relay paths
 export const HYBRID_TRIGGER_MBps = 4;
 /** Host path with RTT at/above this is treated as elevated/slow (CGNAT/VPN overlay). */
 export const HYBRID_ELEVATED_RTT_MS = 120;

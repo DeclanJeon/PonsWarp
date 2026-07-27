@@ -37,6 +37,7 @@ import {
   formatRemainingTime,
   getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
+import { formatSlowPathBanner } from '../services/hybridBulkTransport';
 
 interface SenderViewProps {
   onComplete?: () => void;
@@ -59,6 +60,7 @@ type SenderProgressPayload = {
   rttMs?: number | null;
   hybridArmed?: boolean;
   hybridArmReason?: string;
+  hybridBytesUploaded?: number;
 };
 
 const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
@@ -114,6 +116,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
     rttMs: null as number | null,
     hybridArmed: false,
     hybridArmReason: '',
+    hybridBytesUploaded: 0,
   });
   const estimatedSecondsRemaining = estimateRemainingSeconds(
     progressData.bytesTransferred,
@@ -359,6 +362,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
         rttMs: typeof data.rttMs === 'number' ? data.rttMs : null,
         hybridArmed: data.hybridArmed === true,
         hybridArmReason: data.hybridArmReason || '',
+        hybridBytesUploaded:
+          typeof data.hybridBytesUploaded === 'number'
+            ? data.hybridBytesUploaded
+            : 0,
       };
       // 진행률이 0으로 리셋되면 새 전송 시작
       if (data.progress === 0 && data.totalBytesSent === 0) {
@@ -901,25 +908,15 @@ const SenderView: React.FC<SenderViewProps> = () => {
                     : 'text-cyan-200/70'
               }`}
             >
-              path={progressData.pathKind}
-              {progressData.protocol ? `/${progressData.protocol}` : ''}
-              {progressData.hostAddressScope
-                ? `/${progressData.hostAddressScope}`
-                : ''}
-              {typeof progressData.rttMs === 'number'
-                ? ` rtt=${Math.round(progressData.rttMs)}ms`
-                : ''}
-              {progressData.hybridArmed
-                ? ` hybrid=${progressData.hybridArmReason || 'on'}`
-                : progressData.pathKind === 'relay'
-                  ? ' (TURN relay — not LAN direct)'
-                  : progressData.pathKind === 'host' &&
-                      typeof progressData.rttMs === 'number' &&
-                      progressData.rttMs >= 80
-                    ? progressData.hostAddressScope === 'cgnat'
-                      ? ' (host over VPN/Tailscale — high latency)'
-                      : ' (host path but high RTT — not local LAN speed)'
-                    : ''}
+              {formatSlowPathBanner({
+                pathKind: progressData.pathKind,
+                protocol: progressData.protocol,
+                hostAddressScope: progressData.hostAddressScope,
+                rttMs: progressData.rttMs,
+                hybridArmed: progressData.hybridArmed,
+                hybridArmReason: progressData.hybridArmReason,
+                hybridBytesUploaded: progressData.hybridBytesUploaded,
+              })}
             </p>
             <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4 md:gap-4">
               <div className="bg-black/30 backdrop-blur-md p-3 md:p-4 rounded-2xl border border-white/5 text-center">

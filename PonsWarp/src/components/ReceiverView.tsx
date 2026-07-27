@@ -33,6 +33,7 @@ import {
   formatRemainingTime,
   getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
+import { formatSlowPathBanner } from '../services/hybridBulkTransport';
 
 interface ReceiverViewProps {
   onOpenCloudShare?: (shareId: string) => void;
@@ -43,6 +44,12 @@ type ReceiverProgressPayload = {
   speed?: number;
   bytesTransferred?: number;
   totalBytes?: number;
+  pathKind?: string;
+  protocol?: string | null;
+  rttMs?: number | null;
+  hybridArmed?: boolean;
+  hybridArmReason?: string;
+  hybridBytesReceived?: number;
 };
 
 type ReceiverCompletePayload = {
@@ -70,6 +77,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     speed: 0,
     bytesTransferred: 0,
     totalBytes: 0,
+    pathKind: 'unknown' as string,
+    protocol: null as string | null,
+    rttMs: null as number | null,
+    hybridArmed: false,
+    hybridArmReason: '',
+    hybridBytesReceived: 0,
   });
 
   // 🚨 [추가] 송신자 응답 대기 상태 변수
@@ -127,6 +140,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
           speed: 0,
           bytesTransferred: 0,
           totalBytes: m?.totalSize || 0,
+          pathKind: 'unknown',
+          protocol: null,
+          rttMs: null,
+          hybridArmed: false,
+          hybridArmReason: '',
+          hybridBytesReceived: 0,
         });
         setStatus('RECEIVING');
         setIsWaitingForSender(false);
@@ -177,13 +196,23 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       // 4. 진행률 데이터 업데이트
       updateProgress({ progress: isNaN(val) ? 0 : val });
 
-      if (typeof p === 'object' && p.speed !== undefined) {
-        setProgressData({
-          progress: p.progress || 0,
-          speed: p.speed || 0,
-          bytesTransferred: p.bytesTransferred || 0,
-          totalBytes: p.totalBytes || 0,
-        });
+      if (typeof p === 'object') {
+        setProgressData(prev => ({
+          progress: p.progress ?? prev.progress ?? 0,
+          speed: p.speed ?? prev.speed ?? 0,
+          bytesTransferred: p.bytesTransferred ?? prev.bytesTransferred ?? 0,
+          totalBytes: p.totalBytes ?? prev.totalBytes ?? 0,
+          pathKind: p.pathKind || prev.pathKind || 'unknown',
+          protocol: p.protocol ?? prev.protocol ?? null,
+          rttMs: typeof p.rttMs === 'number' ? p.rttMs : prev.rttMs,
+          hybridArmed:
+            typeof p.hybridArmed === 'boolean' ? p.hybridArmed : prev.hybridArmed,
+          hybridArmReason: p.hybridArmReason || prev.hybridArmReason || '',
+          hybridBytesReceived:
+            typeof p.hybridBytesReceived === 'number'
+              ? p.hybridBytesReceived
+              : prev.hybridBytesReceived,
+        }));
       }
     },
     [status, setStatus, updateProgress]
@@ -366,6 +395,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       speed: 0,
       bytesTransferred: 0,
       totalBytes: manifest?.totalSize || 0,
+      pathKind: 'unknown',
+      protocol: null,
+      rttMs: null,
+      hybridArmed: false,
+      hybridArmReason: '',
+      hybridBytesReceived: 0,
     });
     // 상태 전환
     setStatus('RECEIVING');
@@ -851,6 +886,23 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                 </p>
               </div>
             </div>
+
+            <p
+              className={`mt-2 px-2 text-center font-mono text-[10px] leading-relaxed break-words sm:text-[11px] ${
+                progressData.hybridArmed || progressData.pathKind === 'relay'
+                  ? 'text-amber-300'
+                  : 'text-cyan-200/70'
+              }`}
+            >
+              {formatSlowPathBanner({
+                pathKind: progressData.pathKind,
+                protocol: progressData.protocol,
+                rttMs: progressData.rttMs,
+                hybridArmed: progressData.hybridArmed,
+                hybridArmReason: progressData.hybridArmReason,
+                hybridBytesReceived: progressData.hybridBytesReceived,
+              })}
+            </p>
 
             <p className="mt-5 animate-pulse px-2 font-mono text-[11px] tracking-[0.14em] text-cyan-500/50 sm:mt-8 sm:text-sm sm:tracking-[0.2em]">
               &lt;&lt;&lt; RECEIVING MATTER STREAM &lt;&lt;&lt;

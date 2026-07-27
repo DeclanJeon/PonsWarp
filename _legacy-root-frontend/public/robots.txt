@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://warp.ponslink.com/sitemap.xml

@@ -73,53 +73,16 @@ import {
 } from '../utils/transferFlowControl';
 import { getPartitionedResumeCursor } from '../utils/mobileResumePolicy';
 import { throughputTrace } from '../utils/throughputTrace';
+import {
+  stripePeerKey,
+  parseStripePeerKey,
+  normalizeSignalPayload,
+} from './swarmStripe';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
 const CONNECTION_TIMEOUT = CONNECTION_TIMEOUT_MS;
 const READY_WAIT_TIME_1N = 10000; // 1:N 상황에서 대기 시간 (10초)
-const STRIPE_SEP = '::stripe::';
-
-function stripePeerKey(baseId: string, lane: number): string {
-  return lane <= 0 ? baseId : `${baseId}${STRIPE_SEP}${lane}`;
-}
-
-function parseStripePeerKey(peerKey: string): { baseId: string; lane: number } {
-  const idx = peerKey.indexOf(STRIPE_SEP);
-  if (idx < 0) return { baseId: peerKey, lane: 0 };
-  const lane = Number(peerKey.slice(idx + STRIPE_SEP.length));
-  return {
-    baseId: peerKey.slice(0, idx),
-    lane: Number.isFinite(lane) ? lane : 0,
-  };
-}
-
-function normalizeSignalPayload(raw: unknown): {
-  signal: Record<string, unknown> | string | unknown;
-  lane: number;
-} {
-  let value: unknown = raw;
-  if (typeof value === 'string') {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return { signal: raw, lane: 0 };
-    }
-  }
-  if (value && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const lane = Number(obj.lane ?? 0);
-    if ('lane' in obj) {
-      const { lane: _lane, ...rest } = obj;
-      return {
-        signal: rest,
-        lane: Number.isFinite(lane) ? lane : 0,
-      };
-    }
-    return { signal: obj, lane: Number.isFinite(lane) ? lane : 0 };
-  }
-  return { signal: raw, lane: 0 };
-}
 
 function basePeerCount(peers: Map<string, SinglePeerConnection>): number {
   let n = 0;
@@ -224,6 +187,7 @@ export class SwarmManager {
   private hybridArmReason = 'init';
   private hybridPackets: ArrayBuffer[] = [];
   private hybridPrebuilt = false;
+  private hybridUploadStarted = false;
 
 
   private stripeRrCounter = 0;
@@ -2968,6 +2932,7 @@ export class SwarmManager {
     this.hybridBytesUploaded = 0;
     this.hybridPackets = [];
     this.hybridPrebuilt = false;
+    this.hybridUploadStarted = false;
     // Default WebRTC-direct. Path-aware hybrid may arm after ICE diagnostics
     // for relay/elevated-RTT/slow paths only — never blocks LAN host primary.
     this.hybridArmed = false;
@@ -4210,6 +4175,35 @@ export class SwarmManager {
   }
 
 
+  private kickHybridAssistIfNeeded(): void {
+    if (
+      !this.hybridArmed ||
+      this.hybridUploadStarted ||
+      this.hybridUploadPromise ||
+      !this.pendingManifest
+    ) {
+      return;
+    }
+    const runId = this.transferRunId;
+    const totalPayloadBytes = this.pendingManifest.totalSize;
+    this.hybridUploadStarted = true;
+    this.hybridUploadPromise = (async () => {
+      try {
+        // Prebuild full ciphertext offline so HTTP assist can race WebRTC bulk
+        // without stalling the DataChannel send loop.
+        await this.prebuildHybridPackets(runId, 0);
+        if (runId !== this.transferRunId) return;
+        await this.runHybridUpload(runId, totalPayloadBytes);
+      } catch (error) {
+        logWarn(
+          '[SwarmManager]',
+          'Hybrid assist upload failed; WebRTC path continues',
+          error
+        );
+      }
+    })();
+  }
+
   private evaluateHybridArmingForCurrentPath(observedMBps?: number | null): void {
     if (!this.pendingManifest) return;
     const decision = shouldArmHybrid({
@@ -4228,6 +4222,7 @@ export class SwarmManager {
         '[SwarmManager]',
         `Hybrid assist ARMED (${decision.reason}) path=${this.currentTransferDiagnostics.candidatePathKind} rtt=${this.currentTransferDiagnostics.rttMs ?? '?'}`
       );
+      this.kickHybridAssistIfNeeded();
     } else if (!decision.armed && prev) {
       logInfo(
         '[SwarmManager]',
@@ -4250,6 +4245,16 @@ export class SwarmManager {
       this.totalBytesSent,
       this.totalBytes
     );
+
+    // Re-evaluate hybrid arming on slow observed throughput (mid-transfer).
+    if (this.isTransferring && this.pendingManifest && !this.hybridUploadStarted) {
+      // Prefer instantaneous UI speed (bytes/s) converted to MB/s.
+      const observedMBps =
+        typeof speed === 'number' && speed > 0 ? speed / (1024 * 1024) : null;
+      if (observedMBps !== null) {
+        this.evaluateHybridArmingForCurrentPath(observedMBps);
+      }
+    }
 
     this.emit('progress', {
       ...progressData,
