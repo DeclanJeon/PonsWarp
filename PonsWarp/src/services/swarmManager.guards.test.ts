@@ -773,7 +773,7 @@ describe('SwarmManager guard paths', () => {
       sessionKey: Uint8Array | null;
       randomPrefix: Uint8Array | null;
       encryptionEnabled: boolean;
-      currentTransferTuningProfile: { chunkSize: number };
+      currentTransferTuningProfile: { chunkSizeBytes: number };
       ensurePartitionCryptoKey(): Promise<CryptoKey | null>;
       advancePartitionNonceForResume(startOffset: number): void;
     };
@@ -781,7 +781,7 @@ describe('SwarmManager guard paths', () => {
     // Simulate CryptoKey dropped after background while key bytes remain.
     internals.partitionCryptoKey = null;
     internals.partitionNonceCounter = 0;
-    internals.currentTransferTuningProfile = { chunkSize: 64 * 1024 };
+    internals.currentTransferTuningProfile = { chunkSizeBytes: 64 * 1024 };
     internals.encryptionEnabled = true;
 
     const key = await internals.ensurePartitionCryptoKey();

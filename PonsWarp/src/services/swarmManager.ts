@@ -414,8 +414,8 @@ export class SwarmManager {
     }
 
     // Peers still marked connected after screen-off: unpause and kick the send loop.
-    for (const peerId of connectedPeers) {
-      this.pausedPeers.delete(peerId);
+    for (const peer of connectedPeers) {
+      this.pausedPeers.delete(peer.id);
     }
     this.notifySendWindowWaiters();
 
@@ -564,7 +564,7 @@ export class SwarmManager {
     if (!this.isEncryptionEnabled() || startOffset <= 0) return;
     const chunkSize = Math.max(
       1,
-      this.currentTransferTuningProfile?.chunkSize ?? CHUNK_SIZE_INITIAL
+      this.currentTransferTuningProfile?.chunkSizeBytes ?? CHUNK_SIZE_INITIAL
     );
     // Conservative lower bound: one nonce per max-sized chunk up to offset.
     const minCounter = Math.ceil(startOffset / chunkSize);

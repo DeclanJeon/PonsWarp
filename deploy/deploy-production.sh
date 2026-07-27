@@ -33,6 +33,16 @@ trap cleanup_local EXIT
 
 if [[ "$MODE" == deploy ]]; then
   [[ -f "$PRODUCTION_ENV" ]] || { echo "Missing production backend env file: $PRODUCTION_ENV" >&2; exit 1; }
+
+  # Fail-fast quality gates before packaging a release.
+  if [[ "${PONSWARP_SKIP_PREFLIGHT:-}" != "1" ]]; then
+    echo "Running deploy preflight (type-check + backend tests)..."
+    pnpm --dir "$FRONTEND_DIR" type-check
+    cargo test --manifest-path "$BACKEND_DIR/Cargo.toml" --locked
+  else
+    echo "Skipping deploy preflight (PONSWARP_SKIP_PREFLIGHT=1)"
+  fi
+
   turn_server_url=''
   while IFS= read -r line; do
     case "$line" in

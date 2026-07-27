@@ -272,7 +272,14 @@ mod tests {
             .flat_map(|server| server.urls.iter().cloned())
             .collect();
 
-        assert!(urls.contains(&"turn:localhost:3478".to_string()));
+        assert!(
+            urls.contains(&"turn:localhost:3478?transport=udp".to_string()),
+            "primary UDP TURN URL missing, got {urls:?}"
+        );
+        assert!(
+            urls.contains(&"turn:localhost:3478?transport=tcp".to_string()),
+            "primary TCP TURN URL missing, got {urls:?}"
+        );
         assert!(urls.contains(&"stun:localhost:3478".to_string()));
         assert!(
             urls.iter()

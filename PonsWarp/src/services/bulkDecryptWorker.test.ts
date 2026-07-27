@@ -4,6 +4,13 @@ import { BulkDecryptWorker } from './bulkDecryptWorker';
 const HEADER_SIZE = 22;
 const ENCRYPTED_HEADER_SIZE = 38;
 
+function toArrayBuffer(view: Uint8Array): ArrayBuffer {
+  return view.buffer.slice(
+    view.byteOffset,
+    view.byteOffset + view.byteLength
+  ) as ArrayBuffer;
+}
+
 async function makeEncryptedPacket(
   key: CryptoKey,
   randomPrefix: Uint8Array,
@@ -17,7 +24,7 @@ async function makeEncryptedPacket(
   const ciphertextWithTag = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: nonce, tagLength: 128 },
     key,
-    payload
+    toArrayBuffer(payload)
   );
   const packet = new ArrayBuffer(ENCRYPTED_HEADER_SIZE + ciphertextWithTag.byteLength);
   const bytes = new Uint8Array(packet);

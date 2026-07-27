@@ -908,13 +908,13 @@ export class ReceiverService {
       if (data.type === 'answer' && typeof data.sdp === 'string') {
         this.ensureSignalingService().sendAnswer(
           this.roomId!,
-          data as unknown as PeerSignalData,
+          { type: 'answer', sdp: data.sdp },
           peer.id
         );
-      } else if (data.type === 'candidate' || data.candidate) {
+      } else if (data.candidate) {
         this.ensureSignalingService().sendCandidate(
           this.roomId!,
-          data as unknown as PeerSignalData,
+          data.candidate as unknown as RTCIceCandidate,
           peer.id
         );
       }

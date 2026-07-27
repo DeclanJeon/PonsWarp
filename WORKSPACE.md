@@ -1,66 +1,51 @@
 # PonsWarp Unified Workspace
 
-**Single work path (use only this):**
+**Canonical work path:**
 
 ```text
-/home/declan/Documents/Develop/ponswarp
+/home/declan/Documents/Develop/Project/ponswarp
 ```
 
-Branch: `feature/unified-workspace`  
-Production frontend: `PonsWarp/` only  
-Remote (when pushing monorepo): `https://github.com/DeclanJeon/PonsWarp`
+Production frontend: **`PonsWarp/` only**  
+Remote: `https://github.com/DeclanJeon/PonsWarp`
 
 ## Layout
 
 ```text
 ponswarp/
+├── package.json               # workspace orchestrator (pnpm scripts)
 ├── PonsWarp/                  # Vite production frontend (ONLY deployable UI)
 ├── ponswarp-signaling-rs/     # Rust signaling + Cloud Drop
-├── pons-core-wasm/
-├── contracts/
+├── pons-core-wasm/            # WASM transfer core
+├── contracts/                 # protocol/compat contracts
+├── deploy/                    # production deploy scripts + nginx
+├── benchmarks/                # throughput/evidence benches
+├── scripts/                   # monorepo tooling (e.g. wasm provenance)
+├── _legacy-root-frontend/     # quarantined stale root UI (do not deploy)
 └── WORKSPACE.md               # this file
 ```
 
-## What to run (production frontend)
+## Commands
 
 ```bash
-cd /home/declan/Documents/Develop/ponswarp/PonsWarp
 pnpm install
-pnpm dev
+pnpm --dir PonsWarp dev
+pnpm run frontend:type-check
+pnpm run frontend:test
+pnpm run backend:test
+pnpm run verify
 ```
 
-- Web: Vite dev server (see `PonsWarp/package.json`)
-- Signaling: monorepo `ponswarp-signaling-rs` (typically `:5502`)
-
-## Experimental Next UI
-
-Next.js experimental frontend lives on branch:
-
-```text
-experiment/ponswarp-next-ui
-path: apps/web/
-```
-
-Checkout that branch only for UI experiments. Do **not** deploy it to `warp.ponslink.com`.
+Signaling (separate terminal):
 
 ```bash
-git switch experiment/ponswarp-next-ui
-cd apps/web
-pnpm install
-pnpm dev   # localhost:3000
+cd ponswarp-signaling-rs
+cp .env.local.example .env.local   # if needed
+cargo run
 ```
 
-## Do NOT work in these (legacy / scratch)
+## Do not
 
-- `/home/declan/Documents/Develop/warp`
-- `/home/declan/Documents/Develop/warp-ponswarp-ui`
-- `/home/declan/Documents/Develop/pons_p2p/PonsWarp` (main worktree checkout only)
-
-## Env source
-
-Copied from `ssh home:~/Documents/Develop/Project/ponswarp` into:
-
-- `ponswarp-signaling-rs/.env*`
-- `PonsWarp/.env*`
-
-Never commit real `.env` files.
+- Edit or deploy from `_legacy-root-frontend/`
+- Put secrets in `VITE_*` env vars
+- Run root Vite configs (they were removed/quarantined on purpose)

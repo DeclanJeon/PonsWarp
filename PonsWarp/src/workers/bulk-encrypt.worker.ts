@@ -111,7 +111,10 @@ async function createEncryptedPacket(
   const ciphertextWithTag = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: nonce, tagLength: 128 },
     cryptoKey,
-    payload
+    payload.buffer.slice(
+      payload.byteOffset,
+      payload.byteOffset + payload.byteLength
+    ) as ArrayBuffer
   );
 
   const packet = new ArrayBuffer(38 + ciphertextWithTag.byteLength);

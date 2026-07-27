@@ -23,7 +23,6 @@ import { TransferProgressBar } from './components/ui/TransferProgressBar';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastContainer } from './components/ui/ToastContainer';
 import { StatusOverlay } from './components/ui/StatusOverlay';
-import { useTransferStore } from './store/transferStore';
 import { toast } from './store/toastStore';
 import { normalizeRoomCodeInput } from './utils/roomCode';
 import {
