@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
+# Production deploy for warp.ponslink.com
+#
+# P0 hardening:
+# - Backend secrets come from the HOST file (default: $REMOTE_DIR/secrets/env.production).
+#   Repo ponswarp-signaling-rs/.env.production is NEVER copied as the runtime env
+#   (avoids DB role/host mismatch that 502s production).
+# - All remote ssh/scp share one ControlMaster session to reduce connection thrash.
+#
+# Env overrides:
+#   PONSWARP_DEPLOY_HOST=ponslink
+#   PONSWARP_DEPLOY_DIR=/home/declan/ponswarp-deploy
+#   PONSWARP_HOST_ENV=/home/declan/ponswarp-deploy/secrets/env.production
+#   PONSWARP_DOCKER_NETWORK=host
+#   PONSWARP_PUBLIC_URL=https://warp.ponslink.com
+#   PONSWARP_SKIP_PREFLIGHT=1
+#   PONSWARP_RUN_PROD_TRANSFER_QA=1
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRONTEND_DIR="$ROOT_DIR/PonsWarp"
 BACKEND_DIR="$ROOT_DIR/ponswarp-signaling-rs"
-REMOTE_HOST="${PONSWARP_DEPLOY_HOST:-pons-link}"
+REMOTE_HOST="${PONSWARP_DEPLOY_HOST:-ponslink}"
 REMOTE_DIR="${PONSWARP_DEPLOY_DIR:-/home/declan/ponswarp-deploy}"
 REMOTE_NETWORK="${PONSWARP_DOCKER_NETWORK:-host}"
 PUBLIC_URL="${PONSWARP_PUBLIC_URL:-https://warp.ponslink.com}"
-PRODUCTION_ENV="$BACKEND_DIR/.env.production"
+# Host-side secrets (canonical). Never use repo .env.production as runtime source.
+HOST_ENV_PATH="${PONSWARP_HOST_ENV:-$REMOTE_DIR/secrets/env.production}"
+# Optional local overlay for TURN URL preflight only (not uploaded as runtime env).
+LOCAL_ENV_HINT="${PONSWARP_LOCAL_ENV_HINT:-$BACKEND_DIR/.env.production}"
 
 if [[ "${1:-}" == rollback ]]; then
   [[ $# == 2 ]] || { echo "usage: $0 rollback <release-id>" >&2; exit 2; }
@@ -25,15 +44,133 @@ fi
 [[ "$RELEASE_ID" =~ ^[0-9]{14}-[0-9a-fA-F]{7,40}$ ]] || { echo "invalid release id: $RELEASE_ID" >&2; exit 1; }
 FRONTEND_ARCHIVE="/tmp/ponswarp-frontend-${RELEASE_ID}.tar.gz"
 STAGING_PATH=''
+
+# --- SSH ControlMaster: one TCP session for all ssh/scp ---
+SSH_CM_DIR="${XDG_RUNTIME_DIR:-/tmp}/ponswarp-deploy-ssh"
+mkdir -p "$SSH_CM_DIR"
+SSH_CM_PATH="$SSH_CM_DIR/cm-%C"
+SSH_BASE_OPTS=(
+  -o "ControlMaster=auto"
+  -o "ControlPath=$SSH_CM_PATH"
+  -o "ControlPersist=300"
+  -o "BatchMode=yes"
+  -o "ConnectTimeout=20"
+  -o "ConnectionAttempts=3"
+  -o "ServerAliveInterval=15"
+  -o "ServerAliveCountMax=4"
+)
+
+ssh_remote() {
+  ssh "${SSH_BASE_OPTS[@]}" "$REMOTE_HOST" "$@"
+}
+
+scp_to() {
+  # scp_to <local> <remote-absolute-path>
+  scp "${SSH_BASE_OPTS[@]}" "$1" "$REMOTE_HOST:$2"
+}
+
+close_ssh_master() {
+  ssh -O exit -o "ControlPath=$SSH_CM_PATH" "$REMOTE_HOST" >/dev/null 2>&1 || true
+}
+
 cleanup_local() {
+  local rc=$?
   rm -f "$FRONTEND_ARCHIVE"
-  [[ -z "$STAGING_PATH" ]] || ssh "$REMOTE_HOST" "rm -rf -- '$STAGING_PATH'" >/dev/null 2>&1 || true
+  if [[ -n "$STAGING_PATH" ]]; then
+    ssh_remote "rm -rf -- '$STAGING_PATH'" >/dev/null 2>&1 || true
+  fi
+  close_ssh_master
+  return "$rc"
 }
 trap cleanup_local EXIT
 
-if [[ "$MODE" == deploy ]]; then
-  [[ -f "$PRODUCTION_ENV" ]] || { echo "Missing production backend env file: $PRODUCTION_ENV" >&2; exit 1; }
+echo "Opening SSH ControlMaster to $REMOTE_HOST..."
+# Establish master connection early (fails fast if host unreachable).
+ssh_remote -fN
+ssh_remote "echo ok >/dev/null"
 
+ensure_host_env() {
+  # Ensure $HOST_ENV_PATH exists on remote. Bootstrap once from live container if needed.
+  ssh_remote "sudo -n env REMOTE_DIR='$REMOTE_DIR' HOST_ENV_PATH='$HOST_ENV_PATH' bash -s" <<'ENSURE_ENV'
+set -euo pipefail
+mkdir -p "$(dirname "$HOST_ENV_PATH")"
+if [[ -f "$HOST_ENV_PATH" ]]; then
+  # Basic sanity
+  grep -q '^DATABASE_URL=' "$HOST_ENV_PATH" || { echo "host env missing DATABASE_URL: $HOST_ENV_PATH" >&2; exit 1; }
+  echo "host env present: $HOST_ENV_PATH"
+  exit 0
+fi
+
+echo "host env missing; bootstrapping from live signaling container..."
+cid=''
+if [[ -f "$REMOTE_DIR/current/release.id" ]]; then
+  rid="$(cat "$REMOTE_DIR/current/release.id")"
+  if docker container inspect "ponswarp-signaling-$rid" >/dev/null 2>&1; then
+    cid="ponswarp-signaling-$rid"
+  fi
+fi
+if [[ -z "$cid" ]]; then
+  cid="$(docker ps --filter name=ponswarp-signaling -q | head -1 || true)"
+fi
+if [[ -z "$cid" ]]; then
+  echo "cannot bootstrap host env: no live ponswarp-signaling container and no $HOST_ENV_PATH" >&2
+  exit 1
+fi
+
+tmp="$(mktemp)"
+docker inspect "$cid" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | awk -F= '
+      NF < 2 { next }
+      $1 ~ /^(PATH|HOME|HOSTNAME|TERM)$/ { next }
+      $1 == "PORT" { next }
+      $1 !~ /^[A-Z][A-Z0-9_]*$/ { next }
+      { print }
+    ' > "$tmp"
+if ! grep -q '^DATABASE_URL=' "$tmp"; then
+  rm -f "$tmp"
+  echo "bootstrap failed: container $cid has no DATABASE_URL" >&2
+  exit 1
+fi
+install -m 0600 "$tmp" "$HOST_ENV_PATH"
+rm -f "$tmp"
+chown root:root "$HOST_ENV_PATH" 2>/dev/null || true
+echo "bootstrapped host env from container $cid -> $HOST_ENV_PATH"
+ENSURE_ENV
+}
+
+validate_turn_on_host() {
+  local turn_host
+  turn_host="$(ssh_remote "sudo -n awk -F= '\$1==\"TURN_SERVER_URL\"{print \$2; exit}' '$HOST_ENV_PATH' 2>/dev/null || true")"
+  turn_host="${turn_host#turn:}"
+  turn_host="${turn_host#turns:}"
+  turn_host="${turn_host#//}"
+  turn_host="${turn_host%%\?*}"
+  turn_host="${turn_host%%:*}"
+  [[ "$turn_host" == 'turn.ponslink.com' ]] || {
+    echo "Host env TURN_SERVER_URL must target turn.ponslink.com (got host: ${turn_host:-<empty>})" >&2
+    echo "Edit $HOST_ENV_PATH on $REMOTE_HOST" >&2
+    exit 1
+  }
+  echo "TURN origin OK: turn.ponslink.com (from host env)"
+}
+
+# Optional local hint check (does not affect runtime env).
+if [[ -f "$LOCAL_ENV_HINT" ]]; then
+  local_turn=''
+  while IFS= read -r line; do
+    case "$line" in
+      TURN_SERVER_URL=*) local_turn="${line#TURN_SERVER_URL=}" ;;
+    esac
+  done < "$LOCAL_ENV_HINT"
+  if [[ -n "$local_turn" ]]; then
+    lt="${local_turn#turn:}"; lt="${lt#turns:}"; lt="${lt#//}"; lt="${lt%%\?*}"; lt="${lt%%:*}"
+    if [[ "$lt" != 'turn.ponslink.com' ]]; then
+      echo "WARNING: local $LOCAL_ENV_HINT TURN host is '$lt' (runtime uses host env, not this file)" >&2
+    fi
+  fi
+fi
+
+if [[ "$MODE" == deploy ]]; then
   # Fail-fast quality gates before packaging a release.
   if [[ "${PONSWARP_SKIP_PREFLIGHT:-}" != "1" ]]; then
     echo "Running deploy preflight (type-check + backend tests)..."
@@ -43,26 +180,15 @@ if [[ "$MODE" == deploy ]]; then
     echo "Skipping deploy preflight (PONSWARP_SKIP_PREFLIGHT=1)"
   fi
 
-  turn_server_url=''
-  while IFS= read -r line; do
-    case "$line" in
-      TURN_SERVER_URL=*) turn_server_url="${line#TURN_SERVER_URL=}" ;;
-    esac
-  done < "$PRODUCTION_ENV"
-  turn_endpoint="${turn_server_url#turn:}"
-  turn_endpoint="${turn_endpoint#turns:}"
-  turn_endpoint="${turn_endpoint#//}"
-  turn_host="${turn_endpoint%%\?*}"
-  turn_host="${turn_host%%:*}"
-  [[ "$turn_host" == 'turn.ponslink.com' ]] || {
-    echo "TURN_SERVER_URL must target the DNS-only TURN origin turn.ponslink.com (got host: ${turn_host:-<empty>})" >&2
-    exit 1
-  }
+  ensure_host_env
+  validate_turn_on_host
+
   pnpm run wasm:build
   pnpm run verify:wasm-provenance
   ( cd "$FRONTEND_DIR"; npm run build; tar -C dist -czf "$FRONTEND_ARCHIVE" . )
   CARGO_TARGET_DIR="$ROOT_DIR/target" cargo build --release --manifest-path "$BACKEND_DIR/Cargo.toml"
-  STAGING_PATH="$(ssh "$REMOTE_HOST" "REMOTE_DIR='$REMOTE_DIR' RELEASE_ID='$RELEASE_ID' bash -s" <<'REMOTE_PREPARE'
+
+  STAGING_PATH="$(ssh_remote "REMOTE_DIR='$REMOTE_DIR' RELEASE_ID='$RELEASE_ID' bash -s" <<'REMOTE_PREPARE'
 set -euo pipefail
 staging="$REMOTE_DIR/releases/.staging-$RELEASE_ID-$$"
 final="$REMOTE_DIR/releases/$RELEASE_ID"
@@ -73,13 +199,17 @@ printf '%s\n' "$staging"
 REMOTE_PREPARE
 )"
   [[ -n "$STAGING_PATH" ]] || { echo 'unable to locate exclusive release staging directory' >&2; exit 1; }
-  scp "$FRONTEND_ARCHIVE" "$REMOTE_HOST:$STAGING_PATH/frontend.tar.gz"
-  scp "$ROOT_DIR/target/release/ponswarp-signaling-rs" "$REMOTE_HOST:$STAGING_PATH/ponswarp-signaling-rs"
-  scp "$ROOT_DIR/deploy/Dockerfile.ponswarp-signaling" "$REMOTE_HOST:$STAGING_PATH/Dockerfile.ponswarp-signaling"
-  scp "$ROOT_DIR/deploy/nginx/warp.ponslink.com.conf" "$REMOTE_HOST:$STAGING_PATH/warp.ponslink.com.conf"
-  scp "$PRODUCTION_ENV" "$REMOTE_HOST:$STAGING_PATH/.env.production"
+
+  echo "Uploading artifacts via ControlMaster scp..."
+  scp_to "$FRONTEND_ARCHIVE" "$STAGING_PATH/frontend.tar.gz"
+  scp_to "$ROOT_DIR/target/release/ponswarp-signaling-rs" "$STAGING_PATH/ponswarp-signaling-rs"
+  scp_to "$ROOT_DIR/deploy/Dockerfile.ponswarp-signaling" "$STAGING_PATH/Dockerfile.ponswarp-signaling"
+  scp_to "$ROOT_DIR/deploy/nginx/warp.ponslink.com.conf" "$STAGING_PATH/warp.ponslink.com.conf"
+  # NOTE: deliberately NOT uploading repo .env.production.
+  # Runtime env is copied on-host from HOST_ENV_PATH inside the remote script.
 fi
-ssh "$REMOTE_HOST" "sudo -n env REMOTE_DIR='$REMOTE_DIR' STAGING_PATH='$STAGING_PATH' NETWORK='$REMOTE_NETWORK' PUBLIC_URL='$PUBLIC_URL' MODE='$MODE' RELEASE_ID='$RELEASE_ID' bash -s" <<'REMOTE'
+
+ssh_remote "sudo -n env REMOTE_DIR='$REMOTE_DIR' STAGING_PATH='$STAGING_PATH' NETWORK='$REMOTE_NETWORK' PUBLIC_URL='$PUBLIC_URL' MODE='$MODE' RELEASE_ID='$RELEASE_ID' HOST_ENV_PATH='$HOST_ENV_PATH' bash -s" <<'REMOTE'
 set -euo pipefail
 release="$REMOTE_DIR/releases/$RELEASE_ID"
 current="$REMOTE_DIR/current"
@@ -161,11 +291,27 @@ on_error() { restore_after_failure "$?"; }
 trap on_exit EXIT
 trap on_error ERR
 
+install_runtime_env_from_host() {
+  # Canonical runtime secrets: host file only.
+  [[ -f "$HOST_ENV_PATH" ]] || { echo "missing host env: $HOST_ENV_PATH" >&2; exit 1; }
+  grep -q '^DATABASE_URL=' "$HOST_ENV_PATH" || { echo "host env missing DATABASE_URL" >&2; exit 1; }
+  # Refuse obviously-wrong docker-compose style hosts if someone copied repo env by hand.
+  if grep -E '^DATABASE_URL=.*@postgres[:/]' "$HOST_ENV_PATH" >/dev/null 2>&1; then
+    echo "REFUSING host env DATABASE_URL that targets hostname 'postgres' (compose-only)." >&2
+    echo "Fix $HOST_ENV_PATH to use the production DB host (usually 127.0.0.1)." >&2
+    exit 1
+  fi
+  install -m 0600 "$HOST_ENV_PATH" "$1"
+  echo "installed runtime env from host secrets -> $1"
+}
+
 if [[ "$MODE" == deploy ]]; then
   [[ -n "$staging" && -d "$staging" ]] || { echo "missing release staging for $RELEASE_ID" >&2; exit 1; }
   chmod +x "$staging/ponswarp-signaling-rs"; mkdir -p "$staging/static" /etc/nginx/ponswarp
   sed "s|__PONSWARP_REMOTE_DIR__|$REMOTE_DIR|g" "$staging/warp.ponslink.com.conf" > "$staging/warp.ponslink.com.conf.new"
   mv "$staging/warp.ponslink.com.conf.new" "$staging/warp.ponslink.com.conf"
+  # Copy host secrets into staging BEFORE image/finalize (no repo env).
+  install_runtime_env_from_host "$staging/.env.production"
   image_tag="ponswarp-signaling:$RELEASE_ID"
   if docker image inspect "$image_tag" >/dev/null 2>&1; then
     echo "release image tag already exists: $image_tag" >&2
@@ -186,44 +332,9 @@ else
   [[ "$image_identity" =~ ^sha256:[0-9a-fA-F]{64}$ ]] || { echo "release has no immutable image ID: $RELEASE_ID" >&2; exit 1; }
   docker image inspect "$image_identity" >/dev/null || { echo "release image is unavailable: $RELEASE_ID" >&2; exit 1; }
   [[ -z "$old_current" || ! -f "$old_current/release.id" || "$(<"$old_current/release.id")" != "$RELEASE_ID" ]] || { echo "refusing same-release rollback: $RELEASE_ID" >&2; exit 2; }
-fi
-if [[ "$MODE" == deploy ]]; then
-  env_source_container=''
-  if [[ -n "$old_current" && -f "$old_current/release.id" ]]; then
-    env_source_container="ponswarp-signaling-$(<"$old_current/release.id")"
-  elif docker container inspect ponswarp-signaling >/dev/null 2>&1; then
-    env_source_container='ponswarp-signaling'
-  fi
-  if [[ -n "$env_source_container" ]] && docker container inspect "$env_source_container" >/dev/null 2>&1; then
-    declare -A merged_env_values=()
-    declare -a merged_env_order=()
-    merged_env="$release/.env.production.merged"
-    while IFS= read -r line; do
-      [[ "$line" == *=* ]] || continue
-      key="${line%%=*}"
-      case "$key" in PATH|HOSTNAME|HOME|TERM|PORT|PONSWARP_ENV) continue ;; esac
-      if [[ -z "${merged_env_values[$key]+set}" ]]; then
-        merged_env_order+=("$key")
-        merged_env_values["$key"]="$line"
-      fi
-    done < <(docker inspect "$env_source_container" --format '{{range .Config.Env}}{{println .}}{{end}}')
-    while IFS= read -r line; do
-      [[ "$line" == *=* ]] || continue
-      key="${line%%=*}"
-      if [[ "$key" == TURN_SERVER_URL || "$key" == TURN_FALLBACK_SERVERS ]]; then
-        [[ -n "${merged_env_values[$key]+set}" ]] || merged_env_order+=("$key")
-        merged_env_values["$key"]="$line"
-      elif [[ -z "${merged_env_values[$key]+set}" ]]; then
-        merged_env_order+=("$key")
-        merged_env_values["$key"]="$line"
-      fi
-    done < "$release/.env.production"
-    : > "$merged_env"
-    for key in "${merged_env_order[@]}"; do
-      printf '%s\n' "${merged_env_values[$key]}" >> "$merged_env"
-    done
-    install -m 0600 "$merged_env" "$release/.env.production"
-    rm -f "$merged_env"
+  # Refresh rollback env from current host secrets when available (PORT rewritten below).
+  if [[ -f "$HOST_ENV_PATH" ]]; then
+    install_runtime_env_from_host "$release/.env.production"
   fi
 fi
 

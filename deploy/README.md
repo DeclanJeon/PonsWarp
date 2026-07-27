@@ -18,6 +18,35 @@ This directory contains production deployment artifacts and configuration exampl
 
 `deploy-production.sh` handles frontend/backend releases, nginx config templating, health checks, and rollback. It does not manage Coturn; Coturn runs as a host service.
 
+### Host secrets (required)
+
+Runtime backend env is **never** taken from the git-tracked
+`ponswarp-signaling-rs/.env.production` (that file often has compose-only DB hosts
+and will 502 production).
+
+Canonical path on the deploy host:
+
+```text
+$PONSWARP_DEPLOY_DIR/secrets/env.production
+# default: /home/declan/ponswarp-deploy/secrets/env.production
+```
+
+- First deploy bootstraps this file from the live signaling container if missing.
+- Override with `PONSWARP_HOST_ENV=/absolute/path`.
+- Mode `0600`; contains `DATABASE_URL`, TURN secrets, Cloud keys, etc.
+- Script refuses `DATABASE_URL` values that target hostname `postgres` (compose-only).
+
+### SSH ControlMaster
+
+All `ssh`/`scp` calls share one ControlMaster session (`ControlPersist=300`) under
+`$XDG_RUNTIME_DIR/ponswarp-deploy-ssh/` to avoid multi-connection rate limits.
+
+### Deploy
+
+```bash
+PONSWARP_DEPLOY_HOST=ponslink bash deploy/deploy-production.sh
+```
+
 ## Release checklist & transfer QA
 
 - Full checklist: `RELEASE-CHECKLIST.md`

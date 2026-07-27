@@ -21,7 +21,10 @@ Notes:
 
 - Canonical UI is `PonsWarp/` only.
 - Do **not** reintroduce dead TURN fallback `43.156.100.135`.
-- Production backend env must use the **host** DB role/URL (not a mismatched repo copy).
+- **Runtime env is host-only:** `$PONSWARP_DEPLOY_DIR/secrets/env.production`
+  (default `/home/declan/ponswarp-deploy/secrets/env.production`).
+  Repo `ponswarp-signaling-rs/.env.production` is **not** uploaded.
+- Deploy opens one SSH ControlMaster session for all scp/ssh hops.
 - nginx conf placeholders (`__PONSWARP_REMOTE_DIR__`) are substituted by the deploy script.
 
 ## Post-deploy smoke (required)
