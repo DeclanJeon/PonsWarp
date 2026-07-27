@@ -277,3 +277,17 @@ committed_success=1
 if [[ "$MODE" == rollback ]]; then printf 'rolled back to %s\n' "$RELEASE_ID"; else printf 'deployed release %s on port %s\n' "$RELEASE_ID" "$new_port"; fi
 REMOTE
 echo "Production deployment completed: $RELEASE_ID"
+
+# Optional networked transfer smoke against the just-deployed public URL.
+# Opt-in only: keeps offline packaging deterministic.
+if [[ "$MODE" == deploy && "${PONSWARP_RUN_PROD_TRANSFER_QA:-}" == "1" ]]; then
+  echo "Running post-deploy production transfer QA (PONSWARP_RUN_PROD_TRANSFER_QA=1)..."
+  (
+    cd "$ROOT_DIR"
+    PROD_URL="${PONSWARP_PUBLIC_URL:-$PUBLIC_URL}" pnpm run qa:prod-transfer
+  ) || {
+    echo "Production transfer QA failed after deploy $RELEASE_ID" >&2
+    exit 1
+  }
+  echo "Production transfer QA passed for $RELEASE_ID"
+fi

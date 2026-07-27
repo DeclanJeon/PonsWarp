@@ -17,3 +17,15 @@ This directory contains production deployment artifacts and configuration exampl
 ## Production deploy script
 
 `deploy-production.sh` handles frontend/backend releases, nginx config templating, health checks, and rollback. It does not manage Coturn; Coturn runs as a host service.
+
+## Release checklist & transfer QA
+
+- Full checklist: `RELEASE-CHECKLIST.md`
+- Post-deploy transfer smoke: `pnpm run qa:prod-transfer` from repo root
+- Optional deploy gate (after public health smoke):
+
+```bash
+PONSWARP_DEPLOY_HOST=ponslink \
+PONSWARP_RUN_PROD_TRANSFER_QA=1 \
+bash deploy/deploy-production.sh
+```

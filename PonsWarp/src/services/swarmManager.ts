@@ -78,6 +78,14 @@ import {
   parseStripePeerKey,
   normalizeSignalPayload,
 } from './swarmStripe';
+import {
+  computePrepareAheadCount,
+  computePartitionSendCap,
+  computeScaledInFlightTargetBytes,
+  hasOpenSendBudget,
+  resolveActivePartitionSize,
+  shouldSkipPartitionAckBarrier,
+} from './swarmTransferLoop';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -1251,11 +1259,12 @@ export class SwarmManager {
     });
   }
   private getCurrentInFlightTargetBytes(): number {
-    const base = this.currentInFlightTargetBytes;
-    if (!this.stripeEnabled || LAN_STRIPE_LANES <= 1) return base;
-    // Each verified bulk PC has its own SCTP buffer; scale the app window.
-    const lanes = Math.max(1, this.verifiedStripeKeys.size || 1);
-    return Math.min(base * lanes, 24 * 1024 * 1024);
+    return computeScaledInFlightTargetBytes({
+      baseInFlightBytes: this.currentInFlightTargetBytes,
+      stripeEnabled: this.stripeEnabled,
+      lanStripeLanes: LAN_STRIPE_LANES,
+      verifiedStripeKeyCount: this.verifiedStripeKeys.size,
+    });
   }
 
   private resetTransferTuning(): void {
@@ -3513,9 +3522,9 @@ export class SwarmManager {
       // Smaller chunks on high-RTT host still keep the pipe full without
       // holding 96 × 240KiB of encrypted packets in RAM.
       const chunkBytes = Math.max(16 * 1024, this.getCurrentChunkSizeBytes());
-      const PREPARE_AHEAD = Math.max(
-        16,
-        Math.min(128, Math.floor(PREPARE_AHEAD_BYTES / chunkBytes))
+      const PREPARE_AHEAD = computePrepareAheadCount(
+        chunkBytes,
+        PREPARE_AHEAD_BYTES
       );
 
       const nextDescriptor = (): Descriptor | null => {
@@ -3614,16 +3623,12 @@ export class SwarmManager {
 
         // 버퍼가 허용하는 동안 연속 버스트 전송
         while (ready.has(nextToSend)) {
-          const laneFactor =
-            this.stripeEnabled && LAN_STRIPE_LANES > 1
-              ? Math.max(1, this.verifiedStripeKeys.size || 1)
-              : 1;
-          const sendCap = Math.min(
-            this.getCurrentInFlightTargetBytes(),
-            // Single SCTP association: fill up to the path in-flight target.
-            // The old 4MB hard cap starved high-BDP Wi-Fi and TURN.
-            laneFactor * this.getCurrentInFlightTargetBytes()
-          );
+          const sendCap = computePartitionSendCap({
+            inFlightTargetBytes: this.getCurrentInFlightTargetBytes(),
+            stripeEnabled: this.stripeEnabled,
+            lanStripeLanes: LAN_STRIPE_LANES,
+            verifiedStripeKeyCount: this.verifiedStripeKeys.size,
+          });
           if (this.getHighestBufferedAmount() > sendCap) {
             await this.waitUntilSendWindowOpen(runId, sendCap);
           }
@@ -3883,21 +3888,15 @@ export class SwarmManager {
   }
 
   private getActivePartitionSize(): number {
-    // Host/same-Wi-Fi: disable mid-transfer partition barriers.
-    // Reliable SCTP + end-of-file checkpoint is enough for 1:1.
-    const path = this.currentTransferDiagnostics.candidatePathKind;
-    // 1:1 reliable SCTP: avoid mid-transfer partition barriers on host/unknown/relay.
-    // Mobile Wi-Fi frequently selects TURN relay even on the same SSID.
-    if (path === 'host' || path === 'unknown' || path === 'relay') {
-      return Number.MAX_SAFE_INTEGER;
-    }
-    if (this.stripeEnabled && LAN_STRIPE_LANES > 1) {
-      return Math.min(
-        LAN_STRIPE_PARTITION_BYTES,
-        selectPartitionSize(this.currentTransferTuningProfile)
-      );
-    }
-    return selectPartitionSize(this.currentTransferTuningProfile);
+    return resolveActivePartitionSize({
+      pathKind: this.currentTransferDiagnostics.candidatePathKind,
+      stripeEnabled: this.stripeEnabled,
+      lanStripeLanes: LAN_STRIPE_LANES,
+      lanStripePartitionBytes: LAN_STRIPE_PARTITION_BYTES,
+      profilePartitionSize: selectPartitionSize(
+        this.currentTransferTuningProfile
+      ),
+    });
   }
 
   private async waitUntilSendWindowOpen(
@@ -3922,7 +3921,7 @@ export class SwarmManager {
       });
       // Resume a bit under the cap to avoid 1-byte thrash.
       // Resume once any meaningful budget is free (was 25% of target).
-      if (sendBudget > 0) {
+      if (hasOpenSendBudget(sendBudget)) {
         return;
       }
 
@@ -3941,10 +3940,13 @@ export class SwarmManager {
   ): Promise<void> {
     this.ensureActiveTransferRun(runId);
 
-    // Host / unknown: skip mid-transfer ACK barrier entirely.
+    // Host / unknown / relay: skip mid-transfer ACK barrier entirely.
     // Reliable SCTP owns reliability; waiting for app ACK only hurts Wi-Fi bulk.
-    const path = this.currentTransferDiagnostics.candidatePathKind;
-    if (path === 'host' || path === 'unknown' || path === 'relay') {
+    if (
+      shouldSkipPartitionAckBarrier(
+        this.currentTransferDiagnostics.candidatePathKind
+      )
+    ) {
       const peerIds = this.getActiveTransferPeerIds();
       const msg = JSON.stringify({ type: 'PARTITION', offset, runId });
       for (const peerId of peerIds) {

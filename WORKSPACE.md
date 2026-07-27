@@ -21,7 +21,6 @@ ponswarp/
 ├── deploy/                    # production deploy scripts + nginx
 ├── benchmarks/                # throughput/evidence benches
 ├── scripts/                   # monorepo tooling (e.g. wasm provenance)
-├── scripts/                   # monorepo tooling (e.g. wasm provenance)
 └── WORKSPACE.md               # this file
 ```
 
@@ -35,6 +34,16 @@ pnpm run frontend:test
 pnpm run backend:test
 pnpm run verify
 ```
+
+Release / prod transfer QA (networked; **not** in default preflight):
+
+```bash
+pnpm run release:checklist
+pnpm run qa:prod-transfer              # after deploy
+PROD_QA_RELAY=1 pnpm run qa:prod-transfer
+```
+
+See `deploy/RELEASE-CHECKLIST.md`.
 
 Signaling (separate terminal):
 

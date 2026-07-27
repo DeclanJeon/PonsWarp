@@ -15,7 +15,8 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts,.tsx --fix",
     "type-check": "tsc --noEmit",
-    "qa:prod-transfer": "node ./scripts/prod-transfer-qa.mjs"
+    "qa:prod-transfer": "node ./scripts/prod-transfer-qa.mjs",
+    "qa:prod-transfer:relay": "PROD_QA_RELAY=1 node ./scripts/prod-transfer-qa.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
