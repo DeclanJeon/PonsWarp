@@ -110,6 +110,24 @@ smoke_public() {
   status="${status%%$'\r\n'*}"
   [[ "$status" == *' 101 '* ]]
 }
+
+wait_http() {
+  local url="$1"
+  local max_tries="${2:-45}"
+  local sleep_s="${3:-1}"
+  local i=1
+  echo "waiting for $url (tries=$max_tries interval=${sleep_s}s)"
+  while (( i <= max_tries )); do
+    if curl --fail --silent --show-error --max-time 2 "$url" >/dev/null 2>&1; then
+      echo "ready: $url (try $i/$max_tries)"
+      return 0
+    fi
+    sleep "$sleep_s"
+    i=$((i + 1))
+  done
+  echo "timeout waiting for $url after ${max_tries} tries" >&2
+  return 1
+}
 restore_after_failure() {
   local original_rc="$1" restore_rc=0
   trap - EXIT ERR
