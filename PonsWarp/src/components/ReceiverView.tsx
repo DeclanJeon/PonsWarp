@@ -313,9 +313,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
     const normalizedRoomId = normalizeRoomCodeInput(receiveInput);
     if (!isCompleteRoomCode(normalizedRoomId)) return;
+    // Only set roomId here. The roomId effect owns the single join call so
+    // submit + effect cannot fire JoinRoom twice for the same receiver.
     setRoomId(normalizedRoomId);
-    handleJoin(normalizedRoomId);
-  }, [handleJoin, onOpenCloudShare, receiveInput, setRoomId]);
+  }, [onOpenCloudShare, receiveInput, setRoomId]);
 
   // 🚨 [핵심 수정] 중복 초기화 방지를 위한 Ref
   const isInitializedRef = useRef(false);

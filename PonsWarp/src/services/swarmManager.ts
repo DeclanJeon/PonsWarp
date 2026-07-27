@@ -973,6 +973,16 @@ export class SwarmManager {
       return;
     }
 
+    // addPeer already no-ops when the logical peer exists; keep the log so
+    // duplicate PeerJoined from re-join storms is visible but harmless.
+    if (this.peers.has(stripePeerKey(peerId, 0))) {
+      debugLog(
+        '[SwarmManager]',
+        `PeerJoined ignored; peer already tracked: ${peerId}`
+      );
+      return;
+    }
+
     logInfo('[SwarmManager]', `Peer joined room: ${peerId}`);
 
     // Sender로서 새 피어에게 연결 시작 (initiator = true)
@@ -986,9 +996,9 @@ export class SwarmManager {
 
     const socketId = this.getSignalingService().getSocketId();
     for (const peerId of users) {
-      if (peerId && peerId !== socketId) {
-        this.addPeer(peerId, true);
-      }
+      if (!peerId || peerId === socketId) continue;
+      if (this.peers.has(stripePeerKey(peerId, 0))) continue;
+      this.addPeer(peerId, true);
     }
   }
 
@@ -1126,7 +1136,10 @@ export class SwarmManager {
 
     // Prefer lanes with room in their SCTP app buffer. Among those, round-robin
     // so a dead lane stuck at bufferedAmount=0 cannot attract ALL traffic.
-    const softCap = 3 * 1024 * 1024;
+    const softCap =
+      this.currentTransferDiagnostics.candidatePathKind === 'relay'
+        ? 2 * 1024 * 1024
+        : 3 * 1024 * 1024;
     const withRoom = peers.filter(p => p.getBufferedAmount() < softCap);
     const pool = withRoom.length > 0 ? withRoom : peers;
     const idx = this.stripeRrCounter % pool.length;

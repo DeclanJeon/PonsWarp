@@ -159,7 +159,7 @@ describe('transferFlowControl', () => {
     expect(selectTransferTuningProfile(null)).toBe(
       UNKNOWN_TRANSFER_TUNING_PROFILE
     );
-    expect(RELAY_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(14 * 1024 * 1024);
+    expect(RELAY_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(6 * 1024 * 1024);
     expect(RELAY_TRANSFER_TUNING_PROFILE.partitionSizeBytes).toBe(
       Number.MAX_SAFE_INTEGER
     );

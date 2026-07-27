@@ -22,6 +22,8 @@ class RustSignalingAdapter {
   private maxReconnectAttempts = 5;
   private url: string = '';
   private connectionPromise: Promise<void> | null = null;
+  /** Last room successfully joined on the current WebSocket session. */
+  private joinedRoomId: string | null = null;
 
   async connect(url: string = RUST_SIGNALING_URL): Promise<void> {
     // [FIX] 이미 연결되어 있거나 연결 중이면 기존 연결 재사용 (중복 연결 방지)
@@ -88,6 +90,7 @@ class RustSignalingAdapter {
         debugLog('[RustSignaling] Disconnected:', event.code, event.reason);
         this.emit('disconnect', { reason: event.reason });
         this.socketId = null;
+        this.joinedRoomId = null;
         this.connectionPromise = null;
         this.attemptReconnect();
       };
@@ -221,8 +224,24 @@ class RustSignalingAdapter {
 
   // API Methods
   async joinRoom(roomId: string): Promise<void> {
-    debugLog('[RustSignaling] Joining room:', roomId);
-    this.send('JoinRoom', { roomId });
+    const normalized = roomId.trim();
+    if (!normalized) return;
+
+    // Idempotent on the same open socket: duplicate JoinRoom causes the
+    // signaling server to re-broadcast PeerJoined and races sender addPeer.
+    if (
+      this.ws?.readyState === WebSocket.OPEN &&
+      this.joinedRoomId === normalized
+    ) {
+      debugLog('[RustSignaling] Already joined room:', normalized);
+      return;
+    }
+
+    debugLog('[RustSignaling] Joining room:', normalized);
+    this.send('JoinRoom', { roomId: normalized });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.joinedRoomId = normalized;
+    }
   }
 
   sendOffer(roomId: string, offer: RTCSessionDescriptionInit, target?: string) {
@@ -276,6 +295,7 @@ class RustSignalingAdapter {
   }
 
   leaveRoom(_roomId: string) {
+    this.joinedRoomId = null;
     this.send('LeaveRoom', {});
   }
 
@@ -336,6 +356,7 @@ class RustSignalingAdapter {
     if (this.ws === socket) {
       this.ws = null;
     }
+    this.joinedRoomId = null;
     this.connectionPromise = null;
     await this.connect(this.url || RUST_SIGNALING_URL);
   }
@@ -345,6 +366,7 @@ class RustSignalingAdapter {
       this.ws = null;
     }
     this.socketId = null;
+    this.joinedRoomId = null;
     this.connectionPromise = null;
     this.handlers.clear();
   }

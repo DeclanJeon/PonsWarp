@@ -15,14 +15,19 @@ export const CHUNK_SIZE_MIN = 16 * 1024; // 16KB
 export const CHUNK_SIZE_INITIAL = 192 * 1024; // 192KB default host
 export const CHUNK_SIZE_MAX = 192 * 1024; // 192KB ceiling (safe under 256KB)
 
-// 🚀 [Performance] Keep bufferedAmount modest — huge queues inflate sender
-// speed while starving the real SCTP congestion window.
+// Keep bufferedAmount modest — huge queues inflate sender speed while
+// starving the real SCTP congestion window.
 // Measured Chromium host path (local loop): high≈2–4MB yields ~25+ MB/s;
 // 32MB high-water overflows the browser send queue and collapses to ~6–9 MB/s.
 // SCTP owns congestion control; app only paces on bufferedAmount.
 export const MAX_BUFFERED_AMOUNT = 14 * 1024 * 1024; // 14MB hard stop
 export const LOW_WATER_MARK = 2 * 1024 * 1024; // 2MB drain — refill sooner
 export const HIGH_WATER_MARK = 10 * 1024 * 1024; // 10MB fill target
+// Named relay caps used by path-aware send pacing (see transferFlowControl).
+export const RELAY_MAX_BUFFERED_AMOUNT = 4 * 1024 * 1024; // 4MB
+export const RELAY_LOW_WATER_MARK = 512 * 1024; // 512KB
+export const RELAY_HIGH_WATER_MARK = 2 * 1024 * 1024; // 2MB
+export const RELAY_CHUNK_SIZE = 64 * 1024; // 64KB ciphertext payloads
 
 // 파티션 크기: 연속 전송 (ACK 불필요)
 export const TRANSFER_PARTITION_SIZE = 128 * 1024 * 1024;

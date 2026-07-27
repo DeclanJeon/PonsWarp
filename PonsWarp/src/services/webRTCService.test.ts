@@ -94,6 +94,39 @@ describe('ReceiverService signaling', () => {
     expect(errors).not.toHaveBeenCalled();
     service.cleanup();
   });
+  it('does not re-join when initReceiver is called twice for the same room before P2P connects', async () => {
+    const signaling = {
+      connect: vi.fn(async () => undefined),
+      joinRoom: vi.fn(async () => undefined),
+      leaveRoom: vi.fn(),
+      sendOffer: vi.fn(),
+      sendAnswer: vi.fn(),
+      sendCandidate: vi.fn(),
+      requestTurnConfig: vi.fn(async () => ({
+        success: true,
+        data: {
+          iceServers: [],
+          turnServerStatus: { primary: {}, fallback: [] },
+          ttl: 600,
+          timestamp: 0,
+          roomId: 'ABC123',
+        },
+      })),
+      on: vi.fn(),
+      off: vi.fn(),
+      getSocketId: vi.fn(() => 'receiver-id'),
+      isConnected: vi.fn(() => true),
+      disconnect: vi.fn(),
+    } as unknown as ISignalingService;
+
+    const service = new ReceiverService({ signaling });
+    await service.initReceiver('ABC123');
+    await service.initReceiver('ABC123');
+
+    expect(signaling.joinRoom).toHaveBeenCalledTimes(1);
+    expect(signaling.joinRoom).toHaveBeenCalledWith('ABC123');
+    service.cleanup();
+  });
 });
 
 describe('ReceiverService mobile visibility resume', () => {

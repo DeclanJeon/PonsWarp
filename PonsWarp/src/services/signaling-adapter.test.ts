@@ -110,4 +110,42 @@ describe('RustSignalingAdapter', () => {
     expect(MockWebSocket.instances[0].readyState).toBe(MockWebSocket.CLOSED);
     expect(MockWebSocket.instances[1].url).toBe('ws://localhost:5502/ws');
   });
+
+  it('sends JoinRoom only once for repeated joinRoom calls on the same open socket', async () => {
+    const { rustSignalingAdapter } = await import('./signaling-adapter');
+
+    const connected = rustSignalingAdapter.connect();
+    await vi.runAllTimersAsync();
+    await connected;
+
+    await rustSignalingAdapter.joinRoom('ABC123');
+    await rustSignalingAdapter.joinRoom('ABC123');
+    await rustSignalingAdapter.joinRoom('ABC123');
+
+    const joinMessages = MockWebSocket.instances[0].sent
+      .map(message => JSON.parse(message) as { type: string; payload: { room_id?: string } })
+      .filter(message => message.type === 'JoinRoom');
+
+    expect(joinMessages).toEqual([
+      { type: 'JoinRoom', payload: { room_id: 'ABC123' } },
+    ]);
+  });
+
+  it('allows JoinRoom again after leaveRoom clears membership', async () => {
+    const { rustSignalingAdapter } = await import('./signaling-adapter');
+
+    const connected = rustSignalingAdapter.connect();
+    await vi.runAllTimersAsync();
+    await connected;
+
+    await rustSignalingAdapter.joinRoom('ROOM01');
+    rustSignalingAdapter.leaveRoom('ROOM01');
+    await rustSignalingAdapter.joinRoom('ROOM01');
+
+    const joinMessages = MockWebSocket.instances[0].sent
+      .map(message => JSON.parse(message) as { type: string; payload: { room_id?: string } })
+      .filter(message => message.type === 'JoinRoom');
+
+    expect(joinMessages).toHaveLength(2);
+  });
 });

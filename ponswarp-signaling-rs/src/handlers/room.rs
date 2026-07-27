@@ -41,6 +41,34 @@ pub async fn handle_join_room(state: Arc<AppState>, peer_id: &str, room_id: &str
         let existing_users: Vec<String> = room.users.read().await.iter().cloned().collect();
         tracing::info!(room_id = %room_id, existing_users = ?existing_users, "Got existing users");
 
+        // Same peer already in this room (duplicate JoinRoom from client).
+        // Do not re-broadcast PeerJoined — that races sender-side addPeer.
+        let already_member = existing_users.iter().any(|id| id == peer_id);
+        if already_member {
+            let user_count = existing_users.len();
+            if let Some(session) = state.peers.get(peer_id) {
+                *session.room_id.write().await = Some(room_id.clone());
+                let _ = session.sender.send(ServerMessage::RoomUsers {
+                    users: existing_users
+                        .iter()
+                        .filter(|id| id.as_str() != peer_id)
+                        .cloned()
+                        .collect(),
+                });
+                let _ = session.sender.send(ServerMessage::JoinedRoom {
+                    room_id: room_id.clone(),
+                    socket_id: peer_id.to_string(),
+                    user_count,
+                });
+                tracing::info!(
+                    peer_id = %peer_id,
+                    room_id = %room_id,
+                    "Duplicate JoinRoom ignored (already a member)"
+                );
+            }
+            return;
+        }
+
         // 방에 참여
         room.users.write().await.insert(peer_id.to_string());
         tracing::info!(room_id = %room_id, peer_id = %peer_id, "User inserted into room");

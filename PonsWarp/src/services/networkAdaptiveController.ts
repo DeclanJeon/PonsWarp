@@ -129,9 +129,10 @@ export class NetworkAdaptiveController {
       currentBufferedAmount < this.congestionState.cwnd * 0.8
     ) {
       // [Network Clear] Additive Increase - LAN에서는 더 공격적으로
-      const increase = this.congestionState.estimatedRtt < 10
-        ? 256 * 1024  // LAN: 256KB 증가
-        : 64 * 1024;  // WAN: 64KB 증가
+      // High RTT (typical TURN relay ~300-800ms) must grow slowly.
+      const rtt = this.congestionState.estimatedRtt;
+      const increase =
+        rtt < 10 ? 256 * 1024 : rtt < 150 ? 64 * 1024 : 16 * 1024;
       this.congestionState.cwnd = Math.min(
         this.MAX_CWND,
         this.congestionState.cwnd + increase

@@ -365,33 +365,43 @@ export class ReceiverService {
 
   public async initReceiver(roomId: string) {
     if (this.disposed) return;
-    if (this.roomId === roomId && this.isConnected()) {
-      debugLog('[Receiver] Already connected to room:', roomId);
+    const normalizedRoomId = roomId.trim();
+    if (!normalizedRoomId) return;
+
+    // Same room already armed: never reset/re-join from a second UI call.
+    // Reconnect paths own explicit leave+join when the socket actually drops.
+    if (this.roomId === normalizedRoomId) {
+      debugLog(
+        '[Receiver] Already initializing/joined room:',
+        normalizedRoomId
+      );
       return;
     }
 
-    debugLog('[Receiver] Initializing connection for room:', roomId);
+    debugLog('[Receiver] Initializing connection for room:', normalizedRoomId);
 
     // 기존 연결 정리 (Adapter의 연결은 끊지 않고 피어 상태만 정리)
     await this.resetState();
-    this.roomId = roomId;
+    this.roomId = normalizedRoomId;
 
     try {
       // 1. 시그널링 연결 (이미 연결되어 있다면 즉시 resolve됨)
       await this.ensureSignalingService().connect();
 
       // 2. 방 입장
-      await this.ensureSignalingService().joinRoom(roomId);
+      await this.ensureSignalingService().joinRoom(normalizedRoomId);
 
       // 3. TURN 설정 요청
       // Rust 서버의 경우 WebSocket으로 요청하므로 응답을 기다립니다.
       // 실패하더라도(타임아웃) P2P 연결 시도를 막지 않도록 catch 처리
-      this.turnConfigPromise = this.fetchTurnConfig(roomId).catch(e => {
-        console.warn(
-          '[Receiver] TURN config fetch failed (using default STUN):',
-          e
-        );
-      });
+      this.turnConfigPromise = this.fetchTurnConfig(normalizedRoomId).catch(
+        e => {
+          console.warn(
+            '[Receiver] TURN config fetch failed (using default STUN):',
+            e
+          );
+        }
+      );
 
       // UI 상태 변경
       this.emit('status', 'CONNECTING');

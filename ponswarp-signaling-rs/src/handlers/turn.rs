@@ -82,11 +82,16 @@ fn build_ice_servers(config: &TurnConfig, username: &str, password: &str) -> Vec
     let mut turn_urls = Vec::new();
     let turn_host = normalize_turn_host(&config.url);
 
+    // Advertise explicit transports. Browsers gather more reliably with
+    // `?transport=udp|tcp` than bare `turn:host:port` duplicates.
     if config.enable_udp {
-        turn_urls.push(format!("turn:{}:{}", turn_host, config.ports.udp));
+        turn_urls.push(format!(
+            "turn:{}:{}?transport=udp",
+            turn_host, config.ports.udp
+        ));
     }
     if config.enable_tcp {
-        let tcp_url = format!("turn:{}:{}", turn_host, config.ports.tcp);
+        let tcp_url = format!("turn:{}:{}?transport=tcp", turn_host, config.ports.tcp);
         if !turn_urls.contains(&tcp_url) {
             turn_urls.push(tcp_url);
         }
@@ -111,6 +116,7 @@ fn build_ice_servers(config: &TurnConfig, username: &str, password: &str) -> Vec
     // 폴백 서버 추가. 값이 이미 stun:/turn:/turns: URL이면 그대로 사용한다.
     // production에는 `stun:stun.l.google.com:19302`가 들어오므로 host:port로 재조합하면
     // `turn:stun:stun.l.google.com:19302:3478` 같은 브라우저가 거부하는 URL이 된다.
+    // Never re-advertise the primary host as a "fallback" (wastes ICE time).
     for fallback in &config.fallback_servers {
         let fallback = fallback.trim();
         if fallback.is_empty() {
@@ -124,6 +130,10 @@ fn build_ice_servers(config: &TurnConfig, username: &str, password: &str) -> Vec
                 credential_type: None,
             });
         } else if fallback.starts_with("turn:") || fallback.starts_with("turns:") {
+            let fb_host = normalize_turn_host(fallback);
+            if fb_host == turn_host {
+                continue;
+            }
             servers.push(IceServer {
                 urls: vec![fallback.to_string()],
                 username: Some(username.to_string()),
@@ -131,10 +141,14 @@ fn build_ice_servers(config: &TurnConfig, username: &str, password: &str) -> Vec
                 credential_type: Some("password".to_string()),
             });
         } else {
+            let fb_host = normalize_turn_host(fallback);
+            if fb_host == turn_host {
+                continue;
+            }
             let fallback_url = if config.enable_tls {
-                format!("turns:{}:{}?transport=tcp", fallback, config.ports.tls)
+                format!("turns:{}:{}?transport=tcp", fb_host, config.ports.tls)
             } else {
-                format!("turn:{}:{}", fallback, config.ports.udp)
+                format!("turn:{}:{}?transport=udp", fb_host, config.ports.udp)
             };
             servers.push(IceServer {
                 urls: vec![fallback_url],
@@ -145,7 +159,7 @@ fn build_ice_servers(config: &TurnConfig, username: &str, password: &str) -> Vec
         }
     }
 
-    // STUN 서버 (인증 불필요)
+    // STUN 서버 (인증 불필요) — primary TURN host as STUN helper
     if config.enable_udp {
         servers.push(IceServer {
             urls: vec![format!("stun:{}:{}", turn_host, config.ports.udp)],

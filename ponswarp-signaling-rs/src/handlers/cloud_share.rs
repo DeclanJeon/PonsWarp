@@ -1619,6 +1619,28 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+fn classify_cloud_error(detail: &str) -> &'static str {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("nosuchkey") || lower.contains("not found") {
+        "object_missing"
+    } else if lower.contains("accessdenied") || lower.contains("403") || lower.contains("forbidden")
+    {
+        "access_denied"
+    } else if lower.contains("signature") || lower.contains("invalidaccesskey") {
+        "auth_signature"
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        "timeout"
+    } else if lower.contains("dns") || lower.contains("name or service not known") {
+        "dns"
+    } else if lower.contains("connection") || lower.contains("connect") {
+        "connectivity"
+    } else if lower.contains("xml") || lower.contains("deserialize") || lower.contains("parse") {
+        "protocol_parse"
+    } else {
+        "service_error"
+    }
+}
+
 #[derive(Debug)]
 pub struct CloudShareError {
     status: StatusCode,
@@ -1662,10 +1684,17 @@ impl CloudShareError {
     }
 
     pub(crate) fn internal(error: impl std::fmt::Display) -> Self {
-        tracing::error!(error = %error, "Cloud share operation failed");
+        // Keep the public body generic; log the concrete failure class for ops.
+        let detail = error.to_string();
+        tracing::error!(
+            error = %detail,
+            error_class = "cloud_share_internal",
+            "Cloud share operation failed"
+        );
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: "Cloud share service failed".to_string(),
+            // Stable, non-leaking code clients can surface; detail stays in logs.
+            message: format!("Cloud share service failed ({})", classify_cloud_error(&detail)),
         }
     }
 }

@@ -95,6 +95,27 @@ describe('SwarmManager guard paths', () => {
     expect(addPeer).toHaveBeenCalledWith('receiver-socket', true);
     manager.cleanup();
   });
+  it('ignores duplicate PeerJoined for an already-tracked peer', async () => {
+    const { SwarmManager } = await import('./swarmManager');
+    const manager = new SwarmManager({ signaling: signalingService as never });
+    const addPeer = vi.fn();
+    const managerInternals = manager as unknown as {
+      roomId: string;
+      peers: Map<string, { destroy: () => void }>;
+      addPeer: typeof addPeer;
+      handlePeerJoined(data: { socketId: string }): void;
+    };
+    managerInternals.roomId = 'ABC123';
+    managerInternals.peers = new Map([
+      ['receiver-socket', { destroy: vi.fn() }],
+    ]);
+    managerInternals.addPeer = addPeer;
+
+    managerInternals.handlePeerJoined({ socketId: 'receiver-socket' });
+
+    expect(addPeer).not.toHaveBeenCalled();
+    manager.cleanup();
+  });
   it('rejects resume requests beyond the manifest size instead of restarting from an unsafe offset', async () => {
     const { SwarmManager } = await import('./swarmManager');
     const manager = new SwarmManager();

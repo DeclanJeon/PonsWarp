@@ -217,13 +217,13 @@ export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
 export const RELAY_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'relay',
-  // Same-SSID mobile often selects TURN. Keep mid-transfer ACKs off and give
-  // the relay path a real send window so it is not artificially capped.
+  // Same-SSID mobile often selects TURN. Keep mid-transfer ACKs off.
+  // Cap the app queue below host LAN so high-RTT relay does not stall for minutes.
   chunkSizeBytes: 64 * KIB,
-  minInFlightBytes: 3 * MIB,
-  initialInFlightBytes: 8 * MIB,
-  maxInFlightBytes: 14 * MIB,
-  lowWaterBytes: 2 * MIB,
+  minInFlightBytes: 1 * MIB,
+  initialInFlightBytes: 3 * MIB,
+  maxInFlightBytes: 6 * MIB,
+  lowWaterBytes: 512 * KIB,
   partitionSizeBytes: Number.MAX_SAFE_INTEGER,
 };
 export const UNKNOWN_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
