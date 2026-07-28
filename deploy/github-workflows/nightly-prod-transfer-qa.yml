@@ -1,0 +1,69 @@
+# Install path: copy to .github/workflows/ (requires git push token with workflow scope).
+# Nightly production transfer QA (networked Playwright smoke).
+# Does NOT block default PR preflight. Manual dispatch supported for release habit.
+name: nightly-prod-transfer-qa
+
+on:
+  schedule:
+    # 03:15 UTC daily
+    - cron: '15 3 * * *'
+  workflow_dispatch:
+    inputs:
+      prod_url:
+        description: 'Production base URL'
+        required: false
+        default: 'https://warp.ponslink.com'
+      relay:
+        description: 'Force relay path (1/0)'
+        required: false
+        default: '0'
+
+concurrency:
+  group: nightly-prod-transfer-qa
+  cancel-in-progress: true
+
+jobs:
+  prod-transfer-qa:
+    name: qa:prod-transfer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir PonsWarp exec playwright install --with-deps chromium
+
+      - name: Run production transfer QA
+        env:
+          PROD_URL: ${{ inputs.prod_url || 'https://warp.ponslink.com' }}
+          PROD_QA_RELAY: ${{ inputs.relay || '0' }}
+          PROD_QA_TIMEOUT_MS: '180000'
+          PROD_QA_ARTIFACT_DIR: artifacts/ops/qa
+          # Keep default fail-on-error so the workflow is red when smoke fails.
+          NIGHTLY_FAIL_ON_ERROR: '1'
+        run: bash scripts/nightly-prod-transfer-qa.sh
+
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-transfer-qa-${{ github.run_id }}
+          path: |
+            artifacts/ops/qa/**
+          if-no-files-found: ignore
+          retention-days: 14

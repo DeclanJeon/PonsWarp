@@ -44,7 +44,8 @@ pnpm run qa:prod-transfer:nightly      # cron wrapper + summary artifact
 PROD_QA_RELAY=1 pnpm run qa:prod-transfer
 ```
 
-GitHub Actions nightly: `.github/workflows/nightly-prod-transfer-qa.yml`  
+Tracked workflow template: `deploy/github-workflows/nightly-prod-transfer-qa.yml`  
+(copy into `.github/workflows/` with a token that has `workflow` scope).  
 See `deploy/RELEASE-CHECKLIST.md`.
 
 Signaling (separate terminal):

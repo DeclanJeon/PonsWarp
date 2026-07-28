@@ -84,7 +84,8 @@ Networked smoke is **not** in default `preflight`. Habit options:
 # Local / cron wrapper (writes artifacts/ops/qa/nightly-summary-*.json)
 pnpm run qa:prod-transfer:nightly
 
-# GitHub Actions: .github/workflows/nightly-prod-transfer-qa.yml
+# Template: deploy/github-workflows/nightly-prod-transfer-qa.yml
+# Copy to .github/workflows/ (git push needs `workflow` OAuth scope)
 # - schedule: 03:15 UTC daily
 # - workflow_dispatch for manual release habit runs
 ```

@@ -52,7 +52,7 @@ PONSWARP_DEPLOY_HOST=ponslink bash deploy/deploy-production.sh
 - Full checklist: `RELEASE-CHECKLIST.md`
 - Post-deploy transfer smoke: `pnpm run qa:prod-transfer` from repo root
 - Nightly / release-habit wrapper: `pnpm run qa:prod-transfer:nightly`
-- GitHub Actions schedule: `.github/workflows/nightly-prod-transfer-qa.yml` (03:15 UTC + `workflow_dispatch`)
+- GitHub Actions template: `deploy/github-workflows/nightly-prod-transfer-qa.yml` (copy to `.github/workflows/`; push needs `workflow` scope)
 - Optional deploy gate (after public health smoke):
 
 ```bash
