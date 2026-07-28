@@ -76,6 +76,25 @@ PASS criteria:
 - Or manual smoke documented with screenshots under `artifacts/ops/qa/`
 - No dead TURN IP (`43.156.100.135`) in the served frontend bundle
 
+## Nightly / release-habit transfer QA
+
+Networked smoke is **not** in default `preflight`. Habit options:
+
+```bash
+# Local / cron wrapper (writes artifacts/ops/qa/nightly-summary-*.json)
+pnpm run qa:prod-transfer:nightly
+
+# GitHub Actions: .github/workflows/nightly-prod-transfer-qa.yml
+# - schedule: 03:15 UTC daily
+# - workflow_dispatch for manual release habit runs
+```
+
+Crontab example:
+
+```cron
+15 3 * * * cd /path/to/ponswarp && pnpm run qa:prod-transfer:nightly >>artifacts/ops/qa/nightly.log 2>&1
+```
+
 ## Rollback
 
 ```bash

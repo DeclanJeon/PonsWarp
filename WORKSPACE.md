@@ -39,10 +39,12 @@ Release / prod transfer QA (networked; **not** in default preflight):
 
 ```bash
 pnpm run release:checklist
-pnpm run qa:prod-transfer              # after deploy
+pnpm run qa:prod-transfer              # after deploy / manual release habit
+pnpm run qa:prod-transfer:nightly      # cron wrapper + summary artifact
 PROD_QA_RELAY=1 pnpm run qa:prod-transfer
 ```
 
+GitHub Actions nightly: `.github/workflows/nightly-prod-transfer-qa.yml`  
 See `deploy/RELEASE-CHECKLIST.md`.
 
 Signaling (separate terminal):

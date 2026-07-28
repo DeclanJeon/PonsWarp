@@ -86,6 +86,7 @@ import {
   resolveActivePartitionSize,
   shouldSkipPartitionAckBarrier,
 } from './swarmTransferLoop';
+import { PageWakeLock } from './pageWakeLock';
 
 // 핵심 안전 상수: 절대 변경 금지
 export const MAX_DIRECT_PEERS = 3;
@@ -326,7 +327,10 @@ export class SwarmManager {
     this.emit('room-full', 'Room is at maximum capacity');
   };
   // 🚀 [Mobile] Wake Lock + 가시성 변경 처리
-  private wakeLockSentinel: any = null;
+  private readonly pageWakeLock = new PageWakeLock({
+    scope: '[SwarmManager]',
+    log: { info: logInfo, debug: logDebug },
+  });
   private boundHandleVisibilityChange = this.handleVisibilityChange.bind(this);
 
   private handleVisibilityChange(): void {
@@ -350,24 +354,11 @@ export class SwarmManager {
   }
 
   private async requestWakeLock(): Promise<void> {
-    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
-    try {
-      this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
-      logInfo('[SwarmManager]', '🔒 Wake Lock acquired');
-      this.wakeLockSentinel.addEventListener('release', () => {
-        logInfo('[SwarmManager]', '🔓 Wake Lock released');
-        this.wakeLockSentinel = null;
-      });
-    } catch (e) {
-      logDebug('[SwarmManager]', 'Wake Lock not available:', e);
-    }
+    await this.pageWakeLock.request();
   }
 
   private releaseWakeLock(): void {
-    if (this.wakeLockSentinel) {
-      this.wakeLockSentinel.release().catch(() => {});
-      this.wakeLockSentinel = null;
-    }
+    this.pageWakeLock.release();
   }
 
   private checkConnectionAfterResume(): void {

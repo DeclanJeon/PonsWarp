@@ -51,12 +51,21 @@ if (typeof window !== 'undefined') {
 
 // 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
 // 32MB 이상 쌓이면 PAUSE 요청, 16MB 이하로 떨어지면 RESUME 요청
-const WRITE_BUFFER_HIGH_MARK = 48 * 1024 * 1024;
-const WRITE_BUFFER_LOW_MARK = 16 * 1024 * 1024;
+import {
+  MAX_RESUME_ATTEMPTS,
+  WRITE_BUFFER_HIGH_MARK,
+  WRITE_BUFFER_LOW_MARK,
+  canRequestWriterResume,
+  resolveWriterBackpressureAction,
+} from './writerFlowControl';
+// Re-export for tests/callers that previously relied on file-local constants.
+export {
+  MAX_RESUME_ATTEMPTS,
+  WRITE_BUFFER_HIGH_MARK,
+  WRITE_BUFFER_LOW_MARK,
+} from './writerFlowControl';
 const ENCRYPTED_HEADER_SIZE = 38;
 const AUTH_TAG_SIZE = 16;
-// Mobile screen-off can stall the channel multiple times in one transfer.
-const MAX_RESUME_ATTEMPTS = 12;
 
 import type { EvidenceFsaHandleContext } from './lanEvidenceAdapter';
 export class DirectFileWriter {
@@ -1942,29 +1951,30 @@ export class DirectFileWriter {
   private canRequestResume(): boolean {
     // Any active transfer with a callback is resumable from contiguous offset.
     // Multi-file ZIP path already tracks totalBytesWritten contiguously.
-    return (
-      !!this.onResumeRequestCallback &&
-      !!this.manifest &&
-      (this.manifest.totalFiles ?? this.manifest.files?.length ?? 0) > 0 &&
-      this.resumeAttempts < MAX_RESUME_ATTEMPTS
-    );
+    return canRequestWriterResume({
+      hasResumeCallback: !!this.onResumeRequestCallback,
+      hasManifest: !!this.manifest,
+      fileCount: this.manifest.totalFiles ?? this.manifest.files?.length ?? 0,
+      resumeAttempts: this.resumeAttempts,
+    });
   }
 
   /**
    * 🚀 [Flow Control] 버퍼 상태에 따른 PAUSE/RESUME 이벤트 발생
    */
   private checkBackpressure() {
-    if (!this.isPaused && this.pendingBytesInBuffer >= WRITE_BUFFER_HIGH_MARK) {
+    const action = resolveWriterBackpressureAction({
+      isPaused: this.isPaused,
+      pendingBytesInBuffer: this.pendingBytesInBuffer,
+    });
+    if (action === 'PAUSE') {
       this.isPaused = true;
       logWarn(
         '[DirectFileWriter]',
         `High memory usage (${formatBytes(this.pendingBytesInBuffer)}). Pausing sender.`
       );
       this.onFlowControlCallback?.('PAUSE');
-    } else if (
-      this.isPaused &&
-      this.pendingBytesInBuffer <= WRITE_BUFFER_LOW_MARK
-    ) {
+    } else if (action === 'RESUME') {
       this.isPaused = false;
       logInfo(
         '[DirectFileWriter]',

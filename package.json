@@ -15,7 +15,8 @@
     "verify": "pnpm run wasm:test && pnpm run wasm:build && pnpm run verify:wasm-provenance && pnpm run benchmark:verify && pnpm run preflight && pnpm run frontend:build && pnpm run backend:build",
     "preflight": "pnpm run frontend:type-check && pnpm run frontend:test && pnpm run backend:test",
     "qa:prod-transfer": "pnpm --dir PonsWarp run qa:prod-transfer",
-    "release:checklist": "node -e \"const fs=require('fs');const p='deploy/RELEASE-CHECKLIST.md';if(!fs.existsSync(p)){console.error('missing '+p);process.exit(1)};console.log(fs.readFileSync(p,'utf8'));console.log('---\\nRelease checklist OK: run pnpm run qa:prod-transfer after deploy.')\""
+    "qa:prod-transfer:nightly": "bash scripts/nightly-prod-transfer-qa.sh",
+    "release:checklist": "node -e \"const fs=require('fs');const p='deploy/RELEASE-CHECKLIST.md';if(!fs.existsSync(p)){console.error('missing '+p);process.exit(1)};console.log(fs.readFileSync(p,'utf8'));console.log('---\\nRelease checklist OK: run pnpm run qa:prod-transfer after deploy (or pnpm run qa:prod-transfer:nightly).')\""
   },
   "devDependencies": {
     "playwright": "^1.61.1"

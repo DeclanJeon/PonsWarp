@@ -23,6 +23,7 @@ import { orderIceServersPreferDirect } from '../utils/iceServers';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
 import { shouldKeepReceiverReconnectAlive } from '../utils/mobileResumePolicy';
+import { PageWakeLock } from './pageWakeLock';
 
 import { lanEvidenceAdapter } from './lanEvidenceAdapter';
 type EventHandler = (data: unknown) => void;
@@ -64,27 +65,20 @@ export class ReceiverService {
   private currentManifest: TransferManifest | null = null;
   private isTransferActive = false;
   // 🚀 [Mobile] Wake Lock (화면 꺼짐 방지)
-  private wakeLockSentinel: any = null;
+  private readonly pageWakeLock = new PageWakeLock({
+    scope: '[Receiver]',
+    log: { info: logInfo, debug: logDebug },
+    onReleased: () => {
+      if (this.isTransferActive) void this.requestWakeLock();
+    },
+  });
 
   private async requestWakeLock(): Promise<void> {
-    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
-    try {
-      this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
-      logInfo('[Receiver]', '🔒 Wake Lock acquired');
-      this.wakeLockSentinel.addEventListener('release', () => {
-        this.wakeLockSentinel = null;
-        if (this.isTransferActive) this.requestWakeLock();
-      });
-    } catch (e) {
-      logDebug('[Receiver]', 'Wake Lock not available:', e);
-    }
+    await this.pageWakeLock.request();
   }
 
   private releaseWakeLock(): void {
-    if (this.wakeLockSentinel) {
-      this.wakeLockSentinel.release().catch(() => {});
-      this.wakeLockSentinel = null;
-    }
+    this.pageWakeLock.release();
   }
   private isReconnecting = false;
   private reconnectAttempts = 0;
