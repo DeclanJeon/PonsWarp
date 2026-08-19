@@ -205,6 +205,7 @@ REMOTE_PREPARE
   scp_to "$ROOT_DIR/target/release/ponswarp-signaling-rs" "$STAGING_PATH/ponswarp-signaling-rs"
   scp_to "$ROOT_DIR/deploy/Dockerfile.ponswarp-signaling" "$STAGING_PATH/Dockerfile.ponswarp-signaling"
   scp_to "$ROOT_DIR/deploy/nginx/warp.ponslink.com.conf" "$STAGING_PATH/warp.ponslink.com.conf"
+  scp_to "$ROOT_DIR/deploy/nginx/ponswarp-limit-req.conf" "$STAGING_PATH/ponswarp-limit-req.conf"
   # NOTE: deliberately NOT uploading repo .env.production.
   # Runtime env is copied on-host from HOST_ENV_PATH inside the remote script.
 fi
@@ -310,6 +311,8 @@ if [[ "$MODE" == deploy ]]; then
   chmod +x "$staging/ponswarp-signaling-rs"; mkdir -p "$staging/static" /etc/nginx/ponswarp
   sed "s|__PONSWARP_REMOTE_DIR__|$REMOTE_DIR|g" "$staging/warp.ponslink.com.conf" > "$staging/warp.ponslink.com.conf.new"
   mv "$staging/warp.ponslink.com.conf.new" "$staging/warp.ponslink.com.conf"
+  sed "s|__PONSWARP_REMOTE_DIR__|$REMOTE_DIR|g" "$staging/ponswarp-limit-req.conf" > "$staging/ponswarp-limit-req.conf.new"
+  mv "$staging/ponswarp-limit-req.conf.new" "$staging/ponswarp-limit-req.conf"
   # Copy host secrets into staging BEFORE image/finalize (no repo env).
   install_runtime_env_from_host "$staging/.env.production"
   image_tag="ponswarp-signaling:$RELEASE_ID"
@@ -376,6 +379,7 @@ wait_http "http://127.0.0.1:${new_port}/ready" 45 1 || { docker logs "$name" >&2
 rm -f "$current.new"; ln -s "$activation" "$current.new"; mv -Tf "$current.new" "$current"; swapped=1
 install -m 0644 "$release/warp.ponslink.com.conf" /etc/nginx/sites-available/warp.ponslink.com
 ln -sfn /etc/nginx/sites-available/warp.ponslink.com /etc/nginx/sites-enabled/warp.ponslink.com
+install -m 0644 "$release/ponswarp-limit-req.conf" /etc/nginx/conf.d/ponswarp-limit-req.conf
 nginx -t; nginx -s reload; smoke_public
 if [[ -n "$old_current" ]]; then
   old_release_id="$(<"$old_current/release.id")"
