@@ -59,6 +59,8 @@ pub enum ClientMessage {
     RefreshTurnCredentials {
         room_id: String,
         current_username: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credential: Option<String>,
     },
     CheckTurnServerStatus,
 }

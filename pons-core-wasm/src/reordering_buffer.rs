@@ -22,9 +22,15 @@ struct Arena {
 impl Arena {
     fn new() -> Self {
         Self {
-            data: vec![0u8; SLOT_SIZE * MAX_SLOTS],
+            data: Vec::new(),
             free_list: (0..MAX_SLOTS as u16).rev().collect(),
             slot_meta: vec![None; MAX_SLOTS],
+        }
+    }
+
+    fn ensure_capacity(&mut self) {
+        if self.data.is_empty() {
+            self.data = vec![0u8; SLOT_SIZE * MAX_SLOTS];
         }
     }
 
@@ -38,6 +44,7 @@ impl Arena {
     }
 
     fn write(&mut self, slot_idx: u16, data: &[u8], meta: SlotMeta) {
+        self.ensure_capacity();
         let start = slot_idx as usize * SLOT_SIZE;
         let end = start + data.len();
         self.data[start..end].copy_from_slice(data);

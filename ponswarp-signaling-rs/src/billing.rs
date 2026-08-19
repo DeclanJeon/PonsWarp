@@ -29,6 +29,13 @@ pub struct BillingClient {
     lemonsqueezy: Option<LemonSqueezySettings>,
     paypal: Option<PayPalSettings>,
     public_app_url: String,
+    paypal_token_cache: std::sync::Arc<tokio::sync::RwLock<Option<CachedPayPalToken>>>,
+}
+
+#[derive(Clone)]
+struct CachedPayPalToken {
+    token: String,
+    expires_at: std::time::Instant,
 }
 
 #[derive(Clone)]
@@ -247,6 +254,7 @@ impl BillingClient {
                 .public_app_url
                 .trim_end_matches('/')
                 .to_string(),
+            paypal_token_cache: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
         }))
     }
 
@@ -617,6 +625,14 @@ impl BillingClient {
     }
 
     async fn access_token(&self, settings: &PayPalSettings) -> Result<String, BillingError> {
+        {
+            let cache = self.paypal_token_cache.read().await;
+            if let Some(cached) = cache.as_ref() {
+                if std::time::Instant::now() < cached.expires_at {
+                    return Ok(cached.token.clone());
+                }
+            }
+        }
         let value: Value = self
             .http
             .post(format!("{}/v1/oauth2/token", settings.api_base))
@@ -631,11 +647,22 @@ impl BillingClient {
             .await
             .map_err(BillingError::internal)?;
 
-        value
+        let token = value
             .get("access_token")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .ok_or_else(|| BillingError::internal("PayPal did not return an access token"))
+            .ok_or_else(|| BillingError::internal("PayPal did not return an access token"))?;
+        let expires_in = value
+            .get("expires_in")
+            .and_then(Value::as_u64)
+            .unwrap_or(300);
+        let ttl = std::time::Duration::from_secs(expires_in.saturating_sub(60).max(60));
+        let expires_at = std::time::Instant::now() + ttl;
+        {
+            let mut cache = self.paypal_token_cache.write().await;
+            *cache = Some(CachedPayPalToken { token: token.clone(), expires_at });
+        }
+        Ok(token)
     }
 
     async fn post_json(
@@ -685,7 +712,13 @@ impl BillingClient {
 
     fn validate_return_url(&self, return_url: &str) -> Result<String, BillingError> {
         let trimmed = return_url.trim();
-        if !trimmed.starts_with(&self.public_app_url) {
+        let parsed = url::Url::parse(trimmed).map_err(|_| {
+            BillingError::bad_request("Checkout returnUrl is not a valid URL")
+        })?;
+        let allowed = url::Url::parse(&self.public_app_url).map_err(|_| {
+            BillingError::internal("Billing public_app_url is not a valid URL")
+        })?;
+        if parsed.scheme() != allowed.scheme() || parsed.host_str() != allowed.host_str() || parsed.port() != allowed.port() {
             return Err(BillingError::bad_request(
                 "Checkout returnUrl is not allowed for this deployment",
             ));

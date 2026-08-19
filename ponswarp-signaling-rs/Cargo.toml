@@ -52,6 +52,12 @@ uuid = { version = "1", features = ["v4"] }
 # Random
 rand = "0.8"
 
+# URL parsing (billing origin check)
+url = "2"
+
+# Constant-time comparison (TURN HMAC)
+subtle = "2"
+
 # Async utilities
 futures = "0.3"
 

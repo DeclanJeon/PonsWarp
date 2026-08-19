@@ -103,7 +103,12 @@ impl Lz4Compressor {
             return Ok(Vec::new());
         }
 
-        let mut output = Vec::with_capacity(original_size);
+        const MAX_DECOMPRESS_SIZE: usize = 256 * 1024 * 1024;
+        if original_size > MAX_DECOMPRESS_SIZE {
+            return Err(JsValue::from_str("Decompressed size exceeds limit"));
+        }
+
+        let mut output = Vec::with_capacity(original_size.min(1024 * 1024));
         let mut pos = 4;
 
         while pos < input.len() && output.len() < original_size {

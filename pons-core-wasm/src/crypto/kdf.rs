@@ -144,14 +144,15 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     sha256(&outer)
 }
 
-/// HKDF-Extract (RFC 5869)
+/// HKDF-Extract (RFC 5869) — salt > hash_len is hashed first
 fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
     let actual_salt = if salt.is_empty() {
         [0u8; SHA256_OUTPUT_SIZE]
+    } else if salt.len() > SHA256_OUTPUT_SIZE {
+        sha256(salt)
     } else {
         let mut s = [0u8; SHA256_OUTPUT_SIZE];
-        let len = salt.len().min(SHA256_OUTPUT_SIZE);
-        s[..len].copy_from_slice(&salt[..len]);
+        s[..salt.len()].copy_from_slice(salt);
         s
     };
 

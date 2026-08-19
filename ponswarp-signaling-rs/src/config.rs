@@ -277,7 +277,10 @@ impl Config {
                 .split(',')
                 .filter(|origin| !origin.trim().is_empty())
                 .map(|origin| {
-                    CanonicalOrigin::parse(origin).unwrap_or_else(|error| panic!("{error}"))
+                    CanonicalOrigin::parse(origin).unwrap_or_else(|error| {
+                        tracing::error!("Invalid LAN_EVIDENCE_WS_ORIGINS entry: {error}");
+                        panic!("{error}")
+                    })
                 })
                 .collect()
         } else {
@@ -317,7 +320,10 @@ impl Config {
                 storage: env::var("PONSWARP_MESH_STORAGE")
                     .map(|value| MeshStorage::from_env_value(&value))
                     .unwrap_or(Ok(MeshStorage::Memory))
-                    .unwrap_or_else(|err| panic!("{err}")),
+                    .unwrap_or_else(|err| {
+                        tracing::error!("Invalid PONSWARP_MESH_STORAGE: {err}");
+                        panic!("{err}")
+                    }),
                 auto_approve_nodes: env::var("PONSWARP_MESH_AUTO_APPROVE_NODES")
                     .map(|v| v == "true")
                     .unwrap_or(false),

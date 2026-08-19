@@ -88,7 +88,11 @@ impl AppState {
             cloud,
             cloud_db,
             billing,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(20)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             mesh,
             mesh_repository,
             mesh_metrics,

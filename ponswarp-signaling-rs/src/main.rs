@@ -351,8 +351,11 @@ async fn handle_client_message(
         ClientMessage::RefreshTurnCredentials {
             room_id,
             current_username,
+            credential,
         } => {
-            if handlers::validate_credentials(&current_username) {
+            let secret = state.config.turn.secret.clone();
+            let cred_str = credential.as_deref().unwrap_or("");
+            if handlers::validate_credentials(&current_username, &secret, cred_str) {
                 let _ = sender.send(ServerMessage::TurnConfig {
                     success: true,
                     data: None,

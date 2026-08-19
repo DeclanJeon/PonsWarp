@@ -4,6 +4,14 @@ use crate::protocol::ServerMessage;
 use crate::state::AppState;
 use std::sync::Arc;
 
+pub const MAX_SDP_BYTES: usize = 256 * 1024;
+pub const MAX_CANDIDATE_BYTES: usize = 4 * 1024;
+pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+
+fn payload_too_large(len: usize, limit: usize) -> bool {
+    len > limit
+}
+
 /// Offer 처리
 pub async fn handle_offer(
     state: Arc<AppState>,
@@ -12,6 +20,10 @@ pub async fn handle_offer(
     sdp: &str,
     target: Option<&str>,
 ) {
+    if payload_too_large(sdp.len(), MAX_SDP_BYTES) {
+        tracing::warn!(room_id = %room_id, from = %from_peer_id, len = sdp.len(), "Offer SDP too large, dropping");
+        return;
+    }
     let message = ServerMessage::Offer {
         from: from_peer_id.to_string(),
         sdp: sdp.to_string(),
@@ -39,6 +51,10 @@ pub async fn handle_answer(
     sdp: &str,
     target: Option<&str>,
 ) {
+    if payload_too_large(sdp.len(), MAX_SDP_BYTES) {
+        tracing::warn!(room_id = %room_id, from = %from_peer_id, len = sdp.len(), "Answer SDP too large, dropping");
+        return;
+    }
     let message = ServerMessage::Answer {
         from: from_peer_id.to_string(),
         sdp: sdp.to_string(),
@@ -66,6 +82,10 @@ pub async fn handle_ice_candidate(
     candidate: &str,
     target: Option<&str>,
 ) {
+    if payload_too_large(candidate.len(), MAX_CANDIDATE_BYTES) {
+        tracing::warn!(room_id = %room_id, from = %from_peer_id, len = candidate.len(), "ICE candidate too large, dropping");
+        return;
+    }
     let message = ServerMessage::IceCandidate {
         from: from_peer_id.to_string(),
         candidate: candidate.to_string(),
@@ -93,6 +113,10 @@ pub async fn handle_manifest(
     manifest: &str,
     target: Option<&str>,
 ) {
+    if payload_too_large(manifest.len(), MAX_MANIFEST_BYTES) {
+        tracing::warn!(room_id = %room_id, from = %from_peer_id, len = manifest.len(), "Manifest too large, dropping");
+        return;
+    }
     let message = ServerMessage::Manifest {
         from: from_peer_id.to_string(),
         manifest: manifest.to_string(),

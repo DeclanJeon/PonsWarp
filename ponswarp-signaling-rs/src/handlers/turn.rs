@@ -200,18 +200,27 @@ fn normalize_turn_host(raw: &str) -> String {
     host.to_string()
 }
 
-/// 자격증명 유효성 검증
-pub fn validate_credentials(username: &str) -> bool {
-    if let Some(expiry_str) = username.split(':').next_back() {
-        if let Ok(expiry_time) = expiry_str.parse::<u64>() {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            return expiry_time > now;
-        }
+/// 자격증명 유효성 검증 (HMAC-SHA1 + 만료)
+pub fn validate_credentials(username: &str, secret: &str, credential: &str) -> bool {
+    let Some(expiry_str) = username.split(':').next_back() else {
+        return false;
+    };
+    let Ok(expiry_time) = expiry_str.parse::<u64>() else {
+        return false;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if expiry_time <= now {
+        return false;
     }
-    false
+    if secret.is_empty() || credential.is_empty() {
+        return false;
+    }
+    let expected = generate_hmac_hash(username, secret);
+    use subtle::ConstantTimeEq;
+    expected.as_bytes().ct_eq(credential.as_bytes()).unwrap_u8() == 1
 }
 
 #[cfg(test)]

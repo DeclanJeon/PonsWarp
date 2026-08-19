@@ -1405,6 +1405,13 @@ pub async fn record_share_event(
     (StatusCode::OK, Json(json!({ "eventId": event_id })))
 }
 
+fn allow_insecure_memory_mesh() -> bool {
+    std::env::var("PONSWARP_MESH_ALLOW_INSECURE_MEMORY")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+        || cfg!(debug_assertions)
+}
+
 fn authorize_mesh_action(
     headers: &HeaderMap,
     state: &AppState,
@@ -1412,7 +1419,13 @@ fn authorize_mesh_action(
     action: WorkspaceAction,
 ) -> Option<(StatusCode, Json<Value>)> {
     if state.config.mesh.storage != MeshStorage::Postgres {
-        return None;
+        if allow_insecure_memory_mesh() {
+            return None;
+        }
+        return Some((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "mesh_forbidden" })),
+        ));
     }
 
     let Some(header) = headers.get(axum::http::header::AUTHORIZATION) else {
@@ -1517,9 +1530,15 @@ async fn authorize_workspace_or_node_action(
     flow: &str,
 ) -> Result<Actor, (StatusCode, Json<Value>)> {
     if state.config.mesh.storage != MeshStorage::Postgres {
-        return Ok(Actor::Admin {
-            user_id: "mesh-dev".to_string(),
-        });
+        if allow_insecure_memory_mesh() {
+            return Ok(Actor::Admin {
+                user_id: "mesh-dev".to_string(),
+            });
+        }
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "mesh_forbidden" })),
+        ));
     }
 
     let Some(token) = bearer_token(headers) else {
