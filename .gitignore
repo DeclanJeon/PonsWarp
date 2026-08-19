@@ -1,3 +1,6 @@
+# CommandCode local state
+.commandcode/
+
 # Workspace state and build outputs
 .gjc/
 artifacts/

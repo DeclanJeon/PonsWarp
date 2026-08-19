@@ -3,7 +3,7 @@ services:
     image: rust:1.85-bookworm
     working_dir: /workspace/ponswarp-signaling-rs
     volumes:
-      - ..:/workspace
+      - .:/workspace:cached
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
       - root-target:/workspace/target
@@ -27,15 +27,23 @@ services:
       DATABASE_RUN_MIGRATIONS: "false"
     ports:
       - "5502:5502"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5502/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
     command: cargo run --locked
 
   frontend:
     image: node:20-bookworm-slim
     working_dir: /workspace/PonsWarp
     depends_on:
-      - signaling
+      signaling:
+        condition: service_healthy
     volumes:
-      - ..:/workspace
+      - .:/workspace:cached
       - pnpm-store:/pnpm/store
       - root-node-modules:/workspace/node_modules
       - root-target:/workspace/target
@@ -46,6 +54,7 @@ services:
       VITE_CLOUD_API_BASE_URL: http://localhost:5502
     ports:
       - "3500:3500"
+    restart: unless-stopped
     command: >
       sh -lc "cd /workspace &&
       corepack enable && corepack prepare pnpm@8.15.9 --activate &&
