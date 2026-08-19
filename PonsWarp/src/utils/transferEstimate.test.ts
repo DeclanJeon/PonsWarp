@@ -33,7 +33,10 @@ describe('transferEstimate', () => {
     );
 
     expect(first.bytesPerSecond).toBe(0);
-    expect(second.bytesPerSecond).toBeCloseTo(1_000 / (MIN_SPEED_SAMPLE_MS / 1000), 0);
+    expect(second.bytesPerSecond).toBeCloseTo(
+      1_000 / (MIN_SPEED_SAMPLE_MS / 1000),
+      0
+    );
   });
 
   it('smooths rolling speed after the first measured sample', () => {

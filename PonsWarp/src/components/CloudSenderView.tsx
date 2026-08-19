@@ -139,9 +139,14 @@ const CloudSenderView: React.FC = () => {
   const [status, setStatusState] = useState<CloudUploadStatus>('IDLE');
   const setStatus = (next: CloudUploadStatus) => {
     setStatusState(next);
-    useTransferStore.setState({ status: next as any, mode: AppMode.CLOUD_SENDER });
+    useTransferStore.setState({
+      status: next as any,
+      mode: AppMode.CLOUD_SENDER,
+    });
   };
-  const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(null);
+  const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(
+    null
+  );
   const [manifest, setManifest] = useState<TransferManifest | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
@@ -271,9 +276,12 @@ const CloudSenderView: React.FC = () => {
         return;
       }
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const dropped = await snapshotFileListProgressive(e.dataTransfer.files, {
-          onProgress: handleScanProgress,
-        });
+        const dropped = await snapshotFileListProgressive(
+          e.dataTransfer.files,
+          {
+            onProgress: handleScanProgress,
+          }
+        );
         const scanned = await processInputFiles(dropped, {
           onProgress: handleScanProgress,
         });
@@ -302,9 +310,8 @@ const CloudSenderView: React.FC = () => {
       phase: 'done',
     });
 
-    const { manifest: nextManifest } = await createManifestProgressive(
-      scannedFiles
-    );
+    const { manifest: nextManifest } =
+      await createManifestProgressive(scannedFiles);
     const oversizedFile = scannedFiles.find(
       item => item.file.size > freePlan.maxFileBytes
     );
@@ -549,7 +556,8 @@ const CloudSenderView: React.FC = () => {
             </p>
             <p className="text-4xl font-mono font-black text-emerald-300">
               {scanProgress?.scannedFiles ?? 0}
-              {typeof scanProgress?.totalHint === 'number' && scanProgress.totalHint > 0 ? (
+              {typeof scanProgress?.totalHint === 'number' &&
+              scanProgress.totalHint > 0 ? (
                 <span className="text-lg text-gray-500">
                   {' '}
                   / {scanProgress.totalHint}

@@ -109,7 +109,11 @@ export const usePreventNavigation = () => {
 
     // Seed a history entry so the first Back stays inside the transfer UI.
     try {
-      window.history.pushState({ ponswarpTransferGuard: true }, '', currentUrl());
+      window.history.pushState(
+        { ponswarpTransferGuard: true },
+        '',
+        currentUrl()
+      );
     } catch {
       // ignore
     }

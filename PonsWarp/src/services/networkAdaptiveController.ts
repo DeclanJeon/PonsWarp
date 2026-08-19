@@ -139,8 +139,6 @@ export class NetworkAdaptiveController {
       );
     }
 
-
-
     // 3. 배치 크기 조정
     // 윈도우 크기에 비례하여 한 번에 가져올 배치 크기 결정
     const targetBatchBytes = this.congestionState.cwnd * 0.2; // 윈도우의 20% 정도를 배치로

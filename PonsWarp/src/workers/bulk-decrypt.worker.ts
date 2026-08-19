@@ -100,8 +100,7 @@ self.onmessage = (event: MessageEvent<InMsg>) => {
         return;
       }
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       const id =
         msg && typeof msg === 'object' && 'payload' in msg
           ? // @ts-expect-error id optional
@@ -111,4 +110,3 @@ self.onmessage = (event: MessageEvent<InMsg>) => {
     }
   })();
 };
-

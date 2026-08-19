@@ -1,16 +1,28 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createReceiverUseCase, createSenderUseCase, createCloudDropUseCase } from './useCases';
+import {
+  createReceiverUseCase,
+  createSenderUseCase,
+  createCloudDropUseCase,
+} from './useCases';
 
 function ports() {
   let onMessage: (value: unknown) => void = () => undefined;
   const peer = {
     connect: async () => undefined,
     send: async () => undefined,
-    onMessage: (handler: (value: unknown) => void) => { onMessage = handler; return () => undefined; },
+    onMessage: (handler: (value: unknown) => void) => {
+      onMessage = handler;
+      return () => undefined;
+    },
   };
   return {
     peer: { create: async () => peer },
-    signaling: { connect: async () => undefined, join: async () => undefined, send: async () => undefined, onMessage: () => () => undefined },
+    signaling: {
+      connect: async () => undefined,
+      join: async () => undefined,
+      send: async () => undefined,
+      onMessage: () => () => undefined,
+    },
     emit: (value: unknown) => onMessage(value),
   };
 }
@@ -23,17 +35,46 @@ describe('transfer application use cases', () => {
     await sender.sendChunk('chunk', 10, 1);
     await sender.sendChunk('duplicate', 10, 1);
     await sender.complete();
-    expect(sender.events.map(event => event.type)).toEqual(['connect', 'connected', 'ready', 'progress', 'duplicate-chunk', 'complete']);
+    expect(sender.events.map(event => event.type)).toEqual([
+      'connect',
+      'connected',
+      'ready',
+      'progress',
+      'duplicate-chunk',
+      'complete',
+    ]);
     expect(sender.state.bytes).toBe(10);
   });
 
   it('persists each receiver chunk once', async () => {
     const fake = ports();
     const writes: unknown[] = [];
-    const receiver = createReceiverUseCase({ ...fake, writer: { write: async chunk => { writes.push(chunk); } } }, 4);
+    const receiver = createReceiverUseCase(
+      {
+        ...fake,
+        writer: {
+          write: async chunk => {
+            writes.push(chunk);
+          },
+        },
+      },
+      4
+    );
     await receiver.join('room');
-    fake.emit({ type: 'chunk', data: 'data', bytes: 4, totalBytes: 4, chunkId: 'a' });
-    fake.emit({ type: 'chunk', data: 'again', bytes: 4, totalBytes: 4, chunkId: 'a' });
+    fake.emit({
+      type: 'chunk',
+      data: 'data',
+      bytes: 4,
+      totalBytes: 4,
+      chunkId: 'a',
+    });
+    fake.emit({
+      type: 'chunk',
+      data: 'again',
+      bytes: 4,
+      totalBytes: 4,
+      chunkId: 'a',
+    });
     await Promise.resolve();
     expect(writes).toEqual(['data']);
   });
@@ -42,31 +83,35 @@ describe('transfer application use cases', () => {
     let timeoutCallback: (() => void) | undefined;
     const close = vi.fn(async () => undefined);
     const leave = vi.fn(async () => undefined);
-    const sender = createSenderUseCase({
-      peer: {
-        create: async () => ({
+    const sender = createSenderUseCase(
+      {
+        peer: {
+          create: async () => ({
+            connect: async () => undefined,
+            close,
+            send: async () => undefined,
+            onMessage: () => () => undefined,
+          }),
+        },
+        signaling: {
           connect: async () => undefined,
-          close,
+          join: async () => undefined,
+          leave,
           send: async () => undefined,
           onMessage: () => () => undefined,
-        }),
-      },
-      signaling: {
-        connect: async () => undefined,
-        join: async () => undefined,
-        leave,
-        send: async () => undefined,
-        onMessage: () => () => undefined,
-      },
-      clock: {
-        now: () => 1,
-        setTimeout: callback => {
-          timeoutCallback = callback;
-          return 1;
         },
-        clearTimeout: () => undefined,
+        clock: {
+          now: () => 1,
+          setTimeout: callback => {
+            timeoutCallback = callback;
+            return 1;
+          },
+          clearTimeout: () => undefined,
+        },
       },
-    }, 10, 100);
+      10,
+      100
+    );
 
     await sender.connect();
     timeoutCallback?.();
@@ -80,9 +125,18 @@ describe('transfer application use cases', () => {
   it('delegates cloud drop lifecycle exactly once', async () => {
     const calls: string[] = [];
     const drop = createCloudDropUseCase({
-      create: async input => { calls.push(`create:${String(input)}`); return 'id'; },
-      upload: async id => { calls.push(`upload:${id}`); return undefined; },
-      complete: async id => { calls.push(`complete:${id}`); return undefined; },
+      create: async input => {
+        calls.push(`create:${String(input)}`);
+        return 'id';
+      },
+      upload: async id => {
+        calls.push(`upload:${id}`);
+        return undefined;
+      },
+      complete: async id => {
+        calls.push(`complete:${id}`);
+        return undefined;
+      },
       cancel: async () => undefined,
     });
     const id = await drop.create('manifest');

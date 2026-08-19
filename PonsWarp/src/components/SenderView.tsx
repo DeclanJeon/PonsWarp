@@ -1,10 +1,4 @@
 import { debugLog } from '../utils/logger';
-/* 🪲 [DEBUG] SenderView UI/UX 개선 시작 */
-debugLog('[SenderView] 🪲 [DEBUG] UI/UX Enhancement Started:');
-debugLog('[SenderView] 🪲 [DEBUG] - Applying focal point principles');
-debugLog('[SenderView] 🪲 [DEBUG] - Implementing gestalt proximity grouping');
-debugLog('[SenderView] 🪲 [DEBUG] - Adding responsive layout improvements');
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -18,7 +12,7 @@ import {
   AlertTriangle,
   Users,
 } from 'lucide-react';
-import { SwarmManager, MAX_DIRECT_PEERS } from '../services/swarmManager';
+import { SwarmManager } from '../services/swarmManager';
 import { lanEvidenceAdapter } from '../services/lanEvidenceAdapter';
 import { createManifestProgressive, formatBytes } from '../utils/fileUtils';
 import {
@@ -58,9 +52,6 @@ type SenderProgressPayload = {
   protocol?: string | null;
   relayProtocol?: string | null;
   rttMs?: number | null;
-  hybridArmed?: boolean;
-  hybridArmReason?: string;
-  hybridBytesUploaded?: number;
 };
 
 const directoryInputProps: DirectoryInputProps = { webkitdirectory: '' };
@@ -81,7 +72,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<SenderStatus>('IDLE');
   const [isOpeningRoom, setIsOpeningRoom] = useState(false);
-  const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(null);
+  const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(
+    null
+  );
   const setTransferStatus = useCallback(
     (next: SenderStatus | ((prev: SenderStatus) => SenderStatus)) => {
       setStatus(prev => {
@@ -100,7 +93,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
     return () => {
       // Only clear if still on sender status and not actively receiving elsewhere.
       const current = useTransferStore.getState();
-      if (current.mode === AppMode.SENDER && current.status !== 'TRANSFERRING') {
+      if (
+        current.mode === AppMode.SENDER &&
+        current.status !== 'TRANSFERRING'
+      ) {
         // leave mode as-is; App owns mode transitions
       }
     };
@@ -114,9 +110,6 @@ const SenderView: React.FC<SenderViewProps> = () => {
     hostAddressScope: null as string | null,
     protocol: null as string | null,
     rttMs: null as number | null,
-    hybridArmed: false,
-    hybridArmReason: '',
-    hybridBytesUploaded: 0,
   });
   const estimatedSecondsRemaining = estimateRemainingSeconds(
     progressData.bytesTransferred,
@@ -129,14 +122,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
     progressData.speed
   );
 
-  // 🚀 [Multi-Receiver] 피어 상태 추적
+  // 🚀 [1:1] 연결된 수신자 추적 (단일 피어)
   const [connectedPeers, setConnectedPeers] = useState<string[]>([]);
   const [readyPeers, setReadyPeers] = useState<string[]>([]);
   const [readyCountdown, setReadyCountdown] = useState<number | null>(null);
-  const [completedPeers, setCompletedPeers] = useState<string[]>([]);
-  const [queuedPeers, setQueuedPeers] = useState<string[]>([]);
-  const [waitingPeersCount, setWaitingPeersCount] = useState(0);
-  const [currentTransferPeerCount, setCurrentTransferPeerCount] = useState(0);
 
   // SwarmManager 인스턴스
   const swarmManagerRef = useRef<SwarmManager | null>(null);
@@ -242,7 +231,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setTransferStatus('IDLE');
     });
 
-    // 🚀 [Multi-Receiver] 피어 이벤트
+    // 🚀 [1:1] 피어 이벤트 (단일 수신자)
     swarmManager.on('peer-connected', (peerId: string) => {
       setConnectedPeers((prev: string[]) => [...prev, peerId]);
     });
@@ -260,7 +249,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setReadyPeers((prev: string[]) => [...prev, peerId]);
     });
 
-    // 🚀 [Multi-Receiver] Ready 카운트다운 이벤트
+    // Ready 카운트다운 이벤트
     let countdownInterval: ReturnType<typeof setInterval> | null = null;
 
     swarmManager.on(
@@ -293,11 +282,10 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setReadyCountdown(null); // 카운트다운 종료
     });
 
-    // 🚀 [Multi-Receiver] 전송 배치 시작 이벤트
+    // 전송 시작 이벤트
     swarmManager.on(
       'transfer-batch-start',
-      ({ peerCount }: { peerCount: number }) => {
-        setCurrentTransferPeerCount(peerCount);
+      ({ peerCount: _peerCount }: { peerCount: number }) => {
         setTransferStatus('TRANSFERRING');
       }
     );
@@ -306,51 +294,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setTransferStatus('REMOTE_PROCESSING');
     });
 
-    // 🚀 [Multi-Receiver] 피어 완료 이벤트
-    swarmManager.on('peer-complete', (peerId: string) => {
-      setCompletedPeers((prev: string[]) => [...prev, peerId]);
-      // 완료된 피어는 readyPeers에서 제거
-      setReadyPeers((prev: string[]) =>
-        prev.filter((id: string) => id !== peerId)
-      );
-    });
-
-    // 🚀 [Multi-Receiver] 피어 대기열 추가 이벤트
-    swarmManager.on('peer-queued', ({ peerId }: { peerId: string }) => {
-      setQueuedPeers((prev: string[]) => [...prev, peerId]);
-    });
-
-    // 🚀 [Multi-Receiver] 다음 전송 준비 상태
-    swarmManager.on(
-      'ready-for-next',
-      ({ waitingCount }: { waitingCount: number }) => {
-        setWaitingPeersCount(waitingCount);
-        setTransferStatus('READY_FOR_NEXT');
-      }
-    );
-
-    // 🚀 [Multi-Receiver] 배치 완료 (대기 중인 피어 없음)
-    swarmManager.on('batch-complete', () => {
-      // 대기 중인 피어가 없으면 READY_FOR_NEXT로 전환
-      setTransferStatus('READY_FOR_NEXT');
-    });
-
-    // 🚀 [Multi-Receiver] 다음 전송 준비 중
-    swarmManager.on(
-      'preparing-next-transfer',
-      ({ queueSize }: { queueSize: number }) => {
-        setCurrentTransferPeerCount(queueSize);
-        setQueuedPeers([]); // 대기열 초기화
-        setTransferStatus('TRANSFERRING');
-      }
-    );
-
-    // 🚀 [Multi-Receiver] 대기열 처리 완료 이벤트
-    swarmManager.on('queue-cleared', () => {
-      setQueuedPeers([]); // 대기열 UI 초기화
-    });
-
-    // 🚀 [Multi-Receiver] 진행률 리셋 (새 전송 시작 시)
+    // 진행률 리셋 (새 전송 시작 시)
     swarmManager.on('progress', (data: SenderProgressPayload) => {
       const pathMeta = {
         pathKind: data.candidatePathKind || 'unknown',
@@ -360,12 +304,6 @@ const SenderView: React.FC<SenderViewProps> = () => {
             : null,
         protocol: data.protocol ?? null,
         rttMs: typeof data.rttMs === 'number' ? data.rttMs : null,
-        hybridArmed: data.hybridArmed === true,
-        hybridArmReason: data.hybridArmReason || '',
-        hybridBytesUploaded:
-          typeof data.hybridBytesUploaded === 'number'
-            ? data.hybridBytesUploaded
-            : 0,
       };
       // 진행률이 0으로 리셋되면 새 전송 시작
       if (data.progress === 0 && data.totalBytesSent === 0) {
@@ -474,9 +412,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       console.error('[SenderView] file scan failed:', error);
       setScanProgress(null);
       setTransferStatus('IDLE');
-      alert(
-        `Failed to load files: ${getErrorMessage(error, 'Unknown error')}`
-      );
+      alert(`Failed to load files: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
@@ -511,9 +447,12 @@ const SenderView: React.FC<SenderViewProps> = () => {
         });
         await processScannedFiles(scannedFiles);
       } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const dropped = await snapshotFileListProgressive(e.dataTransfer.files, {
-          onProgress: handleScanProgress,
-        });
+        const dropped = await snapshotFileListProgressive(
+          e.dataTransfer.files,
+          {
+            onProgress: handleScanProgress,
+          }
+        );
         const scannedFiles = await processInputFiles(dropped, {
           onProgress: handleScanProgress,
         });
@@ -527,9 +466,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
       console.error('[SenderView] drop scan failed:', error);
       setScanProgress(null);
       setTransferStatus('IDLE');
-      alert(
-        `Failed to load files: ${getErrorMessage(error, 'Unknown error')}`
-      );
+      alert(`Failed to load files: ${getErrorMessage(error, 'Unknown error')}`);
     }
   };
 
@@ -640,7 +577,8 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </p>
             <p className="text-4xl font-mono font-black text-cyan-300">
               {scanProgress?.scannedFiles ?? 0}
-              {typeof scanProgress?.totalHint === 'number' && scanProgress.totalHint > 0 ? (
+              {typeof scanProgress?.totalHint === 'number' &&
+              scanProgress.totalHint > 0 ? (
                 <span className="text-lg text-gray-500">
                   {' '}
                   / {scanProgress.totalHint}
@@ -723,7 +661,6 @@ const SenderView: React.FC<SenderViewProps> = () => {
           </motion.div>
         )}
 
-
         {/* --- STATE: WAITING (QR & Room ID) --- */}
         {status === 'WAITING' && roomId && shareLink && (
           <motion.div
@@ -780,24 +717,28 @@ const SenderView: React.FC<SenderViewProps> = () => {
               </div>
             </div>
 
-            {/* Peer Status Indicators (Visual Hierarchy) */}
+            {/* 연결 상태 표시 (1:1) */}
             <div className="w-full bg-gray-900/40 p-3 md:p-4 rounded-xl mb-2 md:mb-4 border border-gray-700/50 backdrop-blur-sm">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2 text-sm text-gray-300">
                   <Users size={14} className="text-cyan-400" />
-                  <span>Receivers</span>
+                  <span>Receiver</span>
                 </div>
                 <span className="text-xs font-mono text-gray-500">
-                  {connectedPeers.length}/{MAX_DIRECT_PEERS} MAX
+                  {connectedPeers.length > 0
+                    ? readyPeers.length > 0
+                      ? 'READY'
+                      : 'CONNECTED'
+                    : 'WAITING'}
                 </span>
               </div>
               <div className="flex gap-2">
-                {[...Array(MAX_DIRECT_PEERS)].map((_, i) => (
+                {[...Array(1)].map((_, i) => (
                   <div
                     key={i}
                     className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${
-                      i < connectedPeers.length
-                        ? readyPeers.length > i
+                      connectedPeers.length > 0
+                        ? readyPeers.length > 0
                           ? 'bg-green-500 shadow-[0_0_10px_#22c55e]'
                           : 'bg-cyan-500 shadow-[0_0_10px_#06b6d4]'
                         : 'bg-gray-800'
@@ -868,22 +809,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
               </p>
             </div>
 
-            {/* Peer Status Badge */}
+            {/* 수신자 상태 배지 (1:1) */}
             <div className="flex flex-wrap justify-center gap-2 sm:gap-3">
               <div className="flex items-center gap-2 bg-gray-900/60 px-4 py-2 rounded-full border border-gray-700 backdrop-blur-sm">
                 <Users size={14} className="text-cyan-400" />
                 <span className="text-xs text-gray-300 font-mono">
-                  Sending to {currentTransferPeerCount || readyPeers.length}{' '}
-                  peer(s)
+                  Sending to 1 peer
                 </span>
               </div>
-              {queuedPeers.length > 0 && (
-                <div className="flex items-center gap-2 bg-yellow-900/40 px-4 py-2 rounded-full border border-yellow-700/50 backdrop-blur-sm">
-                  <span className="text-xs text-yellow-400 font-bold">
-                    +{queuedPeers.length} Queued
-                  </span>
-                </div>
-              )}
             </div>
 
             {/* Progress Bar (Visual) */}
@@ -913,9 +846,6 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 protocol: progressData.protocol,
                 hostAddressScope: progressData.hostAddressScope,
                 rttMs: progressData.rttMs,
-                hybridArmed: progressData.hybridArmed,
-                hybridArmReason: progressData.hybridArmReason,
-                hybridBytesUploaded: progressData.hybridBytesUploaded,
               })}
             </p>
             <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4 md:gap-4">
@@ -990,7 +920,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
           </motion.div>
         )}
 
-        {/* 🚀 [Multi-Receiver] 다음 전송 대기 상태 */}
+        {/* 전송 완료 (1:1) */}
         {status === 'READY_FOR_NEXT' && (
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
@@ -1002,72 +932,21 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             <h2 className="text-2xl font-bold text-white mb-2">
-              Transfer Batch Complete
+              Transfer Complete
             </h2>
             <p className="text-gray-400 mb-4">
-              {completedPeers.length} receiver(s) have successfully downloaded
-              the files.
+              The receiver has successfully downloaded the files.
             </p>
 
-            {/* 피어 상태 표시 */}
-            <div className="w-full bg-gray-900/50 p-4 rounded-lg mb-6 border border-gray-700">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-cyan-400" />
-                  <span className="text-sm text-gray-300">Receiver Status</span>
-                </div>
-              </div>
-              <div className="space-y-2 text-left">
-                {connectedPeers.map((peerId: string, i: number) => (
-                  <div
-                    key={peerId}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <span className="text-gray-400">Receiver {i + 1}</span>
-                    <span
-                      className={`px-2 py-1 rounded text-xs ${
-                        completedPeers.includes(peerId)
-                          ? 'bg-green-900/50 text-green-400'
-                          : queuedPeers.includes(peerId)
-                            ? 'bg-yellow-900/50 text-yellow-400'
-                            : 'bg-gray-800 text-gray-400'
-                      }`}
-                    >
-                      {completedPeers.includes(peerId)
-                        ? '✓ Complete'
-                        : queuedPeers.includes(peerId)
-                          ? '⏳ In Queue'
-                          : '○ Waiting'}
-                    </span>
-                  </div>
-                ))}
+            <div className="bg-black/40 p-4 rounded-xl text-left flex gap-3 border border-gray-700 mb-4">
+              <AlertTriangle className="w-6 h-6 text-gray-500 flex-shrink-0" />
+              <div className="text-sm text-gray-300">
+                <p className="font-bold text-white mb-1">
+                  No more receivers waiting
+                </p>
+                <p>You can send another file or close this window.</p>
               </div>
             </div>
-
-            {waitingPeersCount > 0 ? (
-              <div className="bg-black/40 p-4 rounded-xl text-left flex gap-3 border border-cyan-500/20 mb-4">
-                <Loader2 className="w-6 h-6 text-cyan-500 animate-spin flex-shrink-0" />
-                <div className="text-sm text-gray-300">
-                  <p className="font-bold text-white mb-1">
-                    Waiting for {waitingPeersCount} more receiver(s)
-                  </p>
-                  <p>
-                    Keep this window open. Transfer will start automatically
-                    when they click &quot;Start Download&quot;.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-black/40 p-4 rounded-xl text-left flex gap-3 border border-gray-700 mb-4">
-                <AlertTriangle className="w-6 h-6 text-gray-500 flex-shrink-0" />
-                <div className="text-sm text-gray-300">
-                  <p className="font-bold text-white mb-1">
-                    No more receivers waiting
-                  </p>
-                  <p>You can send another file or close this window.</p>
-                </div>
-              </div>
-            )}
 
             <button
               onClick={() => window.location.reload()}
@@ -1093,7 +972,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
               SUCCESS
             </h2>
             <p className="text-gray-400 text-lg mb-10 max-w-md mx-auto">
-              All transfers have been completed successfully.
+              Transfer completed successfully.
             </p>
 
             <button

@@ -6,10 +6,7 @@ import {
   snapshotFileList,
   snapshotFileListProgressive,
 } from './fileScanner';
-import {
-  createManifest,
-  createManifestProgressive,
-} from './fileUtils';
+import { createManifest, createManifestProgressive } from './fileUtils';
 
 function makeFileList(files: File[]): FileList {
   const list = {
@@ -55,10 +52,13 @@ describe('processInputFiles progressive', () => {
     });
 
     const onProgress = vi.fn();
-    const scanned = await processInputFiles(makeFileList([keep, junk, hidden]), {
-      chunkSize: 1,
-      onProgress,
-    });
+    const scanned = await processInputFiles(
+      makeFileList([keep, junk, hidden]),
+      {
+        chunkSize: 1,
+        onProgress,
+      }
+    );
 
     expect(scanned).toEqual([{ file: keep, path: 'folder/a.txt' }]);
     expect(onProgress).toHaveBeenCalled();

@@ -1,13 +1,3 @@
-// 🚨 [DEBUG] 아키텍처 불일치 진단 로그 추가
-debugLog('[SwarmManager] ✅ [DEBUG] ARCHITECTURE CONSISTENT:');
-debugLog(
-  '[SwarmManager] ✅ [DEBUG] - Using SinglePeerConnection class (correct)'
-);
-debugLog('[SwarmManager] ✅ [DEBUG] - SenderView uses SwarmManager (correct)');
-debugLog(
-  '[SwarmManager] ✅ [DEBUG] - Dedicated Sender-only implementation (correct)'
-);
-
 import {
   SinglePeerConnection,
   PeerConfig,
@@ -52,7 +42,6 @@ import {
   uploadHybridAssistObject,
   type HybridManifestMsg,
   type HybridPeerCaps,
-  type HybridReadyMsg,
 } from './hybridBulkTransport';
 import {
   calculateSafeBatchRequestSize,
@@ -197,7 +186,6 @@ export class SwarmManager {
   private hybridPackets: ArrayBuffer[] = [];
   private hybridPrebuilt = false;
   private hybridUploadStarted = false;
-
 
   private stripeRrCounter = 0;
   private verifiedStripeKeys: Set<string> = new Set();
@@ -369,7 +357,10 @@ export class SwarmManager {
         this.awaitingReceiverReconnect ||
         this.files.length > 0
       ) {
-        logWarn('[SwarmManager]', '📱 All peers disconnected during background');
+        logWarn(
+          '[SwarmManager]',
+          '📱 All peers disconnected during background'
+        );
         this.emit('status', 'RECONNECTING');
         this.recoverSignalingAfterBackground();
       }
@@ -417,7 +408,10 @@ export class SwarmManager {
         new SinglePeerConnection(peerId, initiator, config));
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this.boundHandleOnline);
-      document.addEventListener('visibilitychange', this.boundHandleVisibilityChange);
+      document.addEventListener(
+        'visibilitychange',
+        this.boundHandleVisibilityChange
+      );
     }
   }
   private getSignalingService(): ISignalingService {
@@ -486,10 +480,7 @@ export class SwarmManager {
       this.cryptoSessionAnnouncedPeers.add(peer.id);
     } else {
       this.cryptoSessionAnnouncedPeers.delete(peer.id);
-      logWarn(
-        '[SwarmManager]',
-        `Failed to send CRYPTO_SESSION to ${peer.id}`
-      );
+      logWarn('[SwarmManager]', `Failed to send CRYPTO_SESSION to ${peer.id}`);
     }
   }
 
@@ -591,7 +582,11 @@ export class SwarmManager {
     const { baseId } = parseStripePeerKey(peerKey);
 
     // Slot limit counts logical receivers only (lane 0)
-    if (lane === 0 && !this.peers.has(peerKey) && basePeerCount(this.peers) >= MAX_DIRECT_PEERS) {
+    if (
+      lane === 0 &&
+      !this.peers.has(peerKey) &&
+      basePeerCount(this.peers) >= MAX_DIRECT_PEERS
+    ) {
       logError(
         '[SwarmManager]',
         `Slot limit reached (${MAX_DIRECT_PEERS}). Rejecting peer: ${baseId}`
@@ -659,16 +654,24 @@ export class SwarmManager {
     return this.countConnectedStripeLanes(baseId);
   }
 
-  private async probeStripeLanes(baseId: string, timeoutMs = 2500): Promise<number> {
+  private async probeStripeLanes(
+    baseId: string,
+    timeoutMs = 2500
+  ): Promise<number> {
     this.verifiedStripeKeys.clear();
     const primaryKey = stripePeerKey(baseId, 0);
     const primary = this.peers.get(primaryKey);
     if (primary?.connected) this.verifiedStripeKeys.add(primaryKey);
 
-    const candidates: Array<{ key: string; peer: SinglePeerConnection; lane: number }> = [];
+    const candidates: Array<{
+      key: string;
+      peer: SinglePeerConnection;
+      lane: number;
+    }> = [];
     for (const [key, peer] of this.peers) {
       const parsed = parseStripePeerKey(key);
-      if (parsed.baseId !== baseId || !peer.connected || parsed.lane === 0) continue;
+      if (parsed.baseId !== baseId || !peer.connected || parsed.lane === 0)
+        continue;
       candidates.push({ key, peer, lane: parsed.lane });
     }
     if (candidates.length === 0) return this.verifiedStripeKeys.size;
@@ -698,7 +701,8 @@ export class SwarmManager {
                 if (!text.startsWith('{')) return;
                 const msg = JSON.parse(text);
                 if (
-                  (msg?.type === 'STRIPE_PONG' || msg?.type === 'STRIPE_BULK_PONG') &&
+                  (msg?.type === 'STRIPE_PONG' ||
+                    msg?.type === 'STRIPE_BULK_PONG') &&
                   Number(msg.lane) === lane
                 ) {
                   done(true);
@@ -735,9 +739,12 @@ export class SwarmManager {
   public removePeer(peerId: string, reason: string = 'unknown'): void {
     const { baseId, lane } = parseStripePeerKey(peerId);
     // Removing a logical peer tears down all stripe lanes.
-    const keys = lane === 0
-      ? Array.from(this.peers.keys()).filter(k => parseStripePeerKey(k).baseId === baseId)
-      : [peerId];
+    const keys =
+      lane === 0
+        ? Array.from(this.peers.keys()).filter(
+            k => parseStripePeerKey(k).baseId === baseId
+          )
+        : [peerId];
     if (keys.length === 0) return;
 
     for (const key of keys) {
@@ -776,7 +783,10 @@ export class SwarmManager {
           this.partitionAckWaiters.clear();
           this.stopAdaptiveControl();
           this.emit('status', 'WAITING');
-          this.emit('peer-disconnected', { peerId, reason: reason + ':await-reconnect' });
+          this.emit('peer-disconnected', {
+            peerId,
+            reason: reason + ':await-reconnect',
+          });
           logWarn(
             '[SwarmManager]',
             'Paused transfer awaiting receiver reconnect'
@@ -836,7 +846,9 @@ export class SwarmManager {
   public getConnectedPeers(): SinglePeerConnection[] {
     // Logical receivers only (exclude bulk stripe PeerConnections)
     return Array.from(this.peers.entries())
-      .filter(([key, peer]) => peer.connected && parseStripePeerKey(key).lane === 0)
+      .filter(
+        ([key, peer]) => peer.connected && parseStripePeerKey(key).lane === 0
+      )
       .map(([, peer]) => peer);
   }
 
@@ -1060,7 +1072,11 @@ export class SwarmManager {
     if (data.type === 'offer') {
       this.getSignalingService().sendOffer(this.roomId, payload as any, baseId);
     } else if (data.type === 'answer') {
-      this.getSignalingService().sendAnswer(this.roomId, payload as any, baseId);
+      this.getSignalingService().sendAnswer(
+        this.roomId,
+        payload as any,
+        baseId
+      );
     } else if (data.candidate) {
       this.getSignalingService().sendCandidate(
         this.roomId,
@@ -1093,7 +1109,9 @@ export class SwarmManager {
     return lanes;
   }
 
-  private pickStripePeer(peers: SinglePeerConnection[]): SinglePeerConnection | null {
+  private pickStripePeer(
+    peers: SinglePeerConnection[]
+  ): SinglePeerConnection | null {
     if (peers.length === 0) return null;
     if (peers.length === 1) return peers[0];
 
@@ -1215,7 +1233,9 @@ export class SwarmManager {
         ? Array.from(this.currentTransferPeers)
         : Array.from(
             new Set(
-              Array.from(this.peers.keys()).map(k => parseStripePeerKey(k).baseId)
+              Array.from(this.peers.keys()).map(
+                k => parseStripePeerKey(k).baseId
+              )
             )
           );
     for (const baseId of ids) {
@@ -1300,8 +1320,7 @@ export class SwarmManager {
     const lowWater = this.currentTransferTuningProfile.lowWaterBytes;
     for (const peerId of this.currentTransferPeers) {
       const peer = this.peers.get(peerId) as
-        | { setBufferedAmountLowThreshold?: (n: number) => void }
-        | undefined;
+        { setBufferedAmountLowThreshold?: (n: number) => void } | undefined;
       peer?.setBufferedAmountLowThreshold?.(lowWater);
     }
     if (selected.candidateTuple) {
@@ -1448,9 +1467,7 @@ export class SwarmManager {
     // Native PeerSession exposes RTCPeerConnection on `.pc`.
     // Legacy simple-peer used `.pc._pc`.
     const maybe = peer.pc as
-      | RTCPeerConnection
-      | { _pc?: RTCPeerConnection }
-      | null;
+      RTCPeerConnection | { _pc?: RTCPeerConnection } | null;
     if (!maybe) return null;
     const nativePeer =
       typeof (maybe as RTCPeerConnection).getStats === 'function'
@@ -2779,7 +2796,9 @@ export class SwarmManager {
       !binding ||
       binding.generation !== this.transferRunId ||
       binding.runId !== this.transferRunId ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(binding.certificateId) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        binding.certificateId
+      ) ||
       !/^[0-9a-f]{64}$/i.test(binding.certificateDigest) ||
       !/^[0-9a-f]{64}$/i.test(binding.armDigest) ||
       !Number.isFinite(binding.expiresAtMs) ||
@@ -2802,7 +2821,8 @@ export class SwarmManager {
       !this.pipelineCertificateVerified ||
       !this.pipelineCertificateBinding ||
       this.pipelineCertificateBinding.runId !== runId
-    ) return false;
+    )
+      return false;
     if (hasStableHostRoute(this.hostRouteSamples)) return true;
     const first = this.hostRouteSamples[this.hostRouteSamples.length - 1];
     if (!first) return false;
@@ -2812,9 +2832,11 @@ export class SwarmManager {
     }
     if (runId !== this.transferRunId || !this.isTransferring) return false;
     await this.sampleAdaptiveStats();
-    return runId === this.transferRunId &&
+    return (
+      runId === this.transferRunId &&
       this.isTransferring &&
-      hasStableHostRoute(this.hostRouteSamples);
+      hasStableHostRoute(this.hostRouteSamples)
+    );
   }
 
   public releaseTransferStartGate(): boolean {
@@ -2998,7 +3020,6 @@ export class SwarmManager {
     );
   }
 
-
   private async waitForHybridReceiverComplete(
     runId: number,
     timeoutMs: number
@@ -3024,7 +3045,10 @@ export class SwarmManager {
     );
   }
 
-  private async runHybridUpload(runId: number, totalPayloadBytes: number): Promise<void> {
+  private async runHybridUpload(
+    runId: number,
+    totalPayloadBytes: number
+  ): Promise<void> {
     const teed = this.hybridPackets.slice();
     if (teed.length === 0) {
       throw new Error('No hybrid packets prebuilt');
@@ -3210,7 +3234,6 @@ export class SwarmManager {
     }
     return view.getUint32(14, true);
   }
-
 
   private async createPartitionDataPacket(params: {
     payload: ArrayBuffer;
@@ -3797,9 +3820,9 @@ export class SwarmManager {
         if (globalOffset >= partitionEnd && globalOffset < manifest.totalSize) {
           await this.sendPartitionMarkerAndWait(globalOffset, runId);
           partitionEnd = Math.min(
-              globalOffset + this.getActivePartitionSize(),
-              manifest.totalSize
-            );
+            globalOffset + this.getActivePartitionSize(),
+            manifest.totalSize
+          );
         }
       }
       if (!acceptReservations) {
@@ -3855,9 +3878,9 @@ export class SwarmManager {
             ) {
               await this.sendPartitionMarkerAndWait(globalOffset, runId);
               partitionEnd = Math.min(
-              globalOffset + this.getActivePartitionSize(),
-              manifest.totalSize
-            );
+                globalOffset + this.getActivePartitionSize(),
+                manifest.totalSize
+              );
             }
           }
         }
@@ -3920,7 +3943,9 @@ export class SwarmManager {
         throw new Error('Timed out waiting for receiver/backpressure window');
       }
       // Prefer drain event; short watchdog for re-eval.
-      await this.waitForSendWindowSignal(SEND_WINDOW_POLL_INTERVAL_MS === 0 ? 4 : SEND_WINDOW_POLL_INTERVAL_MS);
+      await this.waitForSendWindowSignal(
+        SEND_WINDOW_POLL_INTERVAL_MS === 0 ? 4 : SEND_WINDOW_POLL_INTERVAL_MS
+      );
     }
     throw new Error('Transfer stopped');
   }
@@ -4167,7 +4192,6 @@ export class SwarmManager {
     };
   }
 
-
   private kickHybridAssistIfNeeded(): void {
     if (
       !this.hybridArmed ||
@@ -4197,7 +4221,9 @@ export class SwarmManager {
     })();
   }
 
-  private evaluateHybridArmingForCurrentPath(observedMBps?: number | null): void {
+  private evaluateHybridArmingForCurrentPath(
+    observedMBps?: number | null
+  ): void {
     if (!this.pendingManifest) return;
     const decision = shouldArmHybrid({
       remoteCaps: this.remoteHybridCaps,
@@ -4217,10 +4243,7 @@ export class SwarmManager {
       );
       this.kickHybridAssistIfNeeded();
     } else if (!decision.armed && prev) {
-      logInfo(
-        '[SwarmManager]',
-        `Hybrid assist disarmed (${decision.reason})`
-      );
+      logInfo('[SwarmManager]', `Hybrid assist disarmed (${decision.reason})`);
     } else {
       logDebug(
         '[SwarmManager]',
@@ -4240,7 +4263,11 @@ export class SwarmManager {
     );
 
     // Re-evaluate hybrid arming on slow observed throughput (mid-transfer).
-    if (this.isTransferring && this.pendingManifest && !this.hybridUploadStarted) {
+    if (
+      this.isTransferring &&
+      this.pendingManifest &&
+      !this.hybridUploadStarted
+    ) {
       // Prefer instantaneous UI speed (bytes/s) converted to MB/s.
       const observedMBps =
         typeof speed === 'number' && speed > 0 ? speed / (1024 * 1024) : null;
@@ -4292,15 +4319,12 @@ export class SwarmManager {
       const response =
         await this.getSignalingService().requestTurnConfig(roomId);
       if (response?.success && response?.data) {
-        this.iceServers = orderIceServersPreferDirect(
-          response.data.iceServers
-        );
+        this.iceServers = orderIceServersPreferDirect(response.data.iceServers);
       }
     } catch (error) {
       logError('[SwarmManager]', 'Failed to fetch TURN config:', error);
     }
   }
-
 
   /**
    * Keep-alive 시작 (연결 유지용)
@@ -4351,7 +4375,10 @@ export class SwarmManager {
     this.removeSignalingHandlers();
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this.boundHandleOnline);
-      document.removeEventListener('visibilitychange', this.boundHandleVisibilityChange);
+      document.removeEventListener(
+        'visibilitychange',
+        this.boundHandleVisibilityChange
+      );
     }
   }
 

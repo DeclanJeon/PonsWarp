@@ -547,8 +547,10 @@ describe('SwarmManager guard paths', () => {
         certificateId: '00000000-0000-4000-8000-000000000000',
         expiresAtMs: Date.now() + 60_000,
         runId: before,
-        certificateDigest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        armDigest: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        certificateDigest:
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        armDigest:
+          'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       })
     ).toBe(true);
     manager.cleanup();
@@ -560,8 +562,10 @@ describe('SwarmManager guard paths', () => {
         certificateId: '00000000-0000-4000-8000-000000000001',
         expiresAtMs: Date.now() + 60_000,
         runId: before,
-        certificateDigest: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-        armDigest: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        certificateDigest:
+          'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        armDigest:
+          'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
       })
     ).toBe(false);
     expect(
@@ -570,8 +574,10 @@ describe('SwarmManager guard paths', () => {
         certificateId: '00000000-0000-4000-8000-000000000002',
         expiresAtMs: Date.now() + 60_000,
         runId: after,
-        certificateDigest: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-        armDigest: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+        certificateDigest:
+          'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        armDigest:
+          'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
       })
     ).toBe(true);
   });
@@ -600,8 +606,10 @@ describe('SwarmManager guard paths', () => {
       generation: 4,
       runId: 4,
       certificateId: '00000000-0000-4000-8000-000000000003',
-      certificateDigest: '1111111111111111111111111111111111111111111111111111111111111111',
-      armDigest: '2222222222222222222222222222222222222222222222222222222222222222',
+      certificateDigest:
+        '1111111111111111111111111111111111111111111111111111111111111111',
+      armDigest:
+        '2222222222222222222222222222222222222222222222222222222222222222',
       expiresAtMs: Date.now() + 60_000,
     };
     internals.hostRouteSamples = [];
@@ -797,7 +805,10 @@ describe('SwarmManager guard paths', () => {
     const manager = new SwarmManager();
     const sent: string[] = [];
     manager.enableEncryption();
-    manager.setSessionKey(new Uint8Array(32).fill(5), new Uint8Array(8).fill(6));
+    manager.setSessionKey(
+      new Uint8Array(32).fill(5),
+      new Uint8Array(8).fill(6)
+    );
 
     const peer = {
       id: 'peer-resume',

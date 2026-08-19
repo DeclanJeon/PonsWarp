@@ -40,7 +40,7 @@ const App: React.FC = () => {
   usePreventNavigation();
 
   // URL 파라미터 체크 (앱 로드 시)
-    useEffect(() => {
+  useEffect(() => {
     void registerAppUpdateServiceWorker({
       isTransferActive: () => {
         const status = useTransferStore.getState().status;
@@ -59,7 +59,7 @@ const App: React.FC = () => {
     });
   }, []);
 
-useEffect(() => {
+  useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname;
       const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/i);

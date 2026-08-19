@@ -142,7 +142,10 @@ describe('ReceiverService mobile visibility resume', () => {
         sendOffer: vi.fn(),
         sendAnswer: vi.fn(),
         sendCandidate: vi.fn(),
-        requestTurnConfig: vi.fn(async () => ({ success: true, data: { iceServers: [] } })),
+        requestTurnConfig: vi.fn(async () => ({
+          success: true,
+          data: { iceServers: [] },
+        })),
         on: vi.fn(),
         off: vi.fn(),
         getSocketId: vi.fn(() => 'recv'),
@@ -208,7 +211,10 @@ describe('ReceiverService mobile visibility resume', () => {
         sendOffer: vi.fn(),
         sendAnswer: vi.fn(),
         sendCandidate: vi.fn(),
-        requestTurnConfig: vi.fn(async () => ({ success: true, data: { iceServers: [] } })),
+        requestTurnConfig: vi.fn(async () => ({
+          success: true,
+          data: { iceServers: [] },
+        })),
         on: vi.fn(),
         off: vi.fn(),
         getSocketId: vi.fn(() => 'recv'),

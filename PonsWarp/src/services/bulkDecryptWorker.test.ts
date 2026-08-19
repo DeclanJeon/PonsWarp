@@ -26,7 +26,9 @@ async function makeEncryptedPacket(
     key,
     toArrayBuffer(payload)
   );
-  const packet = new ArrayBuffer(ENCRYPTED_HEADER_SIZE + ciphertextWithTag.byteLength);
+  const packet = new ArrayBuffer(
+    ENCRYPTED_HEADER_SIZE + ciphertextWithTag.byteLength
+  );
   const bytes = new Uint8Array(packet);
   const view = new DataView(packet);
   bytes[0] = 0x02;
@@ -53,7 +55,13 @@ describe('BulkDecryptWorker', () => {
       ['encrypt']
     );
     const payload = new TextEncoder().encode('pons-decrypt-worker-ok');
-    const packet = await makeEncryptedPacket(key, randomPrefix, 7, 4096, payload);
+    const packet = await makeEncryptedPacket(
+      key,
+      randomPrefix,
+      7,
+      4096,
+      payload
+    );
 
     const worker = new BulkDecryptWorker();
     await worker.start(sessionKey);

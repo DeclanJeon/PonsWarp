@@ -146,30 +146,10 @@ class RustSignalingAdapter {
     if (typeof payload === 'object' && payload !== null) {
       const payloadObj = payload as Record<string, unknown>;
       if (message.type === 'Offer') {
-        debugLog(
-          '[RustSignaling] 🔍 [DEBUG] Before mapping - payload:',
-          payload
-        );
-        debugLog('[RustSignaling] 🔍 [DEBUG] sdp field value:', payloadObj.sdp);
         payloadObj.offer = payloadObj.sdp;
-        debugLog(
-          '[RustSignaling] 🔍 [DEBUG] After mapping - payload.offer:',
-          payloadObj.offer
-        );
-        debugLog('[RustSignaling] Mapped Offer SDP:', payloadObj);
       }
       if (message.type === 'Answer') {
-        debugLog(
-          '[RustSignaling] 🔍 [DEBUG] Before mapping - payload:',
-          payload
-        );
-        debugLog('[RustSignaling] 🔍 [DEBUG] sdp field value:', payloadObj.sdp);
         payloadObj.answer = payloadObj.sdp;
-        debugLog(
-          '[RustSignaling] 🔍 [DEBUG] After mapping - payload.answer:',
-          payloadObj.answer
-        );
-        debugLog('[RustSignaling] Mapped Answer SDP:', payloadObj);
       }
     }
 

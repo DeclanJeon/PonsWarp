@@ -1,4 +1,8 @@
-import type { TransferEvent, TransferRole, TransferTerminalReason } from './events';
+import type {
+  TransferEvent,
+  TransferRole,
+  TransferTerminalReason,
+} from './events';
 
 export type TransferStatus =
   | 'idle'
@@ -36,7 +40,9 @@ export interface TransferStateOptions {
   totalBytes?: number;
 }
 
-export function createTransferState(options: TransferStateOptions): TransferState {
+export function createTransferState(
+  options: TransferStateOptions
+): TransferState {
   const totalBytes = Math.max(0, options.totalBytes ?? 0);
   return {
     role: options.role,
@@ -57,24 +63,35 @@ export const initialState = initialTransferState;
 
 const terminalStatus = (event: TransferEvent): TransferStatus => {
   switch (event.type) {
-    case 'complete': return 'completed';
-    case 'cancel': return 'cancelled';
-    case 'timeout': return 'timed_out';
-    default: return 'error';
+    case 'complete':
+      return 'completed';
+    case 'cancel':
+      return 'cancelled';
+    case 'timeout':
+      return 'timed_out';
+    default:
+      return 'error';
   }
 };
 
 const terminalReason = (event: TransferEvent): TransferTerminalReason => {
   switch (event.type) {
-    case 'complete': return 'completed';
-    case 'cancel': return 'cancelled';
-    case 'timeout': return 'timeout';
-    default: return 'error';
+    case 'complete':
+      return 'completed';
+    case 'cancel':
+      return 'cancelled';
+    case 'timeout':
+      return 'timeout';
+    default:
+      return 'error';
   }
 };
 
 /** Pure reducer. Events for another role and all events after a terminal are ignored. */
-export function reduceTransferState(state: TransferState, event: TransferEvent): TransferState {
+export function reduceTransferState(
+  state: TransferState,
+  event: TransferEvent
+): TransferState {
   if (event.role !== state.role || state.terminal) return state;
   const at = event.at === undefined ? state.lastEventAt : event.at;
   const base = { ...state, lastEventAt: at };
@@ -88,15 +105,25 @@ export function reduceTransferState(state: TransferState, event: TransferEvent):
     case 'ready':
       return { ...base, status: 'ready', ready: true };
     case 'reconnect':
-      return { ...base, status: 'reconnecting', connected: false, ready: false };
+      return {
+        ...base,
+        status: 'reconnecting',
+        connected: false,
+        ready: false,
+      };
     case 'resume': {
-      const resumed = event.bytes === undefined ? state.bytes : Math.max(state.bytes, Math.max(0, event.bytes));
+      const resumed =
+        event.bytes === undefined
+          ? state.bytes
+          : Math.max(state.bytes, Math.max(0, event.bytes));
       return {
         ...base,
         status: 'transferring',
         bytes: resumed,
-        transportBytes: state.role === 'sender' ? resumed : state.transportBytes,
-        persistedBytes: state.role === 'receiver' ? resumed : state.persistedBytes,
+        transportBytes:
+          state.role === 'sender' ? resumed : state.transportBytes,
+        persistedBytes:
+          state.role === 'receiver' ? resumed : state.persistedBytes,
       };
     }
     case 'duplicate-chunk': {
@@ -106,16 +133,26 @@ export function reduceTransferState(state: TransferState, event: TransferEvent):
     }
     case 'progress': {
       const seenChunks = new Set(state.seenChunks);
-      if (event.chunkId !== undefined && seenChunks.has(event.chunkId)) return { ...base, seenChunks };
+      if (event.chunkId !== undefined && seenChunks.has(event.chunkId))
+        return { ...base, seenChunks };
       if (event.chunkId !== undefined) seenChunks.add(event.chunkId);
-      const next = Math.min(Math.max(0, event.bytes), Math.max(state.totalBytes, event.totalBytes, event.bytes));
+      const next = Math.min(
+        Math.max(0, event.bytes),
+        Math.max(state.totalBytes, event.totalBytes, event.bytes)
+      );
       return {
         ...base,
         status: 'transferring',
         totalBytes: Math.max(state.totalBytes, Math.max(0, event.totalBytes)),
         bytes: Math.max(state.bytes, next),
-        transportBytes: state.role === 'sender' ? Math.max(state.transportBytes, next) : state.transportBytes,
-        persistedBytes: state.role === 'receiver' ? Math.max(state.persistedBytes, next) : state.persistedBytes,
+        transportBytes:
+          state.role === 'sender'
+            ? Math.max(state.transportBytes, next)
+            : state.transportBytes,
+        persistedBytes:
+          state.role === 'receiver'
+            ? Math.max(state.persistedBytes, next)
+            : state.persistedBytes,
         seenChunks,
       };
     }

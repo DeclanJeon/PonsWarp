@@ -9,7 +9,6 @@ import {
   RELAY_TRANSFER_TUNING_PROFILE,
   UNKNOWN_TRANSFER_TUNING_PROFILE,
   PREPARATION_LEDGER_BYTES,
-  PEER_ADMISSION_BYTES,
   HostTransferScheduler,
   candidateTuplesEqual,
   hasStableHostRoute,
@@ -159,7 +158,9 @@ describe('transferFlowControl', () => {
     expect(selectTransferTuningProfile(null)).toBe(
       UNKNOWN_TRANSFER_TUNING_PROFILE
     );
-    expect(RELAY_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(6 * 1024 * 1024);
+    expect(RELAY_TRANSFER_TUNING_PROFILE.maxInFlightBytes).toBe(
+      6 * 1024 * 1024
+    );
     expect(RELAY_TRANSFER_TUNING_PROFILE.partitionSizeBytes).toBe(
       Number.MAX_SAFE_INTEGER
     );
@@ -362,8 +363,12 @@ describe('transferFlowControl', () => {
   });
 
   it('classifies host address scopes for LAN vs CGNAT/Tailscale', () => {
-    expect(classifyHostAddressScope('192.168.0.10', '192.168.0.20')).toBe('lan');
-    expect(classifyHostAddressScope('100.109.210.63', '100.64.1.2')).toBe('cgnat');
+    expect(classifyHostAddressScope('192.168.0.10', '192.168.0.20')).toBe(
+      'lan'
+    );
+    expect(classifyHostAddressScope('100.109.210.63', '100.64.1.2')).toBe(
+      'cgnat'
+    );
     expect(classifyHostAddressScope('10.0.0.1', '8.8.8.8')).toBe('public');
     expect(isElevatedHostRtt({ candidatePathKind: 'host', rttMs: 328 })).toBe(
       true

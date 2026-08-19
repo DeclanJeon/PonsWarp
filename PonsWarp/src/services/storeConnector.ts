@@ -70,27 +70,6 @@ export const addReadyPeer = (peerId: string) => {
 };
 
 /**
- * 완료된 피어 추가
- */
-export const addCompletedPeer = (peerId: string) => {
-  useTransferStore.getState().addCompletedPeer(peerId);
-};
-
-/**
- * 대기열 피어 추가
- */
-export const addQueuedPeer = (peerId: string) => {
-  useTransferStore.getState().addQueuedPeer(peerId);
-};
-
-/**
- * 대기열 초기화
- */
-export const clearQueuedPeers = () => {
-  useTransferStore.getState().clearQueuedPeers();
-};
-
-/**
  * Ready 카운트다운 설정
  */
 export const setReadyCountdown = (countdown: number | null) => {
@@ -120,11 +99,19 @@ export const getStoreState = () => {
 /** Adapts framework-free transfer state/events to the legacy Zustand store. */
 export const projectTransferState = (state: TransferState) => {
   const status: TransferStatus =
-    state.status === 'connecting' ? 'CONNECTING' :
-    state.status === 'ready' ? 'READY_FOR_NEXT' :
-    state.status === 'transferring' ? (state.role === 'receiver' ? 'RECEIVING' : 'TRANSFERRING') :
-    state.status === 'completed' ? 'DONE' :
-    state.status === 'error' || state.status === 'timed_out' ? 'ERROR' : 'IDLE';
+    state.status === 'connecting'
+      ? 'CONNECTING'
+      : state.status === 'ready'
+        ? 'READY_FOR_NEXT'
+        : state.status === 'transferring'
+          ? state.role === 'receiver'
+            ? 'RECEIVING'
+            : 'TRANSFERRING'
+          : state.status === 'completed'
+            ? 'DONE'
+            : state.status === 'error' || state.status === 'timed_out'
+              ? 'ERROR'
+              : 'IDLE';
   setStatus(status);
   const progress = {
     bytesTransferred: state.bytes,
@@ -148,7 +135,10 @@ const projectTransferEvent = (event: TransferEvent) => {
     updateProgress({
       bytesTransferred: event.bytes ?? 0,
       totalBytes: event.type === 'progress' ? event.totalBytes : undefined,
-      progress: event.type === 'progress' && event.totalBytes > 0 ? event.bytes / event.totalBytes : undefined,
+      progress:
+        event.type === 'progress' && event.totalBytes > 0
+          ? event.bytes / event.totalBytes
+          : undefined,
     });
   } else if (event.type === 'complete') {
     setStatus('DONE');

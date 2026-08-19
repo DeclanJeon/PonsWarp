@@ -5,7 +5,11 @@ import { createEosPacket, createPlainDataPacket } from './plainPacket';
 describe('plainPacket', () => {
   it('encodes the DirectFileWriter-compatible 22 byte data header', () => {
     const payload = new Uint8Array([1, 2, 3, 4]);
-    const packet = createPlainDataPacket({ payload, sequence: 7, offset: 1234 });
+    const packet = createPlainDataPacket({
+      payload,
+      sequence: 7,
+      offset: 1234,
+    });
     const view = new DataView(packet);
     const bytes = new Uint8Array(packet);
 

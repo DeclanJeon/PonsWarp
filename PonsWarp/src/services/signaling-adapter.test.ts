@@ -32,7 +32,10 @@ class MockWebSocket {
 
   send(message: string) {
     this.sent.push(message);
-    const parsed = JSON.parse(message) as { type: string; payload: { room_id?: string } };
+    const parsed = JSON.parse(message) as {
+      type: string;
+      payload: { room_id?: string };
+    };
     if (parsed.type === 'RequestTurnConfig') {
       setTimeout(() => {
         this.onmessage?.({
@@ -123,7 +126,10 @@ describe('RustSignalingAdapter', () => {
     await rustSignalingAdapter.joinRoom('ABC123');
 
     const joinMessages = MockWebSocket.instances[0].sent
-      .map(message => JSON.parse(message) as { type: string; payload: { room_id?: string } })
+      .map(
+        message =>
+          JSON.parse(message) as { type: string; payload: { room_id?: string } }
+      )
       .filter(message => message.type === 'JoinRoom');
 
     expect(joinMessages).toEqual([
@@ -143,7 +149,10 @@ describe('RustSignalingAdapter', () => {
     await rustSignalingAdapter.joinRoom('ROOM01');
 
     const joinMessages = MockWebSocket.instances[0].sent
-      .map(message => JSON.parse(message) as { type: string; payload: { room_id?: string } })
+      .map(
+        message =>
+          JSON.parse(message) as { type: string; payload: { room_id?: string } }
+      )
       .filter(message => message.type === 'JoinRoom');
 
     expect(joinMessages).toHaveLength(2);

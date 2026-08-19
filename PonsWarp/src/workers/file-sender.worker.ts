@@ -548,6 +548,7 @@ function resetWorker() {
   zip64Stream = null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function triggerPrefetch() {
   if (prefetchPromise || state.isCompleted || !isTransferActive) return;
   if (!doubleBuffer.canPrefetch()) return;
@@ -621,7 +622,10 @@ async function createSingleFileChunk(): Promise<ArrayBuffer | null> {
   const currentChunkSize = adaptiveConfig.enableAdaptive
     ? adaptiveConfig.chunkSize
     : CHUNK_SIZE_INITIAL;
-  const endOffset = Math.min(state.currentFileOffset + currentChunkSize, file.size);
+  const endOffset = Math.min(
+    state.currentFileOffset + currentChunkSize,
+    file.size
+  );
 
   try {
     const chunkData = new Uint8Array(
@@ -996,7 +1000,9 @@ async function processBatch(requestedCount: number) {
     let progress = 0;
     if (state.mode === 'zip') {
       progress =
-        totalSize > 0 ? Math.min(100, (zipSourceBytesRead / totalSize) * 100) : 0;
+        totalSize > 0
+          ? Math.min(100, (zipSourceBytesRead / totalSize) * 100)
+          : 0;
     } else {
       progress =
         totalSize > 0 ? Math.min(100, (totalBytesSent / totalSize) * 100) : 0;
@@ -1034,6 +1040,7 @@ async function processBatch(requestedCount: number) {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function createAndSendImmediate(count: number) {
   if (!state.isInitialized) return;
 

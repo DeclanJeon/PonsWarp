@@ -27,7 +27,9 @@ describe('transfer progress helpers', () => {
   });
 
   it('clamps sender progress based on actually queued transport bytes', () => {
-    expect(calculateProgressPercent(6 * 1024 * 1024, 5 * 1024 * 1024)).toBe(100);
+    expect(calculateProgressPercent(6 * 1024 * 1024, 5 * 1024 * 1024)).toBe(
+      100
+    );
     expect(calculateProgressPercent(Number.NaN, 5 * 1024 * 1024)).toBe(0);
   });
 });

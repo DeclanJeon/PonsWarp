@@ -5,22 +5,20 @@ export type DownloadCapability = {
 };
 
 export type DownloadStrategy =
-  | 'file-system-access'
-  | 'streamsaver'
-  | 'blob-fallback'
-  | 'opfs-fallback';
+  'file-system-access' | 'streamsaver' | 'blob-fallback' | 'opfs-fallback';
 
 const SMALL_BLOB_LIMIT = 50 * 1024 * 1024;
 
-export function shouldUseBlobFallbackBeforeStreaming(fileSize: number): boolean {
+export function shouldUseBlobFallbackBeforeStreaming(
+  fileSize: number
+): boolean {
   return fileSize > 0 && fileSize <= SMALL_BLOB_LIMIT;
 }
 
 export function isHeadlessBrowser(): boolean {
   return (
     typeof navigator !== 'undefined' &&
-    (navigator.webdriver === true ||
-     /HeadlessChrome/.test(navigator.userAgent))
+    (navigator.webdriver === true || /HeadlessChrome/.test(navigator.userAgent))
   );
 }
 
@@ -29,8 +27,14 @@ export function isAutomationDownloadMode(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     const params = new URLSearchParams(window.location.search);
-    const flag = (params.get('automation') || params.get('dl') || '').toLowerCase();
-    return flag === '1' || flag === 'true' || flag === 'blob' || flag === 'opfs';
+    const flag = (
+      params.get('automation') ||
+      params.get('dl') ||
+      ''
+    ).toLowerCase();
+    return (
+      flag === '1' || flag === 'true' || flag === 'blob' || flag === 'opfs'
+    );
   } catch {
     return false;
   }

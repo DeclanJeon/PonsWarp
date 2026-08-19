@@ -6,10 +6,7 @@
 export type WakeLockLike = {
   released?: boolean;
   release: () => Promise<void>;
-  addEventListener?: (
-    type: 'release',
-    listener: () => void
-  ) => void;
+  addEventListener?: (type: 'release', listener: () => void) => void;
 };
 
 export type PageWakeLockLog = {

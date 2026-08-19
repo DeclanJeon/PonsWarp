@@ -130,12 +130,12 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
       const failures: Array<{ name: string; error: string }> = [];
 
       await Promise.allSettled(
-        share.files.map(async (file) => {
+        share.files.map(async file => {
           const url = getCloudDownloadUrl(
-        share.shareId,
-        file.id,
-        downloadSessionToken || share.downloadSessionToken
-      );
+            share.shareId,
+            file.id,
+            downloadSessionToken || share.downloadSessionToken
+          );
           const response = await fetch(url);
           if (!response.ok) {
             failures.push({
@@ -150,13 +150,13 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
           const bytes = new Uint8Array(arrayBuffer);
           const path = (file.path || file.name).replace(/^\/+/, '');
           zipEntries[path] = bytes;
-          setDownloadAllBytes((prev) => prev + bytes.length);
+          setDownloadAllBytes(prev => prev + bytes.length);
         })
       );
 
       if (Object.keys(zipEntries).length === 0) {
         const reason =
-          failures.map((item) => `${item.name}: ${item.error}`).join(', ') ||
+          failures.map(item => `${item.name}: ${item.error}`).join(', ') ||
           'No files were downloaded';
         throw new Error(reason);
       }
@@ -243,7 +243,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
             <input
               type="password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={event => setPassword(event.target.value)}
               className="w-full bg-gray-950/70 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-4 py-3 text-white mb-3"
               autoComplete="current-password"
               autoFocus
@@ -326,7 +326,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
             </div>
 
             <div className="space-y-3 max-h-[45vh] overflow-y-auto pr-1">
-              {share.files.map((file) => (
+              {share.files.map(file => (
                 <div
                   key={file.id}
                   className="flex items-center gap-4 bg-gray-900/50 border border-gray-700/50 rounded-2xl p-4"

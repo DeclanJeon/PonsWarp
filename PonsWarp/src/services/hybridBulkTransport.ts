@@ -15,7 +15,7 @@ import {
   HYBRID_ELEVATED_RTT_MS,
   HYBRID_UPLOAD_CONCURRENCY,
 } from '../utils/constants';
-import { logInfo, logWarn, logError } from '../utils/logger';
+import { logInfo, logWarn } from '../utils/logger';
 import {
   completeCloudShare,
   createCloudShare,
@@ -104,7 +104,8 @@ export function shouldArmHybrid(params: {
   const elevatedRtt = params.elevatedRttMs ?? HYBRID_ELEVATED_RTT_MS;
   const trigger = params.triggerMBps ?? HYBRID_TRIGGER_MBps;
   const observed =
-    typeof params.observedMBps === 'number' && Number.isFinite(params.observedMBps)
+    typeof params.observedMBps === 'number' &&
+    Number.isFinite(params.observedMBps)
       ? params.observedMBps
       : null;
 
@@ -131,7 +132,10 @@ export function shouldArmHybrid(params: {
   }
   if (pathKind === 'unknown') {
     if (rttMs !== null && rttMs >= elevatedRtt) {
-      return { armed: true, reason: `unknown-elevated-rtt:${Math.round(rttMs)}ms` };
+      return {
+        armed: true,
+        reason: `unknown-elevated-rtt:${Math.round(rttMs)}ms`,
+      };
     }
     if (observed !== null && observed > 0 && observed < trigger) {
       return { armed: true, reason: `unknown-slow:${observed.toFixed(2)}MBps` };
@@ -219,7 +223,10 @@ export function parseHybridFramedObject(buf: ArrayBuffer): ArrayBuffer[] {
   const u8 = new Uint8Array(buf);
   let o = 0;
   while (o + 4 <= u8.byteLength) {
-    const len = new DataView(u8.buffer, u8.byteOffset + o, 4).getUint32(0, false);
+    const len = new DataView(u8.buffer, u8.byteOffset + o, 4).getUint32(
+      0,
+      false
+    );
     o += 4;
     if (len <= 0 || o + len > u8.byteLength) {
       throw new Error(
@@ -269,10 +276,14 @@ export async function uploadHybridAssistObject(params: {
     `Creating cloud share for hybrid object (${file.size} bytes, ${packets.length} packets)`
   );
 
-  const created = await createCloudShare(`hybrid-${params.runId}`, filesForApi, {
-    retentionSeconds: 24 * 60 * 60,
-    downloadLimit: 32,
-  });
+  const created = await createCloudShare(
+    `hybrid-${params.runId}`,
+    filesForApi,
+    {
+      retentionSeconds: 24 * 60 * 60,
+      downloadLimit: 32,
+    }
+  );
   const target: CloudUploadTarget | undefined = created.files[0];
   if (!target) {
     throw new Error('Hybrid cloud share returned no upload target');

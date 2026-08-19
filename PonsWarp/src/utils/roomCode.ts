@@ -8,7 +8,10 @@ export const normalizeRoomCodeInput = (input: string): string => {
     return receiveRouteMatch[1].toUpperCase();
   }
 
-  return trimmed.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 6);
+  return trimmed
+    .replace(/[^a-z0-9]/gi, '')
+    .toUpperCase()
+    .slice(0, 6);
 };
 
 export const isCompleteRoomCode = (input: string): boolean =>

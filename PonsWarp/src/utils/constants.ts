@@ -87,7 +87,6 @@ export const BULK_CHANNEL_COUNT = 1;
 // Host mid-transfer partition ACK wait (0 = disabled; end checkpoint only)
 export const HOST_CHECKPOINT_EVERY_BYTES = 0;
 
-
 // Hybrid bulk assist (WebRTC + encrypted HTTP). Design:
 // docs/design/hybrid-bulk-transport.md
 // Hybrid assist is path-gated in shouldArmHybrid: LAN host/direct stays WebRTC-only.

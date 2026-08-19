@@ -4,7 +4,10 @@ export function stripePeerKey(baseId: string, lane: number): string {
   return lane <= 0 ? baseId : `${baseId}${STRIPE_SEP}${lane}`;
 }
 
-export function parseStripePeerKey(peerKey: string): { baseId: string; lane: number } {
+export function parseStripePeerKey(peerKey: string): {
+  baseId: string;
+  lane: number;
+} {
   const idx = peerKey.indexOf(STRIPE_SEP);
   if (idx < 0) return { baseId: peerKey, lane: 0 };
   const lane = Number(peerKey.slice(idx + STRIPE_SEP.length));
@@ -31,6 +34,7 @@ export function normalizeSignalPayload(raw: unknown): {
     const lane = Number(obj.lane ?? 0);
     if ('lane' in obj) {
       const { lane: _lane, ...rest } = obj;
+      void _lane;
       return {
         signal: rest,
         lane: Number.isFinite(lane) ? lane : 0,

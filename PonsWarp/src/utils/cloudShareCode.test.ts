@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { formatCloudShareCode, normalizeCloudShareCodeInput } from './cloudShareCode';
+import {
+  formatCloudShareCode,
+  normalizeCloudShareCodeInput,
+} from './cloudShareCode';
 
 describe('cloud share code normalization', () => {
   it('accepts raw Cloud Drop share IDs as receive codes', () => {
@@ -9,7 +12,9 @@ describe('cloud share code normalization', () => {
 
   it('extracts Cloud Drop codes from full cloud links', () => {
     expect(
-      normalizeCloudShareCodeInput('https://warp.ponslink.com/cloud/a1b2c3d4e5f6?utm=qr')
+      normalizeCloudShareCodeInput(
+        'https://warp.ponslink.com/cloud/a1b2c3d4e5f6?utm=qr'
+      )
     ).toBe('A1B2C3D4E5F6');
   });
 

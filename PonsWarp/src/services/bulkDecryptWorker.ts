@@ -110,10 +110,9 @@ export class BulkDecryptWorker {
     return new Promise<ArrayBuffer>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       // Transfer packet ownership to worker (caller must not use it after).
-      this.worker!.postMessage(
-        { type: 'decrypt', payload: { id, packet } },
-        [packet]
-      );
+      this.worker!.postMessage({ type: 'decrypt', payload: { id, packet } }, [
+        packet,
+      ]);
     });
   }
 

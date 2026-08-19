@@ -26,7 +26,9 @@ export class ReceiverCompatibilityFacade {
   }
 
   off(event: string, handler: ReceiverLegacyEventHandler): void {
-    this.listeners[event] = (this.listeners[event] ?? []).filter(item => item !== handler);
+    this.listeners[event] = (this.listeners[event] ?? []).filter(
+      item => item !== handler
+    );
   }
 
   reset(): void {
@@ -41,9 +43,16 @@ export class ReceiverCompatibilityFacade {
         this.emit('status', 'CONNECTING');
         break;
       case 'reconnect':
-        if (event.attempt !== undefined && event.maxAttempts !== undefined &&
-            Number.isFinite(event.attempt) && Number.isFinite(event.maxAttempts)) {
-          this.emit('reconnecting', { attempt: event.attempt, maxAttempts: event.maxAttempts });
+        if (
+          event.attempt !== undefined &&
+          event.maxAttempts !== undefined &&
+          Number.isFinite(event.attempt) &&
+          Number.isFinite(event.maxAttempts)
+        ) {
+          this.emit('reconnecting', {
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+          });
         }
         break;
       case 'resume':
@@ -84,11 +93,18 @@ export class ReceiverCompatibilityFacade {
   }
 
   private progress(bytesTransferred?: number, totalBytes?: number) {
-    const payload: { progress?: number; speed?: number; bytesTransferred?: number; totalBytes?: number } = {};
-    if (bytesTransferred !== undefined) payload.bytesTransferred = bytesTransferred;
+    const payload: {
+      progress?: number;
+      speed?: number;
+      bytesTransferred?: number;
+      totalBytes?: number;
+    } = {};
+    if (bytesTransferred !== undefined)
+      payload.bytesTransferred = bytesTransferred;
     if (totalBytes !== undefined) {
       payload.totalBytes = totalBytes;
-      if (totalBytes > 0 && bytesTransferred !== undefined) payload.progress = bytesTransferred / totalBytes;
+      if (totalBytes > 0 && bytesTransferred !== undefined)
+        payload.progress = bytesTransferred / totalBytes;
     }
     return payload;
   }
@@ -99,9 +115,14 @@ export class ReceiverCompatibilityFacade {
   }
 }
 
-export const mapReceiverEvent = (event: ReceiverTransferEvent, actualSize?: number): Array<{ event: string; data: unknown }> => {
+export const mapReceiverEvent = (
+  event: ReceiverTransferEvent,
+  actualSize?: number
+): Array<{ event: string; data: unknown }> => {
   const result: Array<{ event: string; data: unknown }> = [];
-  const facade = new ReceiverCompatibilityFacade({ emit: (name, data) => result.push({ event: name, data }) });
+  const facade = new ReceiverCompatibilityFacade({
+    emit: (name, data) => result.push({ event: name, data }),
+  });
   facade.handle(event, actualSize);
   return result;
 };

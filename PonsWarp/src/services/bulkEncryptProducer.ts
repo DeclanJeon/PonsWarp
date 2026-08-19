@@ -93,8 +93,14 @@ export class BulkEncryptProducer {
       };
 
       const cleanup = () => {
-        this.worker?.removeEventListener('message', onReadyMessage as EventListener);
-        this.worker?.removeEventListener('error', onReadyError as EventListener);
+        this.worker?.removeEventListener(
+          'message',
+          onReadyMessage as EventListener
+        );
+        this.worker?.removeEventListener(
+          'error',
+          onReadyError as EventListener
+        );
       };
 
       this.worker.addEventListener('message', onReadyMessage as EventListener);
@@ -123,7 +129,9 @@ export class BulkEncryptProducer {
         return;
       }
       if (msg.type === 'error') {
-        this.failed = new Error(msg.payload?.message || 'Bulk encrypt worker error');
+        this.failed = new Error(
+          msg.payload?.message || 'Bulk encrypt worker error'
+        );
         this.done = true;
         this.notify();
       }

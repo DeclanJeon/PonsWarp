@@ -59,11 +59,13 @@ describe('PeerSession module surface', () => {
       createAnswer: async () => ({ type: 'answer', sdp: 'v=0' }),
       setLocalDescription: async (desc: { type: string; sdp: string }) => {
         pc.localDescription = desc;
-        pc.signalingState = desc.type === 'offer' ? 'have-local-offer' : 'stable';
+        pc.signalingState =
+          desc.type === 'offer' ? 'have-local-offer' : 'stable';
       },
       setRemoteDescription: async (desc: { type: string; sdp: string }) => {
         pc.remoteDescription = desc;
-        pc.signalingState = desc.type === 'offer' ? 'have-remote-offer' : 'stable';
+        pc.signalingState =
+          desc.type === 'offer' ? 'have-remote-offer' : 'stable';
       },
       addIceCandidate: async () => undefined,
       getStats: async () => ({

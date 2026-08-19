@@ -9,19 +9,23 @@ describe('cloudShareErrors mapper', () => {
     expect(formatCloudShareError(new Error('HTTP 401'))).toBe(
       'Password required or incorrect.'
     );
-    expect(classifyCloudShareError(new Error('http 403')).code).toBe('password');
+    expect(classifyCloudShareError(new Error('http 403')).code).toBe(
+      'password'
+    );
   });
 
   it('maps 404 to not-found', () => {
-    expect(formatCloudShareError(new Error('Request failed with HTTP 404'))).toBe(
-      'Share not found or expired.'
-    );
+    expect(
+      formatCloudShareError(new Error('Request failed with HTTP 404'))
+    ).toBe('Share not found or expired.');
   });
 
   it('maps 413/429/5xx', () => {
     expect(formatCloudShareError(new Error('HTTP 413'))).toContain('too large');
     expect(formatCloudShareError(new Error('http 429'))).toContain('wait');
-    expect(formatCloudShareError(new Error('HTTP 503'))).toContain('Server error');
+    expect(formatCloudShareError(new Error('HTTP 503'))).toContain(
+      'Server error'
+    );
   });
 
   it('maps network TypeError', () => {

@@ -103,7 +103,8 @@ export class HostTransferScheduler {
   }
   getUnsettledBytes(): number {
     let total = 0;
-    for (const reservation of this.reservations.values()) total += reservation.bytes;
+    for (const reservation of this.reservations.values())
+      total += reservation.bytes;
     return total;
   }
   getPreparationLedgerTelemetry(): {
@@ -131,7 +132,10 @@ export class HostTransferScheduler {
       PEER_ADMISSION_BYTES,
       this.totalBytes - this.cursor
     );
-    if (bytes === 0 || this.getUnsettledBytes() + bytes > PREPARATION_LEDGER_BYTES)
+    if (
+      bytes === 0 ||
+      this.getUnsettledBytes() + bytes > PREPARATION_LEDGER_BYTES
+    )
       return null;
     const reservation = { cursor: this.cursor, bytes, nonce: this.nonce++ };
     this.cursor += bytes;
@@ -152,11 +156,7 @@ export class HostTransferScheduler {
 }
 
 export type HostAddressScope =
-  | 'lan'
-  | 'cgnat'
-  | 'link-local'
-  | 'public'
-  | 'unknown';
+  'lan' | 'cgnat' | 'link-local' | 'public' | 'unknown';
 
 export interface TransferDiagnostics {
   candidatePathKind: CandidatePathKind;
@@ -201,14 +201,15 @@ export const DIRECT_HOST_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   receiverPauseLowBytes: RECEIVER_PAUSE_LOW_BYTES,
 };
 /** Elevated-RTT / CGNAT host: smaller chunks → more in-flight messages for BDP. */
-export const HOST_ELEVATED_RTT_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
-  ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
-  chunkSizeBytes: 64 * KIB,
-  minInFlightBytes: 4 * MIB,
-  initialInFlightBytes: 8 * MIB,
-  maxInFlightBytes: 14 * MIB,
-  lowWaterBytes: 2 * MIB,
-};
+export const HOST_ELEVATED_RTT_TRANSFER_TUNING_PROFILE: TransferTuningProfile =
+  {
+    ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
+    chunkSizeBytes: 64 * KIB,
+    minInFlightBytes: 4 * MIB,
+    initialInFlightBytes: 8 * MIB,
+    maxInFlightBytes: 14 * MIB,
+    lowWaterBytes: 2 * MIB,
+  };
 export const DIRECT_SRFLX_TRANSFER_TUNING_PROFILE: TransferTuningProfile = {
   ...DIRECT_HOST_TRANSFER_TUNING_PROFILE,
   pathKind: 'srflx',
@@ -332,10 +333,13 @@ export function selectInFlightTargetBytes(
     r > 0
   ) {
     // Relay only: modest BDP multiple; still floor at initial.
-    const bdp = Math.floor((b / 8) * Math.max(r, 10) / 1000 * 8);
+    const bdp = Math.floor((((b / 8) * Math.max(r, 10)) / 1000) * 8);
     return Math.max(
       profile.minInFlightBytes,
-      Math.min(profile.maxInFlightBytes, Math.max(bdp, profile.initialInFlightBytes))
+      Math.min(
+        profile.maxInFlightBytes,
+        Math.max(bdp, profile.initialInFlightBytes)
+      )
     );
   }
   return profile.maxInFlightBytes;

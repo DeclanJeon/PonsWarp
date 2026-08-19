@@ -1,6 +1,5 @@
 @import "tailwindcss";
 
-/* 🪲 [DEBUG] UI/UX 디자인 개선 로깅 시작 - CSS 주석으로 변경 */
 /* Design System Initialization:
    - Applying fluid typography system
    - Implementing CSS variables for consistency
@@ -126,7 +125,6 @@ h1, h2, h3, .brand-font {
   text-overflow: ellipsis;
 }
 
-/* 🪲 [DEBUG] 디자인 시스템 적용 완료 로깅 - CSS 주석으로 변경 */
 /* Design System Applied Successfully:
    - Fluid typography active
    - CSS variables defined

@@ -196,12 +196,15 @@ async function runStart(payload: StartPayload): Promise<void> {
     if (fileIndex >= files.length || offset >= totalSize) break;
 
     const file = files[fileIndex];
-    const bytes = Math.min(chunkSize, file.size - fileOffset, totalSize - offset);
+    const bytes = Math.min(
+      chunkSize,
+      file.size - fileOffset,
+      totalSize - offset
+    );
     if (bytes <= 0) break;
 
     // Estimate ciphertext size for credit gating (plain 22+n, enc 38+n+16)
-    const estPacket =
-      (encryptionEnabled ? 38 + 16 : 22) + bytes;
+    const estPacket = (encryptionEnabled ? 38 + 16 : 22) + bytes;
     await waitForCredit(estPacket);
     if (cancelled) break;
 
@@ -230,7 +233,10 @@ async function runStart(payload: StartPayload): Promise<void> {
   }
 
   if (!cancelled) {
-    self.postMessage({ type: 'complete', payload: { nextNonce: nonceCounter } });
+    self.postMessage({
+      type: 'complete',
+      payload: { nextNonce: nonceCounter },
+    });
   }
 }
 
@@ -250,7 +256,10 @@ self.onmessage = (event: MessageEvent<ControlIn>) => {
       });
       break;
     case 'credit':
-      queuedBytes = Math.max(0, queuedBytes - Math.max(0, data.payload.bytes | 0));
+      queuedBytes = Math.max(
+        0,
+        queuedBytes - Math.max(0, data.payload.bytes | 0)
+      );
       notifyCredit();
       break;
     case 'update-chunk-size':

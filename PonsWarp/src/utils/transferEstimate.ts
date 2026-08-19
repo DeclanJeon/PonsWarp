@@ -79,11 +79,8 @@ export const updateRollingSpeedSample = (
   if (elapsedMs < MIN_SPEED_SAMPLE_MS || bytesDelta < 0) {
     return {
       bytesTransferred:
-        bytesDelta < 0
-          ? previousSample.bytesTransferred
-          : nextBytesTransferred,
-      timestampMs:
-        elapsedMs < 0 ? previousSample.timestampMs : timestampMs,
+        bytesDelta < 0 ? previousSample.bytesTransferred : nextBytesTransferred,
+      timestampMs: elapsedMs < 0 ? previousSample.timestampMs : timestampMs,
       bytesPerSecond: previousSample.bytesPerSecond,
     };
   }
@@ -166,7 +163,10 @@ export class TransferSpeedMeter {
       return this.smoothedBps;
     }
 
-    if (timestampMs - this.lastSampleAt >= this.minSampleMs || bytes > last.bytes) {
+    if (
+      timestampMs - this.lastSampleAt >= this.minSampleMs ||
+      bytes > last.bytes
+    ) {
       this.points.push({ t: timestampMs, bytes });
       this.lastSampleAt = timestampMs;
     } else {
@@ -201,7 +201,8 @@ export class TransferSpeedMeter {
 }
 
 function nowMs(): number {
-  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+  return typeof performance !== 'undefined' &&
+    typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
 }

@@ -1,10 +1,4 @@
 import { debugLog } from '../utils/logger';
-/* 🪲 [DEBUG] ReceiverView UI/UX 개선 시작 */
-debugLog('[ReceiverView] 🪲 [DEBUG] UI/UX Enhancement Started:');
-debugLog('[ReceiverView] 🪲 [DEBUG] - Applying HUD-style circular progress');
-debugLog('[ReceiverView] 🪲 [DEBUG] - Implementing mobile-optimized input');
-debugLog('[ReceiverView] 🪲 [DEBUG] - Adding focal point principles');
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Scan,
@@ -47,9 +41,6 @@ type ReceiverProgressPayload = {
   pathKind?: string;
   protocol?: string | null;
   rttMs?: number | null;
-  hybridArmed?: boolean;
-  hybridArmReason?: string;
-  hybridBytesReceived?: number;
 };
 
 type ReceiverCompletePayload = {
@@ -80,9 +71,6 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     pathKind: 'unknown' as string,
     protocol: null as string | null,
     rttMs: null as number | null,
-    hybridArmed: false,
-    hybridArmReason: '',
-    hybridBytesReceived: 0,
   });
 
   // 🚨 [추가] 송신자 응답 대기 상태 변수
@@ -92,8 +80,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     isWaitingForSenderRef.current = isWaitingForSender;
   }, [isWaitingForSender]);
 
-  // 🚀 [Multi-Receiver] 대기열 상태
-  const [queuePosition, setQueuePosition] = useState<number>(0);
+  // 대기열 상태 (단일 피어: 송신자 준비 대기 메시지)
   const [queueMessage, setQueueMessage] = useState<string>('');
 
   // 🚨 [추가] 연결 타임아웃 관리용 Ref
@@ -121,14 +108,12 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       setErrorMsg(''); // 이전 에러 메시지 초기화
       setManifest(m);
 
-      // 🚀 [Multi-Receiver] QUEUED 상태에서 manifest를 다시 받으면
-      // 대기열에서 전송이 시작된 것이므로 RECEIVING으로 전환
+      // QUEUED 상태에서 manifest를 다시 받으면 전송 시작
       const currentStatus = statusRef.current;
       if (currentStatus === 'QUEUED') {
         debugLog(
           '[ReceiverView] Manifest received while QUEUED - transfer starting'
         );
-        setQueuePosition(0);
         setQueueMessage('');
         updateProgress({
           progress: 0,
@@ -143,9 +128,6 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
           pathKind: 'unknown',
           protocol: null,
           rttMs: null,
-          hybridArmed: false,
-          hybridArmReason: '',
-          hybridBytesReceived: 0,
         });
         setStatus('RECEIVING');
         setIsWaitingForSender(false);
@@ -205,13 +187,6 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
           pathKind: p.pathKind || prev.pathKind || 'unknown',
           protocol: p.protocol ?? prev.protocol ?? null,
           rttMs: typeof p.rttMs === 'number' ? p.rttMs : prev.rttMs,
-          hybridArmed:
-            typeof p.hybridArmed === 'boolean' ? p.hybridArmed : prev.hybridArmed,
-          hybridArmReason: p.hybridArmReason || prev.hybridArmReason || '',
-          hybridBytesReceived:
-            typeof p.hybridBytesReceived === 'number'
-              ? p.hybridBytesReceived
-              : prev.hybridBytesReceived,
         }));
       }
     },
@@ -350,7 +325,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
   // 🚨 [핵심 수정] 중복 초기화 방지를 위한 Ref
   const isInitializedRef = useRef(false);
 
-  // 🚀 [Multi-Receiver] 전송 놓침 핸들러
+  // 전송 놓침 핸들러
   const handleTransferMissed = useCallback(
     (msg: string) => {
       console.warn('[ReceiverView] Transfer missed:', msg);
@@ -365,24 +340,21 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     [setStatus]
   );
 
-  // 🚀 [Multi-Receiver] 대기열 추가 핸들러
   const handleQueued = useCallback(
     (data: { message: string; position: number }) => {
       debugLog('[ReceiverView] Added to queue:', data);
       if (connectionTimeoutRef.current)
         clearTimeout(connectionTimeoutRef.current);
-      setQueuePosition(data.position);
       setQueueMessage(data.message);
       setStatus('QUEUED');
     },
     [setStatus]
   );
 
-  // 🚀 [Multi-Receiver] 전송 시작 핸들러 (대기열에서 나옴)
+  // 대기열에서 전송 시작 처리 (단일 피어)
   const handleTransferStarting = useCallback(() => {
     debugLog('[ReceiverView] Transfer starting from queue');
     // 대기열 상태 초기화
-    setQueuePosition(0);
     setQueueMessage('');
     // 진행률 초기화
     updateProgress({
@@ -398,16 +370,13 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       pathKind: 'unknown',
       protocol: null,
       rttMs: null,
-      hybridArmed: false,
-      hybridArmReason: '',
-      hybridBytesReceived: 0,
     });
     // 상태 전환
     setStatus('RECEIVING');
     setIsWaitingForSender(false);
   }, [manifest, updateProgress, setStatus]);
 
-  // 🚀 [Multi-Receiver] 다운로드 가능 알림 핸들러
+  // 다운로드 가능 알림 핸들러
   const handleReadyForDownload = useCallback(
     (data: { message: string }) => {
       debugLog('[ReceiverView] Ready for download:', data);
@@ -416,7 +385,6 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       // QUEUED 상태에서 WAITING으로 전환
       if (statusRef.current === 'QUEUED') {
         setStatus('WAITING');
-        setQueuePosition(0);
         setQueueMessage('');
       }
     },
@@ -694,7 +662,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
           </motion.div>
         )}
 
-        {/* --- STATE: QUEUED --- */}
+        {/* --- STATE: QUEUED (전송 대기) --- */}
         {status === 'QUEUED' && (
           <motion.div
             key="queued"
@@ -708,13 +676,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                 <Radio className="w-10 h-10 text-cyan-400 animate-pulse" />
               </div>
               <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 tracking-wider brand-font">
-                QUEUED
+                WAITING
               </h2>
-              <p className="text-cyan-300 font-mono mb-2">
-                Position {queuePosition || '-'}
-              </p>
               <p className="text-gray-400 text-sm">
-                {queueMessage || 'Waiting for an available sender slot'}
+                {queueMessage || 'Waiting for the sender to be ready'}
               </p>
             </div>
           </motion.div>
@@ -889,7 +854,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
             <p
               className={`mt-2 px-2 text-center font-mono text-[10px] leading-relaxed break-words sm:text-[11px] ${
-                progressData.hybridArmed || progressData.pathKind === 'relay'
+                progressData.pathKind === 'relay'
                   ? 'text-amber-300'
                   : 'text-cyan-200/70'
               }`}
@@ -898,9 +863,6 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                 pathKind: progressData.pathKind,
                 protocol: progressData.protocol,
                 rttMs: progressData.rttMs,
-                hybridArmed: progressData.hybridArmed,
-                hybridArmReason: progressData.hybridArmReason,
-                hybridBytesReceived: progressData.hybridBytesReceived,
               })}
             </p>
 

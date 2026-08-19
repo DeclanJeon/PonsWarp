@@ -60,14 +60,10 @@ interface TransferState {
   // 진행률 (자주 변경됨)
   progress: ProgressData;
 
-  // 피어 정보 (Sender용)
+  // 피어 정보 (Sender용, 1:1)
   connectedPeers: string[];
   readyPeers: string[];
-  completedPeers: string[];
-  queuedPeers: string[];
   readyCountdown: number | null;
-  currentTransferPeerCount: number;
-  waitingPeersCount: number;
 
   // 액션
   setMode: (mode: AppMode) => void;
@@ -91,12 +87,7 @@ interface TransferState {
   removeConnectedPeer: (peerId: string) => void;
   addReadyPeer: (peerId: string) => void;
   removeReadyPeer: (peerId: string) => void;
-  addCompletedPeer: (peerId: string) => void;
-  addQueuedPeer: (peerId: string) => void;
-  clearQueuedPeers: () => void;
   setReadyCountdown: (countdown: number | null) => void;
-  setCurrentTransferPeerCount: (count: number) => void;
-  setWaitingPeersCount: (count: number) => void;
 
   // 전체 리셋
   reset: () => void;
@@ -126,11 +117,7 @@ const initialState = {
   progress: initialProgress,
   connectedPeers: [],
   readyPeers: [],
-  completedPeers: [],
-  queuedPeers: [],
   readyCountdown: null,
-  currentTransferPeerCount: 0,
-  waitingPeersCount: 0,
 };
 
 export const useTransferStore = create<TransferState>()(
@@ -186,28 +173,7 @@ export const useTransferStore = create<TransferState>()(
         readyPeers: state.readyPeers.filter(id => id !== peerId),
       })),
 
-    addCompletedPeer: peerId =>
-      set(state => ({
-        completedPeers: state.completedPeers.includes(peerId)
-          ? state.completedPeers
-          : [...state.completedPeers, peerId],
-        // 완료된 피어는 readyPeers에서 제거
-        readyPeers: state.readyPeers.filter(id => id !== peerId),
-      })),
-
-    addQueuedPeer: peerId =>
-      set(state => ({
-        queuedPeers: state.queuedPeers.includes(peerId)
-          ? state.queuedPeers
-          : [...state.queuedPeers, peerId],
-      })),
-
-    clearQueuedPeers: () => set({ queuedPeers: [] }),
-
     setReadyCountdown: countdown => set({ readyCountdown: countdown }),
-    setCurrentTransferPeerCount: count =>
-      set({ currentTransferPeerCount: count }),
-    setWaitingPeersCount: count => set({ waitingPeersCount: count }),
 
     // 전체 리셋
     reset: () => set(initialState),
@@ -218,11 +184,7 @@ export const useTransferStore = create<TransferState>()(
         status: 'IDLE',
         error: null,
         progress: initialProgress,
-        completedPeers: [],
-        queuedPeers: [],
         readyCountdown: null,
-        currentTransferPeerCount: 0,
-        waitingPeersCount: 0,
       }),
   }))
 );
@@ -247,6 +209,4 @@ export const selectManifest = (state: TransferState) => state.manifest;
 export const selectPeerCounts = (state: TransferState) => ({
   connected: state.connectedPeers.length,
   ready: state.readyPeers.length,
-  completed: state.completedPeers.length,
-  queued: state.queuedPeers.length,
 });

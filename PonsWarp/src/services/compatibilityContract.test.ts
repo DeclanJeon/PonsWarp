@@ -16,16 +16,22 @@ describe('compatibility v1 contract metadata', () => {
     expect(manifest.methods.length).toBeGreaterThan(0);
     expect(manifest.singletonExports.length).toBeGreaterThan(0);
     expect(Object.keys(manifest.events).length).toBeGreaterThan(0);
-    expect(Object.keys(manifest.eventPayloadSemantics).length).toBeGreaterThan(0);
+    expect(Object.keys(manifest.eventPayloadSemantics).length).toBeGreaterThan(
+      0
+    );
     expect(Object.keys(manifest.timeoutsAndRetries).length).toBeGreaterThan(0);
-    expect(Object.keys(manifest.roles)).toEqual(expect.arrayContaining(['sender', 'receiver']));
+    expect(Object.keys(manifest.roles)).toEqual(
+      expect.arrayContaining(['sender', 'receiver'])
+    );
     expect(manifest.callsites.length).toBeGreaterThan(0);
   });
 
   it('keeps API and event names unique', () => {
-    const apiNames = compatibilityManifest.methods.map(method => `${method.owner}.${method.name}`);
-    const eventNames = Object.entries(compatibilityManifest.events).flatMap(([owner, names]) =>
-      names.map(name => `${owner}.${name}`)
+    const apiNames = compatibilityManifest.methods.map(
+      method => `${method.owner}.${method.name}`
+    );
+    const eventNames = Object.entries(compatibilityManifest.events).flatMap(
+      ([owner, names]) => names.map(name => `${owner}.${name}`)
     );
 
     expect(new Set(apiNames).size).toBe(apiNames.length);
@@ -49,8 +55,16 @@ describe('compatibility v1 contract metadata', () => {
     ).toThrow(/duplicate API names/);
   });
   it('validates constructor, singleton, named export, and callsite entries', () => {
-    for (const section of ['constructors', 'singletonExports', 'namedExports', 'callsites'] as const) {
-      const malformed = { ...compatibilityManifest, [section]: [{ ...compatibilityManifest[section][0], module: '' }] };
+    for (const section of [
+      'constructors',
+      'singletonExports',
+      'namedExports',
+      'callsites',
+    ] as const) {
+      const malformed = {
+        ...compatibilityManifest,
+        [section]: [{ ...compatibilityManifest[section][0], module: '' }],
+      };
       expect(() => assertCompatibilityManifest(malformed)).toThrow(/malformed/);
     }
   });

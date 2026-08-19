@@ -13,10 +13,7 @@ export interface KeyPair {
 
 export interface CryptoHandshakeMessage {
   type:
-    | 'CRYPTO_INIT'
-    | 'CRYPTO_PUBLIC_KEY'
-    | 'CRYPTO_KEY_CONFIRM'
-    | 'CRYPTO_READY';
+    'CRYPTO_INIT' | 'CRYPTO_PUBLIC_KEY' | 'CRYPTO_KEY_CONFIRM' | 'CRYPTO_READY';
   version?: number;
   algorithms?: string[];
   publicKey?: string;

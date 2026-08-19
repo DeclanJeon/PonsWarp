@@ -15,7 +15,9 @@ describe('swarmTransferLoop pure helpers', () => {
     // tiny chunks still clamp to max 128
     expect(computePrepareAheadCount(1024, 12 * 1024 * 1024)).toBe(128);
     // huge chunks still keep at least 16
-    expect(computePrepareAheadCount(2 * 1024 * 1024, 12 * 1024 * 1024)).toBe(16);
+    expect(computePrepareAheadCount(2 * 1024 * 1024, 12 * 1024 * 1024)).toBe(
+      16
+    );
   });
 
   it('scales in-flight target only when stripe is armed', () => {

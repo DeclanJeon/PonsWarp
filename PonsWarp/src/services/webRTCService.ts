@@ -1,7 +1,17 @@
 import { TurnConfigResponse } from './signaling';
 import { normalizeLaneSignal } from './stripeSignal';
-import type { IFileWriter, ReceiverServiceOptions, ReceiverSignalMessage, ReceiverProgressPayload } from './receiverTypes';
-export type { IFileWriter, ReceiverServiceOptions, ReceiverSignalMessage, ReceiverProgressPayload } from './receiverTypes';
+import type {
+  IFileWriter,
+  ReceiverServiceOptions,
+  ReceiverSignalMessage,
+  ReceiverProgressPayload,
+} from './receiverTypes';
+export type {
+  IFileWriter,
+  ReceiverServiceOptions,
+  ReceiverSignalMessage,
+  ReceiverProgressPayload,
+} from './receiverTypes';
 import { getSignalingService, ISignalingService } from './signaling-factory';
 const defaultSignalingService = () => getSignalingService();
 import {
@@ -44,7 +54,6 @@ export class ReceiverService {
   private hybridDownloadAbort: AbortController | null = null;
   private hybridBytesReceived = 0;
   private hybridPacketsReceived = 0;
-
 
   private signalingService: ISignalingService | null = null;
   private readonly peerFactory: (
@@ -524,7 +533,7 @@ export class ReceiverService {
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
-    this.pendingBulkPackets = [];
+      this.pendingBulkPackets = [];
     }
     for (const stripe of this.stripePeers.values()) {
       try {
@@ -615,9 +624,7 @@ export class ReceiverService {
         roomId
       )) as TurnConfigResponse;
       if (response?.success && response?.data) {
-        this.iceServers = orderIceServersPreferDirect(
-          response.data.iceServers
-        );
+        this.iceServers = orderIceServersPreferDirect(response.data.iceServers);
       }
     } catch (error) {
       logError('[Receiver]', 'Failed to fetch TURN config:', error);
@@ -689,10 +696,7 @@ export class ReceiverService {
     }
     // Stale peer with closed channels: replace with a fresh PeerSession.
     if (this.peer && this.connectedPeerId === d.from && !this.peer.connected) {
-      logWarn(
-        '[Receiver]',
-        'Replacing disconnected peer for fresh offer'
-      );
+      logWarn('[Receiver]', 'Replacing disconnected peer for fresh offer');
       try {
         this.peer.destroy();
       } catch {
@@ -740,7 +744,10 @@ export class ReceiverService {
     this.peer.signal(signal);
   };
 
-  private setupStripePeerEvents(peer: SinglePeerConnection, lane: number): void {
+  private setupStripePeerEvents(
+    peer: SinglePeerConnection,
+    lane: number
+  ): void {
     peer.on('signal', (data: any) => {
       if (data?.type === 'answer') {
         this.ensureSignalingService().sendAnswer(
@@ -765,10 +772,16 @@ export class ReceiverService {
         try {
           if (data.startsWith('{')) {
             const msg = JSON.parse(data);
-            if (msg?.type === 'STRIPE_PING' || msg?.type === 'STRIPE_BULK_PING') {
+            if (
+              msg?.type === 'STRIPE_PING' ||
+              msg?.type === 'STRIPE_BULK_PING'
+            ) {
               peer.send(
                 JSON.stringify({
-                  type: msg.type === 'STRIPE_BULK_PING' ? 'STRIPE_BULK_PONG' : 'STRIPE_PONG',
+                  type:
+                    msg.type === 'STRIPE_BULK_PING'
+                      ? 'STRIPE_BULK_PONG'
+                      : 'STRIPE_PONG',
                   lane,
                   n: msg.n ?? 0,
                 })
@@ -802,7 +815,10 @@ export class ReceiverService {
         if (data.byteLength < 256 && u8[0] === 123) {
           try {
             const msg = JSON.parse(new TextDecoder().decode(data));
-            if (msg?.type === 'STRIPE_PING' || msg?.type === 'STRIPE_BULK_PING') {
+            if (
+              msg?.type === 'STRIPE_PING' ||
+              msg?.type === 'STRIPE_BULK_PING'
+            ) {
               peer.send(
                 JSON.stringify({
                   type:
@@ -1039,8 +1055,9 @@ export class ReceiverService {
     this.peer = null;
   }
 
-
-  private async consumeHybridObject(manifest: HybridManifestMsg): Promise<void> {
+  private async consumeHybridObject(
+    manifest: HybridManifestMsg
+  ): Promise<void> {
     if (!this.writer) {
       logWarn('[Receiver]', 'Hybrid ready but writer not initialized yet');
       setTimeout(() => {
@@ -1283,6 +1300,7 @@ export class ReceiverService {
             // Multi-PC striping delivers chunks out-of-order across associations.
             // Never ACK until the contiguous reordering frontier reaches offset.
             const deadline = Date.now() + 120_000;
+            // eslint-disable-next-line no-constant-condition
             while (true) {
               await this.writer?.waitForIdle?.();
               const frontier =

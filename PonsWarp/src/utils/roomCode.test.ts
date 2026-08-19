@@ -9,16 +9,20 @@ describe('room code normalization', () => {
   });
 
   it('extracts the room code from full receive links instead of joining room HTTPS:', () => {
-    expect(normalizeRoomCodeInput('https://warp.ponslink.com/receive/yiby9e')).toBe(
-      'YIBY9E'
-    );
     expect(
-      normalizeRoomCodeInput('Open this: https://warp.ponslink.com/receive/S6X41K?x=1')
+      normalizeRoomCodeInput('https://warp.ponslink.com/receive/yiby9e')
+    ).toBe('YIBY9E');
+    expect(
+      normalizeRoomCodeInput(
+        'Open this: https://warp.ponslink.com/receive/S6X41K?x=1'
+      )
     ).toBe('S6X41K');
   });
 
   it('checks whether normalized input contains a complete room code', () => {
-    expect(isCompleteRoomCode('https://warp.ponslink.com/receive/yiby9e')).toBe(true);
+    expect(isCompleteRoomCode('https://warp.ponslink.com/receive/yiby9e')).toBe(
+      true
+    );
     expect(isCompleteRoomCode('abc12')).toBe(false);
   });
 });

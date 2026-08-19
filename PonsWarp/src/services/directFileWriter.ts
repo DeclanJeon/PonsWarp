@@ -49,16 +49,11 @@ if (typeof window !== 'undefined') {
   logDebug('[DirectFileWriter]', `Initial MITM URL: ${streamSaver.mitm}`);
 }
 
-// 🚀 [Flow Control] 메모리 보호를 위한 워터마크 설정
-// 32MB 이상 쌓이면 PAUSE 요청, 16MB 이하로 떨어지면 RESUME 요청
 import {
   MAX_RESUME_ATTEMPTS,
-  WRITE_BUFFER_HIGH_MARK,
-  WRITE_BUFFER_LOW_MARK,
   canRequestWriterResume,
   resolveWriterBackpressureAction,
 } from './writerFlowControl';
-// Re-export for tests/callers that previously relied on file-local constants.
 export {
   MAX_RESUME_ATTEMPTS,
   WRITE_BUFFER_HIGH_MARK,
@@ -330,7 +325,11 @@ export class DirectFileWriter {
       );
 
       // 1. File System Access API 우선 시도 (Firefox, 자동화 제외)
-      if (hasFileSystemAccess && !isHeadlessBrowser() && !isAutomationDownloadMode()) {
+      if (
+        hasFileSystemAccess &&
+        !isHeadlessBrowser() &&
+        !isAutomationDownloadMode()
+      ) {
         try {
           await this.initFileSystemAccess(fileName);
           logInfo(
@@ -1091,7 +1090,8 @@ export class DirectFileWriter {
       normalizedPacket = await this.normalizePacket(packet);
     } catch (error: unknown) {
       this.releaseDecryptSlot();
-      const writeError = error instanceof Error ? error : new Error('Decryption failed');
+      const writeError =
+        error instanceof Error ? error : new Error('Decryption failed');
       this.writeFailure = writeError;
       if (queuedPayloadBytes > 0) {
         this.pendingBytesInBuffer = Math.max(
@@ -1199,7 +1199,9 @@ export class DirectFileWriter {
    * 🚀 [성능] 이미 복호화된 패킷 처리 (processChunkInternal에서 normalizePacket 분리)
    * writeChunk에서 복호화를 먼저 수행한 후 호출됨.
    */
-  private async processDecodedChunk(normalizedPacket: ArrayBuffer): Promise<void> {
+  private async processDecodedChunk(
+    normalizedPacket: ArrayBuffer
+  ): Promise<void> {
     if (this.isFinalized) return;
 
     if (normalizedPacket.byteLength < HEADER_SIZE) {
@@ -1421,7 +1423,6 @@ export class DirectFileWriter {
     normalizedBytes.set(decrypted, HEADER_SIZE);
     return normalized;
   }
-
 
   private async decryptEncryptedPacket(bytes: Uint8Array): Promise<Uint8Array> {
     if (this.sessionKey && globalThis.crypto?.subtle) {
@@ -1647,10 +1648,7 @@ export class DirectFileWriter {
       pendingBytes: this.pendingBytesInBuffer,
       totalBytes: this.totalSize,
     });
-    const speed = this.speedMeter.update(
-      visibleProgress.bytesTransferred,
-      now
-    );
+    const speed = this.speedMeter.update(visibleProgress.bytesTransferred, now);
 
     this.onProgressCallback?.({
       progress: visibleProgress.progress,

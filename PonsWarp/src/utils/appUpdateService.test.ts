@@ -46,7 +46,7 @@ describe('registerAppUpdateServiceWorker', () => {
   });
 
   it('defers reload while transfer is active then reloads when idle', async () => {
-    const listeners = new Map<string, Function[]>();
+    const listeners = new Map<string, Array<() => void>>();
     const registration = {
       installing: null,
       waiting: null,
@@ -61,8 +61,14 @@ describe('registerAppUpdateServiceWorker', () => {
       serviceWorker: {
         register,
         controller: {},
-        addEventListener: (type: string, fn: Function) => {
-          listeners.set(type, [...(listeners.get(type) ?? []), fn]);
+        addEventListener: (
+          type: string,
+          fn: (...args: unknown[]) => unknown
+        ) => {
+          listeners.set(type, [
+            ...(listeners.get(type) ?? []),
+            fn as unknown as () => void,
+          ]);
         },
       },
     });

@@ -5,10 +5,7 @@
  * - control: ordered JSON control plane
  * - bulk-0: ordered reliable binary bulk plane
  */
-import {
-  LOW_WATER_MARK,
-  DRAIN_EVENT_WATCHDOG_MS,
-} from '../utils/constants';
+import { LOW_WATER_MARK, DRAIN_EVENT_WATCHDOG_MS } from '../utils/constants';
 import {
   TransferDiagnostics,
   CandidatePathKind,
@@ -98,7 +95,10 @@ export class PeerSession {
     this.initiator = initiator;
     // Non-initiator is polite (rolls back on glare).
     this.polite = !initiator;
-    this.bulkChannelCount = Math.max(1, Math.min(4, config.bulkChannelCount ?? 1));
+    this.bulkChannelCount = Math.max(
+      1,
+      Math.min(4, config.bulkChannelCount ?? 1)
+    );
     this.lowWater = LOW_WATER_MARK;
     this.initialize(config);
   }
@@ -166,10 +166,7 @@ export class PeerSession {
       const state = this.pc.connectionState;
       if (state === 'failed') {
         this.connected = false;
-        this.emit(
-          'error',
-          new Error(`Peer connection failed on ${this.id}`)
-        );
+        this.emit('error', new Error(`Peer connection failed on ${this.id}`));
         this.emit('close');
       } else if (state === 'closed') {
         this.connected = false;
@@ -230,10 +227,7 @@ export class PeerSession {
           `Control channel error (pc=${pcState ?? 'n/a'}, ch=${channel.readyState})`
         );
         if (pcState === 'failed' || pcState === 'closed') {
-          this.emit(
-            'error',
-            new Error(`Control channel error on ${this.id}`)
-          );
+          this.emit('error', new Error(`Control channel error on ${this.id}`));
         }
       };
       channel.onmessage = event => {
@@ -250,7 +244,10 @@ export class PeerSession {
         if (ArrayBuffer.isView(data)) {
           this.emit(
             'data',
-            data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+            data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength
+            )
           );
         }
       };
@@ -287,7 +284,10 @@ export class PeerSession {
         if (ArrayBuffer.isView(data)) {
           this.emit(
             'data',
-            data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+            data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength
+            )
           );
           return;
         }
@@ -338,7 +338,6 @@ export class PeerSession {
     this.ensureDrainWatchdog();
   }
 
-
   private handleChannelClosed(channel: RTCDataChannel): void {
     if (this.destroyed) return;
 
@@ -366,7 +365,11 @@ export class PeerSession {
     this.connected = false;
 
     // Prefer in-place DataChannel recovery over peer teardown when PC lives.
-    if (pcState === 'connected' || pcState === 'connecting' || pcState === 'new') {
+    if (
+      pcState === 'connected' ||
+      pcState === 'connecting' ||
+      pcState === 'new'
+    ) {
       if (this.closeEmitTimer) clearTimeout(this.closeEmitTimer);
       this.closeEmitTimer = setTimeout(() => {
         this.closeEmitTimer = null;
@@ -379,7 +382,11 @@ export class PeerSession {
           return;
         }
         const state = this.pc?.connectionState;
-        if (state === 'connected' || state === 'connecting' || state === 'new') {
+        if (
+          state === 'connected' ||
+          state === 'connecting' ||
+          state === 'new'
+        ) {
           void this.recoverDataChannels(`all-channels-closed-pc-${state}`);
           return;
         }
@@ -475,7 +482,6 @@ export class PeerSession {
     }
   }
 
-
   private async createAndSendOffer(): Promise<void> {
     if (!this.pc || this.destroyed) return;
     try {
@@ -487,7 +493,10 @@ export class PeerSession {
       this.emit('signal', { type: 'offer', sdp } satisfies PeerSignalMessage);
     } catch (error) {
       logError(`[Peer ${this.id}]`, 'createOffer failed:', error);
-      this.emit('error', error instanceof Error ? error : new Error(String(error)));
+      this.emit(
+        'error',
+        error instanceof Error ? error : new Error(String(error))
+      );
     } finally {
       this.makingOffer = false;
     }
@@ -543,7 +552,10 @@ export class PeerSession {
       }
     } catch (error) {
       logError(`[Peer ${this.id}]`, 'signal handling failed:', error);
-      this.emit('error', error instanceof Error ? error : new Error(String(error)));
+      this.emit(
+        'error',
+        error instanceof Error ? error : new Error(String(error))
+      );
     }
   }
 
@@ -725,13 +737,11 @@ export class PeerSession {
 
       const localCandidate = selectedPair.localCandidateId
         ? (stats.get(selectedPair.localCandidateId) as
-            | CandidateStats
-            | undefined)
+            CandidateStats | undefined)
         : undefined;
       const remoteCandidate = selectedPair.remoteCandidateId
         ? (stats.get(selectedPair.remoteCandidateId) as
-            | CandidateStats
-            | undefined)
+            CandidateStats | undefined)
         : undefined;
       const succeeded =
         selectedPair.selected === true ||

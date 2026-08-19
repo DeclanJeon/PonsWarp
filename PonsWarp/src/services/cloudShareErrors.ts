@@ -14,7 +14,10 @@ export interface CloudShareErrorInfo {
 
 export function classifyCloudShareError(error: unknown): CloudShareErrorInfo {
   if (error instanceof TypeError) {
-    return { code: 'network', message: 'Network error. Check your connection.' };
+    return {
+      code: 'network',
+      message: 'Network error. Check your connection.',
+    };
   }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
@@ -41,10 +44,17 @@ export function classifyCloudShareError(error: unknown): CloudShareErrorInfo {
       const s = parseInt(msg.replace(/.*http\s*/, ''), 10);
       if (s === 401 || s === 403)
         return { code: 'password', message: 'Password required or incorrect.' };
-      if (s === 404) return { code: 'not-found', message: 'Share not found or expired.' };
-      if (s === 413) return { code: 'too-large', message: 'File too large for this plan.' };
-      if (s === 429) return { code: 'rate-limit', message: 'Too many requests. Please wait.' };
-      if (s >= 500) return { code: 'server', message: 'Server error. Try again later.' };
+      if (s === 404)
+        return { code: 'not-found', message: 'Share not found or expired.' };
+      if (s === 413)
+        return { code: 'too-large', message: 'File too large for this plan.' };
+      if (s === 429)
+        return {
+          code: 'rate-limit',
+          message: 'Too many requests. Please wait.',
+        };
+      if (s >= 500)
+        return { code: 'server', message: 'Server error. Try again later.' };
     }
   }
   return { code: 'unknown', message: 'Unexpected error. Please try again.' };
