@@ -20,7 +20,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # WASM bindings must exist before type-check resolves `pons-core-wasm`.
-      - uses: jcbhmr/wasm-pack-action@v1
+      - run: cargo install wasm-pack --locked
       - run: pnpm run wasm:build
       - run: pnpm --dir PonsWarp type-check
       - run: pnpm --dir PonsWarp exec eslint src --ext .ts,.tsx
@@ -51,6 +51,6 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: pnpm install --frozen-lockfile
-      - uses: jcbhmr/wasm-pack-action@v1
+      - run: cargo install wasm-pack --locked
       - run: pnpm run wasm:build
       - run: node scripts/verify-wasm-provenance.mjs
