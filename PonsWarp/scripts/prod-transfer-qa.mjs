@@ -46,9 +46,16 @@ function parseReceiverStatus(text) {
   }
   const percents = [...text.matchAll(/(\d+)%/g)].map(m => parseInt(m[1], 10));
   const progress = percents.length ? Math.max(...percents) : 0;
+  const transferred = text.match(/([\d.]+)\s*(KB|MB)\s+transferred/i);
+  let transferredMB = 0;
+  if (transferred) {
+    const n = parseFloat(transferred[1]);
+    transferredMB = /mb/i.test(transferred[2]) ? n : n / 1024;
+  }
   return {
     speedMBps,
     progress,
+    transferredMB,
     hasError: /\bFAILED\b|\bERROR\b/.test(text),
     hasMaterialized: /\bMATERIALIZED\b/i.test(text),
     hasDoneCopy:
@@ -289,11 +296,17 @@ async function main() {
         // 1) receiver >= 90% or sender 100%
         // 2) MATERIALIZED/done UI after any progress/speed signal
         // 3) peak throughput observed AND final UI landed
+        // 4) MATERIALIZED with transferred size >= 90% of the requested test
+        //    size (fast transfers can finish between 150ms polls, so a bare
+        //    "MATERIALIZED" without a captured % would otherwise false-fail)
         if (
           lastRP >= 90 ||
           lastSP >= 100 ||
           (sawMaterialized && (sawProgress || peakMBps > 0.05)) ||
-          (sawMaterialized && lastRP >= 30)
+          (sawMaterialized && lastRP >= 30) ||
+          (sawMaterialized &&
+            TEST_SIZE > 0 &&
+            rStatus.transferredMB * 1024 * 1024 >= TEST_SIZE * 0.9)
         ) {
           transferComplete = true;
           break;
