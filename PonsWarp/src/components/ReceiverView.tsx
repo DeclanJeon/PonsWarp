@@ -402,8 +402,6 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     setErrorMsg('');
     setStatus('RECEIVING');
   }, [setStatus]);
-
-  // 🚀 [핵심 수정] 이벤트 리스너 등록 Effect (한 번만 실행)
   useEffect(() => {
     // 리스너 등록
     transferService.on('metadata', handleMetadata);
@@ -818,6 +816,11 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                 <span className="text-xs text-cyan-300/80 font-mono mt-2 tracking-widest">
                   INCOMING STREAM
                 </span>
+                {isWaitingForSender && (
+                  <span className="mt-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/40 text-[10px] font-mono text-amber-300 animate-pulse tracking-widest">
+                    RECONNECTING...
+                  </span>
+                )}
                 <span className="text-[10px] text-cyan-100/60 font-mono mt-2 px-4 text-center">
                   {transferFeedbackLabel}
                 </span>

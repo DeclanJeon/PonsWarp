@@ -133,6 +133,13 @@ export class ReceiverService {
     }
   };
 
+  // 네트워크 인터페이스 변경/복구 감지 (Wi-Fi <-> LTE 전환, 라우터 끊김 등)
+  private readonly handleNetworkOnline = () => {
+    if (this.disposed || !this.roomId || !this.isTransferActive) return;
+    logInfo('[Receiver]', '🌐 Network connection restored (online)');
+    this.handlePageBecameActive();
+  };
+
   constructor(options: ReceiverServiceOptions = {}) {
     this.signalingService = options.signaling ?? null;
     this.peerFactory =
@@ -181,6 +188,7 @@ export class ReceiverService {
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('pageshow', this.handlePageBecameActive);
     window.addEventListener('focus', this.handlePageBecameActive);
+    window.addEventListener('online', this.handleNetworkOnline);
   }
 
   private isPageHidden(): boolean {
@@ -509,6 +517,7 @@ export class ReceiverService {
       );
       window.removeEventListener('pageshow', this.handlePageBecameActive);
       window.removeEventListener('focus', this.handlePageBecameActive);
+      window.removeEventListener('online', this.handleNetworkOnline);
     }
   }
 

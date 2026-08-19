@@ -307,9 +307,24 @@ export class SwarmManager {
     if (!this.roomId) return;
     const signaling = this.getSignalingService();
     const reconnect = signaling.reconnect?.bind(signaling);
-    void (reconnect ? reconnect() : signaling.connect()).catch(error => {
-      logError('[SwarmManager]', 'Signaling reconnect failed:', error);
-    });
+    void (reconnect ? reconnect() : signaling.connect())
+      .then(() => {
+        // 네트워크 복구 후 방 재참여 및 전송 파이프라인 재개.
+        // awaitingReceiverReconnect 상태라면 receiver의 RESUME_REQUEST를 기다리되,
+        // 피어가 아직 살아있다면 chunk 파이프라인을 즉시 재개한다.
+        if (this.roomId) {
+          return this.getSignalingService().joinRoom(this.roomId);
+        }
+      })
+      .then(() => {
+        if (!this.isTransferring && !this.awaitingReceiverReconnect) {
+          this.updateAdaptiveTransferConfig();
+          this.requestMoreChunks();
+        }
+      })
+      .catch(error => {
+        logError('[SwarmManager]', 'Signaling reconnect failed:', error);
+      });
   };
   private boundHandleRoomFull = () => {
     this.emit('room-full', 'Room is at maximum capacity');

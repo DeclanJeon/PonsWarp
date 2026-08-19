@@ -251,4 +251,59 @@ describe('ReceiverService mobile visibility resume', () => {
     expect(schedule).toHaveBeenCalledWith({ immediate: true });
     service.cleanup();
   });
+
+  it('triggers resume hints when network comes back online during an active transfer', () => {
+    const sent: unknown[] = [];
+    const forceResume = vi.fn(() => true);
+
+    const service = new ReceiverService({
+      signaling: {
+        connect: vi.fn(async () => undefined),
+        joinRoom: vi.fn(async () => undefined),
+        leaveRoom: vi.fn(),
+        sendOffer: vi.fn(),
+        sendAnswer: vi.fn(),
+        sendCandidate: vi.fn(),
+        requestTurnConfig: vi.fn(async () => ({
+          success: true,
+          data: { iceServers: [] },
+        })),
+        on: vi.fn(),
+        off: vi.fn(),
+        getSocketId: vi.fn(() => 'recv'),
+        isConnected: vi.fn(() => true),
+        disconnect: vi.fn(),
+      } as unknown as ISignalingService,
+    });
+
+    const internals = service as unknown as {
+      roomId: string | null;
+      isTransferActive: boolean;
+      reconnectTimer: ReturnType<typeof setTimeout> | null;
+      peer: { connected: boolean; send(message: string): boolean } | null;
+      writer: {
+        forceResumeFromCurrentOffset(reason: string): boolean;
+      };
+      handleNetworkOnline(): void;
+    };
+
+    internals.roomId = 'ROOM42';
+    internals.isTransferActive = true;
+    internals.reconnectTimer = null;
+    internals.peer = {
+      connected: true,
+      send: (message: string) => {
+        sent.push(JSON.parse(message));
+        return true;
+      },
+    };
+    internals.writer = { forceResumeFromCurrentOffset: forceResume };
+
+    // Wi-Fi -> LTE 전환 후 online 이벤트 발생
+    internals.handleNetworkOnline();
+
+    expect(sent).toEqual([{ type: 'CONTROL', action: 'RESUME' }]);
+    expect(forceResume).toHaveBeenCalledWith('page-became-active');
+    service.cleanup();
+  });
 });
