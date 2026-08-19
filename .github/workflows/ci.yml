@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir PonsWarp type-check
+      - run: pnpm --dir PonsWarp exec eslint src --ext .ts,.tsx
+      - run: pnpm --dir PonsWarp test
+      - run: pnpm audit --prod
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --manifest-path ponswarp-signaling-rs/Cargo.toml --locked
+      - run: cargo test --manifest-path pons-core-wasm/Cargo.toml --locked
+
+  wasm-provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run wasm:build
+      - run: node scripts/verify-wasm-provenance.mjs
