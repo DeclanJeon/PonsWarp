@@ -76,7 +76,7 @@ close_ssh_master() {
 cleanup_local() {
   local rc=$?
   rm -f "$FRONTEND_ARCHIVE"
-  if [[ -n "$STAGING_PATH" ]]; then
+  if [[ -n "${STAGING_PATH:-}" ]]; then
     ssh_remote "rm -rf -- '$STAGING_PATH'" >/dev/null 2>&1 || true
   fi
   close_ssh_master
@@ -341,7 +341,14 @@ else
   fi
 fi
 
-if [[ -n "$old_current" ]]; then old_port="$(sed -n 's/.*127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' "$old_current/backend.inc")"; [[ "$old_port" == 5502 || "$old_port" == 5503 ]] || { echo 'invalid active backend port' >&2; exit 1; }
+if [[ -n "$old_current" ]]; then
+  old_backend_inc="$old_current/backend.inc"
+  if [[ -f "$old_backend_inc" ]]; then
+    old_port="$(sed -n 's/.*127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' "$old_backend_inc")"
+  else
+    old_port=''
+  fi
+  [[ "$old_port" == 5502 || "$old_port" == 5503 ]] || { echo "invalid active backend port '$old_port' (missing backend.inc?)" >&2; exit 1; }
 else old_port=5502; fi
 if [[ "$old_port" == 5502 ]]; then new_port=5503; else new_port=5502; fi
 if [[ "$NETWORK" == host ]]; then
@@ -381,7 +388,7 @@ install -m 0644 "$release/warp.ponslink.com.conf" /etc/nginx/sites-available/war
 ln -sfn /etc/nginx/sites-available/warp.ponslink.com /etc/nginx/sites-enabled/warp.ponslink.com
 install -m 0644 "$release/ponswarp-limit-req.conf" /etc/nginx/conf.d/ponswarp-limit-req.conf
 nginx -t; nginx -s reload; smoke_public
-if [[ -n "$old_current" ]]; then
+if [[ -n "$old_current" && -f "$old_current/release.id" ]]; then
   old_release_id="$(<"$old_current/release.id")"
   old_container_name="ponswarp-signaling-$old_release_id"
   docker rm -f "$old_container_name" >/dev/null 2>&1 || true
