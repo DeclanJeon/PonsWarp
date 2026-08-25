@@ -45,7 +45,16 @@ fi
 FRONTEND_ARCHIVE="/tmp/ponswarp-frontend-${RELEASE_ID}.tar.gz"
 STAGING_PATH=''
 
-# --- SSH ControlMaster: one TCP session for all ssh/scp ---
+# --- Cross-deploy serialization: warp + desk share same host nginx ---
+# Prevents nginx reload race when warp and desk deploy concurrently.
+WARPSYNC_LOCK="/tmp/ponswarp-nginx-reload.lock"
+exec 9>"$WARPSYNC_LOCK" || true
+if ! flock -n 9 2>/dev/null; then
+  echo "another deploy is holding nginx reload lock ($WARPSYNC_LOCK); waiting up to 60s..." >&2
+  flock -w 60 9 || { echo "failed to acquire nginx reload lock after 60s" >&2; exit 1; }
+fi
+# Hold fd 9 until script exits (trap cleanup_local already closes master)
+
 SSH_CM_DIR="${XDG_RUNTIME_DIR:-/tmp}/ponswarp-deploy-ssh"
 mkdir -p "$SSH_CM_DIR"
 SSH_CM_PATH="$SSH_CM_DIR/cm-%C"
@@ -212,6 +221,13 @@ fi
 
 ssh_remote "sudo -n env REMOTE_DIR='$REMOTE_DIR' STAGING_PATH='$STAGING_PATH' NETWORK='$REMOTE_NETWORK' PUBLIC_URL='$PUBLIC_URL' MODE='$MODE' RELEASE_ID='$RELEASE_ID' HOST_ENV_PATH='$HOST_ENV_PATH' bash -s" <<'REMOTE'
 set -euo pipefail
+# Host-side nginx reload lock — same file desk deploy must also use.
+NGINX_LOCK="/tmp/ponswarp-nginx-reload.lock"
+exec 8>"$NGINX_LOCK"
+if ! flock -n 8 2>/dev/null; then
+  echo "waiting for nginx reload lock ($NGINX_LOCK) held by another deploy..." >&2
+  flock -w 90 8 || { echo "failed to acquire host nginx lock after 90s" >&2; exit 1; }
+fi
 release="$REMOTE_DIR/releases/$RELEASE_ID"
 current="$REMOTE_DIR/current"
 old_current="$(readlink "$current" 2>/dev/null || true)"
