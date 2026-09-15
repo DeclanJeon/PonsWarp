@@ -289,6 +289,7 @@ impl CryptoSession {
         buffer: &mut [u8],
         data_offset: usize,
         data_len: usize,
+        aad: &[u8],
     ) -> Result<Vec<u8>, JsValue> {
         let nonce = self.generate_nonce();
 
@@ -327,8 +328,7 @@ impl CryptoSession {
         }
 
         // 2. Calculate GHASH (on ciphertext)
-        // 이미 data_slice는 암호화된 상태(ciphertext)임
-        let ghash_val = ghash(h, &[], &buffer[data_offset..data_end]); // AAD는 비어있음
+        let ghash_val = ghash(h, aad, &buffer[data_offset..data_end]);
 
         // 3. Calculate tag: E(K, J0) XOR GHASH
         let e_j0 = aes_encrypt_block(&j0, &self.round_keys);
@@ -548,7 +548,7 @@ impl CryptoSession {
 
         let ciphertext_with_tag = &packet[ENCRYPTED_HEADER_SIZE..];
 
-        self.aes_gcm_decrypt_test(&nonce, ciphertext_with_tag, &[])
+        self.aes_gcm_decrypt_test(&nonce, ciphertext_with_tag, &packet[..20])
     }
 
     fn aes_gcm_decrypt_test(

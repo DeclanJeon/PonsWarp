@@ -153,34 +153,33 @@ impl ZeroCopyPacketPool {
         let base_ptr = slot_id * SLOT_SIZE;
         let data_start = base_ptr + MAX_HEADER_SIZE; // 38번 바이트
 
-        // 1. In-Place 암호화 수행
+        // 1. Encrypted Header를 먼저 구성 — GCM 태그에 AAD로 바인딩하기 위해
+        //    암호화 전에 헤더 바이트가 확정되어야 한다 (decrypt_chunk가
+        //    packet[..20]을 AAD로 검증).
+        let mut header = [0u8; 20];
+        header[0] = CRYPTO_VERSION;
+        header[1] = flags::ENCRYPTED;
+        header[2..4].copy_from_slice(&0u16.to_le_bytes());
+        header[4..8].copy_from_slice(&self.sequence.to_le_bytes());
+        header[8..16].copy_from_slice(&self.total_bytes.to_le_bytes());
+        header[16..20].copy_from_slice(&(data_len as u32).to_le_bytes());
+
+        // 2. In-Place 암호화 수행 (헤더를 AAD로 바인딩)
         // 데이터 영역을 직접 암호화하고 Nonce와 Tag를 받아옴
-        let crypto_result = session.encrypt_in_place(&mut self.buffer, data_start, data_len);
+        let crypto_result =
+            session.encrypt_in_place(&mut self.buffer, data_start, data_len, &header);
 
         if let Ok(meta) = crypto_result {
             // meta: [Nonce(12) | Tag(16)]
             let nonce = &meta[..12];
             let tag = &meta[12..];
 
-            // 2. Auth Tag 쓰기 (데이터 바로 뒤에 붙임)
+            // 3. Auth Tag 쓰기 (데이터 바로 뒤에 붙임)
             let tag_start = data_start + data_len;
             self.buffer[tag_start..tag_start + 16].copy_from_slice(tag);
 
-            // 3. Encrypted Header 작성 (offset 0부터 작성)
-            // [0] Version
-            self.buffer[base_ptr] = CRYPTO_VERSION;
-            // [1] Flags
-            self.buffer[base_ptr + 1] = flags::ENCRYPTED;
-            // [2-3] FileIndex
-            self.buffer[base_ptr + 2..base_ptr + 4].copy_from_slice(&0u16.to_le_bytes());
-            // [4-7] ChunkIndex
-            self.buffer[base_ptr + 4..base_ptr + 8].copy_from_slice(&self.sequence.to_le_bytes());
-            // [8-15] Offset
-            self.buffer[base_ptr + 8..base_ptr + 16]
-                .copy_from_slice(&self.total_bytes.to_le_bytes());
-            // [16-19] Plaintext Length
-            self.buffer[base_ptr + 16..base_ptr + 20]
-                .copy_from_slice(&(data_len as u32).to_le_bytes());
+            // 4. Encrypted Header 작성 (offset 0부터 작성)
+            self.buffer[base_ptr..base_ptr + 20].copy_from_slice(&header);
             // [20-31] Nonce
             self.buffer[base_ptr + 20..base_ptr + 32].copy_from_slice(nonce);
             // [32-37] Reserved (Zero)
