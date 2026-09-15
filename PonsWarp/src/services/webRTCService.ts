@@ -310,6 +310,7 @@ export class ReceiverService {
     this.ensureSignalingService().on('ice-candidate', this.handleIceCandidate);
     this.ensureSignalingService().on('room-full', this.handleRoomFull);
     this.ensureSignalingService().on('room-not-found', this.handleRoomNotFound);
+    this.ensureSignalingService().on('user-left', this.handleUserLeft);
     // Receiver는 'answer'를 받을 일이 없음 (Answerer 역할이므로)
   }
 
@@ -318,7 +319,20 @@ export class ReceiverService {
     this.signalingService?.off('ice-candidate', this.handleIceCandidate);
     this.signalingService?.off('room-full', this.handleRoomFull);
     this.signalingService?.off('room-not-found', this.handleRoomNotFound);
+    this.signalingService?.off('user-left', this.handleUserLeft);
   }
+
+  /**
+   * Sender가 방을 떠나면 수신자에게 알린다.
+   * connectedPeerId가 알려진 이후(offer 수신 이후)에만 확실히 식별 가능 —
+   * offer 전에 떠난 경우 45초 연결 타임아웃이 커버한다.
+   */
+  private handleUserLeft = (data: { socketId?: string }) => {
+    const peerId = data?.socketId;
+    if (!peerId || peerId !== this.connectedPeerId) return;
+    logWarn('[Receiver]', `Sender left the room: ${peerId}`);
+    this.emit('peer-disconnected', { peerId, reason: 'user-left' });
+  };
 
   // ======================= PUBLIC API =======================
 

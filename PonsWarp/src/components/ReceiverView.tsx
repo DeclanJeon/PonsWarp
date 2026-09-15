@@ -63,6 +63,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
   const [receiveInput, setReceiveInput] = useState(roomId || '');
   const [errorMsg, setErrorMsg] = useState('');
+  const [senderGone, setSenderGone] = useState(false);
   const [actualSize, setActualSize] = useState<number>(0);
   const [progressData, setProgressData] = useState({
     progress: 0,
@@ -415,6 +416,26 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     setErrorMsg('');
     setStatus('RECEIVING');
   }, [setStatus]);
+
+  // Sender가 방을 떠남 (offer 이후 확실히 식별된 경우에만 발생)
+  // 주의: 시그널링 WS flap 시 송신자는 새 peer_id로 재참여·re-offer하므로
+  // 여기서 즉시 ERROR+cleanup하면 복구 가능한 세션을 죽인다.
+  // 종료 상태는 기존 경로가 커버: CONNECTING은 45초 타임아웃,
+  // WAITING 이후는 TRANSFER_ABORTED/데이터채널 close.
+  const handlePeerDisconnected = useCallback(() => {
+    const s = statusRef.current;
+    if (s === 'DONE') {
+      // 전송은 끝났지만 방은 죽었다 — Process Next는 재사용 불가
+      setSenderGone(true);
+      return;
+    }
+    if (s === 'CONNECTING' || s === 'WAITING' || s === 'QUEUED') {
+      toast.warning(
+        'Sender left the room. Waiting briefly for reconnect…'
+      );
+    }
+  }, []);
+
   useEffect(() => {
     // 리스너 등록
     transferService.on('metadata', handleMetadata);
@@ -429,6 +450,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     transferService.on('ready-for-download', handleReadyForDownload);
     transferService.on('reconnecting', handleReconnecting);
     transferService.on('reconnected', handleReconnected);
+    transferService.on('peer-disconnected', handlePeerDisconnected);
     transferService.on('nat-probe', (result: { verdict: string }) => {
       if (result.verdict === 'relay-likely' || result.verdict === 'blocked') {
         toast.warning(
@@ -450,7 +472,8 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       transferService.off('transfer-starting', handleTransferStarting);
       transferService.off('ready-for-download', handleReadyForDownload);
       transferService.off('reconnecting', handleReconnecting);
-      transferService.off('reconnected', handleReconnected);
+    transferService.off('reconnected', handleReconnected);
+    transferService.off('peer-disconnected', handlePeerDisconnected);
     };
   }, [
     handleMetadata,
@@ -465,6 +488,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     handleReadyForDownload,
     handleReconnecting,
     handleReconnected,
+    handlePeerDisconnected,
   ]);
 
   // 🚨 [핵심 수정] ERROR 상태가 되면 참여 가드를 리셋해 재시도 가능하게 함
@@ -498,13 +522,15 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
     return () => {
       isMountedRef.current = false;
-      if (connectionTimeoutRef.current)
-        clearTimeout(connectionTimeoutRef.current);
 
       // StrictMode에서 첫 번째 cleanup은 무시하고, 실제 언마운트 시에만 실행
       // 약간의 딜레이를 주어 StrictMode의 재마운트를 감지
+      // NOTE: connectionTimeoutRef clear는 반드시 이 블록 안에 있어야 한다 —
+      // dev StrictMode의 fake-unmount cleanup이 join 타임아웃을 죽이면
+      // 수신자가 CONNECTING에 무한 고착한다.
       setTimeout(() => {
         if (!isMountedRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
           debugLog('[ReceiverView] Component unmounted, cleaning up...');
           transferService.cleanup();
           void lanEvidenceAdapter.release();
@@ -933,10 +959,22 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                 </p>
               )}
               <button
-                onClick={() => window.location.reload()}
+                onClick={() => {
+                  // 방은 송신자가 떠나면 이미 삭제됐다 — reload 대신
+                  // 수신 입력 화면으로 돌아가 새 코드를 받을 수 있게 한다.
+                  transferService.cleanup();
+                  setManifest(null);
+                  setRoomId(null);
+                  setReceiveInput('');
+                  setActualSize(0);
+                  setSenderGone(false);
+                  setErrorMsg('');
+                  setStatus('IDLE');
+                }}
                 className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto"
               >
-                <RefreshCw size={18} /> Process Next
+                <RefreshCw size={18} />{' '}
+                {senderGone ? 'Receive Another' : 'Process Next'}
               </button>
             </div>
           </motion.div>

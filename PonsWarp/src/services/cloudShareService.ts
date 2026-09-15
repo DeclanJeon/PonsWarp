@@ -273,6 +273,27 @@ export const getCloudDownloadUrl = (
   return `${path}?${params.toString()}`;
 };
 
+/**
+ * Resolve the presigned R2 URL without following the 307 redirect.
+ * fetch() on the redirect sends `Origin: null` to R2, which its CORS rule
+ * rejects — callers that need the bytes (e.g. ZIP bundling) must fetch the
+ * presigned URL directly so the real Origin header is sent.
+ */
+export const fetchCloudDownloadUrl = async (
+  shareId: string,
+  fileId: string,
+  downloadSessionToken?: string
+): Promise<string> => {
+  const base = getCloudDownloadUrl(shareId, fileId, downloadSessionToken);
+  const url = `${base}${base.includes('?') ? '&' : '?'}format=json`;
+  const response = await fetch(url);
+  const body = await readJsonResponse<{ url?: string }>(response);
+  if (!body.url) {
+    throw new Error('Download URL missing from response');
+  }
+  return body.url;
+};
+
 export const uploadCloudFile = async (
   target: CloudUploadTarget,
   file: File,

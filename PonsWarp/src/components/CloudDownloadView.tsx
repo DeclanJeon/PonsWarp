@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+  fetchCloudDownloadUrl,
   getCloudDownloadUrl,
   getCloudShare,
   PublicCloudShareResponse,
@@ -161,6 +162,24 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     setDownloadAllError(null);
     setDownloadAllBytes(0);
 
+    // Single file: plain anchor download — no fetch, no ZIP, no CORS risk.
+    if (share.files.length === 1) {
+      const file = share.files[0];
+      const anchor = document.createElement('a');
+      anchor.href = getCloudDownloadUrl(
+        share.shareId,
+        file.id,
+        downloadSessionToken || share.downloadSessionToken
+      );
+      anchor.download = file.name;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setDownloadAllStatus('IDLE');
+      return;
+    }
+
     if (isLargeDrop) {
       await downloadAllIndividually();
       return;
@@ -169,37 +188,48 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     try {
       const zipEntries: Record<string, Uint8Array> = {};
       const failures: Array<{ name: string; error: string }> = [];
+      const token = downloadSessionToken || share.downloadSessionToken;
 
       await Promise.allSettled(
         share.files.map(async file => {
-          const url = getCloudDownloadUrl(
-            share.shareId,
-            file.id,
-            downloadSessionToken || share.downloadSessionToken
-          );
-          const response = await fetch(url);
-          if (!response.ok) {
+          try {
+            // Resolve the presigned URL first, then fetch it directly.
+            // Following the server's 307 sends Origin:null to R2 → CORS block.
+            const url = await fetchCloudDownloadUrl(
+              share.shareId,
+              file.id,
+              token
+            );
+            const response = await fetch(url);
+            if (!response.ok) {
+              failures.push({
+                name: file.path || file.name,
+                error: `HTTP ${response.status}`,
+              });
+              return;
+            }
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            const path = (file.path || file.name).replace(/^\/+/, '');
+            zipEntries[path] = bytes;
+            setDownloadAllBytes(prev => prev + bytes.length);
+          } catch (fileError) {
             failures.push({
               name: file.path || file.name,
-              error: `HTTP ${response.status}`,
+              error: getErrorMessage(fileError, 'fetch failed'),
             });
-            return;
           }
-
-          const blob = await response.blob();
-          const arrayBuffer = await blob.arrayBuffer();
-          const bytes = new Uint8Array(arrayBuffer);
-          const path = (file.path || file.name).replace(/^\/+/, '');
-          zipEntries[path] = bytes;
-          setDownloadAllBytes(prev => prev + bytes.length);
         })
       );
 
       if (Object.keys(zipEntries).length === 0) {
-        const reason =
-          failures.map(item => `${item.name}: ${item.error}`).join(', ') ||
-          'No files were downloaded';
-        throw new Error(reason);
+        // Every fetch failed (e.g. R2 CORS still blocking) — fall back to
+        // per-file anchor downloads, which navigate and bypass CORS entirely.
+        console.warn(
+          '[CloudDownload] ZIP fetch path failed, falling back to individual downloads:',
+          failures
+        );
+        await downloadAllIndividually();
+        return;
       }
 
       const zipped = zipSync(zipEntries, { level: 0 });

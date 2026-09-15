@@ -910,10 +910,9 @@ export class SwarmManager {
           this.partitionAckWaiters.clear();
           this.stopAdaptiveControl();
           this.emit('status', 'WAITING');
-          this.emit('peer-disconnected', {
-            peerId,
-            reason: reason + ':await-reconnect',
-          });
+          // NOTE: no 'peer-disconnected' emit here — the unconditional emit
+          // below already notifies listeners; a second emit produced
+          // duplicate "peer disconnected" toasts on the sender UI.
           logWarn(
             '[SwarmManager]',
             'Paused transfer awaiting receiver reconnect'

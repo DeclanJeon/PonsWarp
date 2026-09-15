@@ -50,6 +50,10 @@ pub struct CloudShareAccessQuery {
 #[serde(rename_all = "camelCase")]
 pub struct CloudDownloadQuery {
     pub token: Option<String>,
+    /// "json" → return the presigned URL in a JSON body instead of a 307
+    /// redirect. Browsers send `Origin: null` on cross-origin redirects, which
+    /// R2's CORS rule rejects — fetch() callers need the URL to fetch directly.
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,8 +317,10 @@ pub async fn download_cloud_file(
     Path((share_id, file_id)): Path<(String, String)>,
     Query(query): Query<CloudDownloadQuery>,
 ) -> Response {
+    let wants_json = query.format.as_deref() == Some("json");
     match download_cloud_file_inner(state, &share_id, &file_id, query).await {
-        Ok(redirect) => redirect.into_response(),
+        Ok(url) if wants_json => Json(json!({ "url": url })).into_response(),
+        Ok(url) => Redirect::temporary(&url).into_response(),
         Err(error) => error.into_response(),
     }
 }
@@ -932,13 +938,12 @@ async fn read_public_share(
         access.requires_password,
     ))
 }
-
 async fn download_cloud_file_inner(
     state: Arc<AppState>,
     share_id: &str,
     file_id: &str,
     query: CloudDownloadQuery,
-) -> Result<Redirect, CloudShareError> {
+) -> Result<String, CloudShareError> {
     let storage = state.cloud_storage()?;
     let manifest = read_share_manifest(&state, storage, share_id).await?;
     reject_expired(&manifest)?;
@@ -969,7 +974,7 @@ async fn download_cloud_file_inner(
         .await
         .map_err(CloudShareError::internal)?;
 
-    Ok(Redirect::temporary(presigned.uri()))
+    Ok(presigned.uri().to_string())
 }
 
 struct AuthorizedCloudAccess {
