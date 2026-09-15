@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 
 /// 클라이언트 → 서버 메시지
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ClientMessage {
@@ -14,7 +18,7 @@ pub enum ClientMessage {
         room_id: String,
         /// true = 방 생성 허용 (sender), false/누락 = 참여만 허용 (receiver)
         /// 누락된 경우 join-only로 처리하여 존재하지 않는 방에 대한 잘못된 참여를 빠르게 실패시킨다.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_false")]
         create: bool,
     },
     LeaveRoom,
