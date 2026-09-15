@@ -362,6 +362,10 @@ export class ReceiverService {
         }
       );
 
+      // Pre-flight NAT probe (netcheck analogue): warn early when a relay
+      // will be needed instead of letting the user discover a slow path.
+      void this.runNatProbe();
+
       // UI 상태 변경
       this.emit('status', 'CONNECTING');
     } catch (error) {
@@ -659,6 +663,30 @@ export class ReceiverService {
     } catch (error) {
       logError('[Receiver]', 'Failed to fetch TURN config:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Pre-flight NAT probe (Tailscale netcheck analogue). Classifies the likely
+   * P2P path and emits 'nat-probe' so the UI can warn early when a relay will
+   * be needed. Never blocks or throws.
+   */
+  private async runNatProbe(): Promise<void> {
+    try {
+      // Wait briefly for TURN config so the probe sees the real server list.
+      await Promise.race([
+        this.turnConfigPromise,
+        new Promise(r => setTimeout(r, 1500)),
+      ]);
+      const { probeNatPath } = await import('../utils/natProbe');
+      const result = await probeNatPath(this.iceServers);
+      logInfo(
+        '[Receiver]',
+        `NAT probe: ${result.verdict} (${result.elapsedMs}ms)`
+      );
+      this.emit('nat-probe', result);
+    } catch {
+      // Probe is advisory — never let it break the receive path.
     }
   }
 

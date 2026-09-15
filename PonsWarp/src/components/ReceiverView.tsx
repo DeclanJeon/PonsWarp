@@ -18,6 +18,7 @@ import { DirectFileWriter } from '../services/directFileWriter';
 import { formatBytes } from '../utils/fileUtils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTransferStore } from '../store/transferStore';
+import { toast } from '../store/toastStore';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage, getErrorName } from '../utils/errors';
 import { isCompleteRoomCode, normalizeRoomCodeInput } from '../utils/roomCode';
@@ -428,6 +429,13 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     transferService.on('ready-for-download', handleReadyForDownload);
     transferService.on('reconnecting', handleReconnecting);
     transferService.on('reconnected', handleReconnected);
+    transferService.on('nat-probe', (result: { verdict: string }) => {
+      if (result.verdict === 'relay-likely' || result.verdict === 'blocked') {
+        toast.warning(
+          'This network may require a relay — transfers can be slower but will still work.'
+        );
+      }
+    });
 
     return () => {
       // 🚀 [핵심] 클린업 시 리스너만 제거 (transferService.cleanup은 컴포넌트 언마운트 시에만)

@@ -2559,6 +2559,10 @@ export class SwarmManager {
     // TURN 설정 가져오기
     await this.fetchTurnConfig(roomId);
 
+    // Pre-flight NAT probe (netcheck analogue): classify the likely path so
+    // the UI can warn early when a relay will be needed.
+    void this.runNatProbe();
+
     // 시그널링 연결
     await this.getSignalingService().connect();
     this.setupSignalingHandlers();
@@ -4492,8 +4496,6 @@ export class SwarmManager {
     return Array.from(this.peers.values()).map(p => p.getState());
   }
 
-  // ======================= 유틸리티 =======================
-
   private async fetchTurnConfig(roomId: string): Promise<void> {
     try {
       const response =
@@ -4503,6 +4505,25 @@ export class SwarmManager {
       }
     } catch (error) {
       logError('[SwarmManager]', 'Failed to fetch TURN config:', error);
+    }
+  }
+
+  /**
+   * Pre-flight NAT probe (Tailscale netcheck analogue). Classifies the likely
+   * P2P path and emits 'nat-probe' so the UI can warn early when a relay will
+   * be needed. Never blocks or throws.
+   */
+  private async runNatProbe(): Promise<void> {
+    try {
+      const { probeNatPath } = await import('../utils/natProbe');
+      const result = await probeNatPath(this.iceServers);
+      logInfo(
+        '[SwarmManager]',
+        `NAT probe: ${result.verdict} (${result.elapsedMs}ms)`
+      );
+      this.emit('nat-probe', result);
+    } catch {
+      // Probe is advisory — never let it break the transfer path.
     }
   }
 

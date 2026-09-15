@@ -234,6 +234,15 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setTransferStatus('IDLE');
     });
 
+    // Pre-flight NAT probe: warn early when a relay path is likely.
+    swarmManager.on('nat-probe', (result: { verdict: string }) => {
+      if (result.verdict === 'relay-likely' || result.verdict === 'blocked') {
+        toast.warning(
+          'This network may require a relay — transfers can be slower but will still work.'
+        );
+      }
+    });
+
     // 🚀 [1:1] 피어 이벤트 (단일 수신자)
     swarmManager.on('peer-connected', (peerId: string) => {
       setConnectedPeers((prev: string[]) => [...prev, peerId]);

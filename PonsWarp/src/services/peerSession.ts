@@ -77,6 +77,8 @@ export class PeerSession {
   private drainPollInterval: ReturnType<typeof setInterval> | null = null;
   private closeEmitTimer: ReturnType<typeof setTimeout> | null = null;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private iceRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private iceRestartAttempts = 0;
   private recoverInFlight = false;
   private lastRecoverAt = 0;
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -165,23 +167,35 @@ export class PeerSession {
       if (!this.pc || this.destroyed) return;
       const state = this.pc.connectionState;
       if (state === 'failed') {
-        this.clearDisconnectTimer();
+        // ICE failed — attempt a bounded restart before declaring the peer
+        // dead. Initiator drives restartIce + re-offer; non-initiator waits
+        // for the initiator's recovery offer. If the PC recovers the timer
+        // is cancelled; otherwise we close after the window.
         this.connected = false;
-        this.emit('error', new Error(`Peer connection failed on ${this.id}`));
-        this.emit('close');
+        this.armIceRestartTimer();
+        if (this.initiator) {
+          void this.attemptIceRestart('connection-failed');
+        }
       } else if (state === 'closed') {
         this.clearDisconnectTimer();
+        this.clearIceRestartTimer();
         this.connected = false;
         this.emit('close');
       } else if (state === 'disconnected') {
         // Transient — but bound it. A hard peer drop (tab close, network
         // loss) can sit in 'disconnected' far past ICE's own timeout, leaving
         // the sender stuck on WARPING DATA. Treat a persistent disconnect as
-        // a close so the UI surfaces the failure.
+        // a close so the UI surfaces the failure. The initiator also kicks an
+        // early ICE restart so a roaming peer can recover before the window.
         this.armDisconnectTimer();
+        if (this.initiator) {
+          void this.attemptIceRestart('connection-disconnected');
+        }
       } else {
         // connected / connecting / new — cancel any pending disconnect.
         this.clearDisconnectTimer();
+        this.clearIceRestartTimer();
+        if (state === 'connected') this.iceRestartAttempts = 0;
       }
     };
 
@@ -207,6 +221,57 @@ export class PeerSession {
     if (this.disconnectTimer) {
       clearTimeout(this.disconnectTimer);
       this.disconnectTimer = null;
+    }
+  }
+
+  /**
+   * ICE restart window for 'failed'/'disconnected'. Initiator re-offers with
+   * restartIce; non-initiator waits for that offer. If the PC recovers the
+   * timer is cancelled; otherwise the peer is closed after the window.
+   */
+  private armIceRestartTimer(): void {
+    if (this.iceRestartTimer) return;
+    this.iceRestartTimer = setTimeout(() => {
+      this.iceRestartTimer = null;
+      if (this.destroyed || !this.pc) return;
+      const state = this.pc.connectionState;
+      if (state === 'failed' || state === 'disconnected') {
+        this.connected = false;
+        this.emit(
+          'error',
+          new Error(
+            `Peer connection lost on ${this.id} (ice-restart exhausted)`
+          )
+        );
+        this.emit('close');
+      }
+    }, 12000);
+  }
+
+  private clearIceRestartTimer(): void {
+    if (this.iceRestartTimer) {
+      clearTimeout(this.iceRestartTimer);
+      this.iceRestartTimer = null;
+    }
+  }
+
+  /**
+   * Initiator-side ICE restart: restartIce + re-offer so a roaming peer can
+   * re-establish on a new path. Bounded attempts to avoid offer storms.
+   */
+  private async attemptIceRestart(reason: string): Promise<void> {
+    if (this.destroyed || !this.pc || !this.initiator) return;
+    if (this.iceRestartAttempts >= 2) return;
+    this.iceRestartAttempts += 1;
+    try {
+      logWarn(
+        `[Peer ${this.id}]`,
+        `Attempting ICE restart (${reason}) attempt=${this.iceRestartAttempts}`
+      );
+      this.pc.restartIce();
+      await this.createAndSendOffer();
+    } catch (error) {
+      logError(`[Peer ${this.id}]`, 'ICE restart failed:', error);
     }
   }
 
