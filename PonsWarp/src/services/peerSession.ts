@@ -76,6 +76,7 @@ export class PeerSession {
   private drainEmitted = false;
   private drainPollInterval: ReturnType<typeof setInterval> | null = null;
   private closeEmitTimer: ReturnType<typeof setTimeout> | null = null;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private recoverInFlight = false;
   private lastRecoverAt = 0;
   private eventListeners: Record<string, EventHandler[]> = {};
@@ -160,25 +161,53 @@ export class PeerSession {
         candidate: event.candidate ? event.candidate.toJSON() : null,
       } satisfies PeerSignalMessage);
     };
-
     this.pc.onconnectionstatechange = () => {
       if (!this.pc || this.destroyed) return;
       const state = this.pc.connectionState;
       if (state === 'failed') {
+        this.clearDisconnectTimer();
         this.connected = false;
         this.emit('error', new Error(`Peer connection failed on ${this.id}`));
         this.emit('close');
       } else if (state === 'closed') {
+        this.clearDisconnectTimer();
         this.connected = false;
         this.emit('close');
       } else if (state === 'disconnected') {
-        // Transient; do not tear down immediately.
+        // Transient — but bound it. A hard peer drop (tab close, network
+        // loss) can sit in 'disconnected' far past ICE's own timeout, leaving
+        // the sender stuck on WARPING DATA. Treat a persistent disconnect as
+        // a close so the UI surfaces the failure.
+        this.armDisconnectTimer();
+      } else {
+        // connected / connecting / new — cancel any pending disconnect.
+        this.clearDisconnectTimer();
       }
     };
 
     this.pc.ondatachannel = event => {
       this.attachChannel(event.channel);
     };
+  }
+
+  private armDisconnectTimer(): void {
+    if (this.disconnectTimer) return;
+    this.disconnectTimer = setTimeout(() => {
+      this.disconnectTimer = null;
+      if (this.destroyed || !this.pc) return;
+      if (this.pc.connectionState === 'disconnected') {
+        this.connected = false;
+        this.emit('error', new Error(`Peer connection lost on ${this.id}`));
+        this.emit('close');
+      }
+    }, 8000);
+  }
+
+  private clearDisconnectTimer(): void {
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
   }
 
   private createLocalChannels(config: PeerConfig): void {
@@ -439,6 +468,27 @@ export class PeerSession {
         });
         await this.createAndSendOffer();
       }
+
+      // Bound the recovery: if no channel reopens within the window the peer
+      // is gone (tab close / network loss) — surface close instead of
+      // waiting forever on a re-offer that will never be answered.
+      if (this.closeEmitTimer) clearTimeout(this.closeEmitTimer);
+      this.closeEmitTimer = setTimeout(() => {
+        this.closeEmitTimer = null;
+        if (this.destroyed) return;
+        const openAgain =
+          this.control?.readyState === 'open' ||
+          this.bulkChannels.some(ch => ch?.readyState === 'open');
+        if (openAgain) {
+          this.maybeMarkConnected();
+          return;
+        }
+        logError(
+          `[Peer ${this.id}]`,
+          'DataChannel recovery timed out — closing peer'
+        );
+        this.emit('close');
+      }, 8000);
     } catch (error) {
       logError(`[Peer ${this.id}]`, 'DataChannel recovery failed:', error);
       this.emit('close');
@@ -843,6 +893,7 @@ export class PeerSession {
       clearTimeout(this.closeEmitTimer);
       this.closeEmitTimer = null;
     }
+    this.clearDisconnectTimer();
 
     for (const ch of this.bulkChannels) {
       try {

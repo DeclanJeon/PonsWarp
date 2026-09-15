@@ -108,8 +108,26 @@ async function createEncryptedPacket(
   new DataView(nonce.buffer).setUint32(0, nonceCounter++, true);
   nonce.set(randomPrefix.subarray(0, 8), 4);
 
+  // Build the 20-byte authenticated header BEFORE encrypting so it can be
+  // bound into the GCM tag as AAD. Tampering with sequence/offset/length now
+  // fails decryption instead of silently corrupting the stream.
+  const header = new ArrayBuffer(20);
+  const headerBytes = new Uint8Array(header);
+  const headerView = new DataView(header);
+  headerBytes[0] = 0x02;
+  headerBytes[1] = 0x01;
+  headerView.setUint16(2, 0, true);
+  headerView.setUint32(4, sequence, true);
+  headerView.setBigUint64(8, BigInt(offset), true);
+  headerView.setUint32(16, payload.byteLength, true);
+
   const ciphertextWithTag = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce, tagLength: 128 },
+    {
+      name: 'AES-GCM',
+      iv: nonce,
+      tagLength: 128,
+      additionalData: header,
+    },
     cryptoKey,
     payload.buffer.slice(
       payload.byteOffset,
@@ -119,13 +137,7 @@ async function createEncryptedPacket(
 
   const packet = new ArrayBuffer(38 + ciphertextWithTag.byteLength);
   const packetBytes = new Uint8Array(packet);
-  const packetView = new DataView(packet);
-  packetBytes[0] = 0x02;
-  packetBytes[1] = 0x01;
-  packetView.setUint16(2, 0, true);
-  packetView.setUint32(4, sequence, true);
-  packetView.setBigUint64(8, BigInt(offset), true);
-  packetView.setUint32(16, payload.byteLength, true);
+  packetBytes.set(headerBytes, 0);
   packetBytes.set(nonce, 20);
   packetBytes.set(new Uint8Array(ciphertextWithTag), 38);
   return packet;

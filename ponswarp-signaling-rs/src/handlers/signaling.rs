@@ -24,6 +24,7 @@ pub async fn handle_offer(
         tracing::warn!(room_id = %room_id, from = %from_peer_id, len = sdp.len(), "Offer SDP too large, dropping");
         return;
     }
+    crate::handlers::room::touch_room(&state, room_id);
     let message = ServerMessage::Offer {
         from: from_peer_id.to_string(),
         sdp: sdp.to_string(),
@@ -55,6 +56,7 @@ pub async fn handle_answer(
         tracing::warn!(room_id = %room_id, from = %from_peer_id, len = sdp.len(), "Answer SDP too large, dropping");
         return;
     }
+    crate::handlers::room::touch_room(&state, room_id);
     let message = ServerMessage::Answer {
         from: from_peer_id.to_string(),
         sdp: sdp.to_string(),
@@ -86,6 +88,7 @@ pub async fn handle_ice_candidate(
         tracing::warn!(room_id = %room_id, from = %from_peer_id, len = candidate.len(), "ICE candidate too large, dropping");
         return;
     }
+    crate::handlers::room::touch_room(&state, room_id);
     let message = ServerMessage::IceCandidate {
         from: from_peer_id.to_string(),
         candidate: candidate.to_string(),
@@ -117,6 +120,7 @@ pub async fn handle_manifest(
         tracing::warn!(room_id = %room_id, from = %from_peer_id, len = manifest.len(), "Manifest too large, dropping");
         return;
     }
+    crate::handlers::room::touch_room(&state, room_id);
     let message = ServerMessage::Manifest {
         from: from_peer_id.to_string(),
         manifest: manifest.to_string(),
@@ -143,6 +147,7 @@ pub async fn handle_transfer_ready(
     room_id: &str,
     target: Option<&str>,
 ) {
+    crate::handlers::room::touch_room(&state, room_id);
     let message = ServerMessage::TransferReady {
         from: from_peer_id.to_string(),
     };
@@ -177,6 +182,7 @@ pub async fn handle_transfer_complete(
     //     "Processing transfer complete"
     // );
 
+    crate::handlers::room::touch_room(&state, room_id);
     let message = ServerMessage::TransferComplete {
         from: from_peer_id.to_string(),
     };

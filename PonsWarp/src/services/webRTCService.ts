@@ -28,7 +28,15 @@ import {
 } from './hybridBulkTransport';
 import { createEosPacket } from '../utils/plainPacket';
 import { SinglePeerConnection, PeerConfig } from './singlePeerConnection';
-import { base64ToBytes, CryptoService } from './cryptoService';
+import {
+  base64ToBytes,
+  bytesToBase64,
+  CryptoService,
+  deriveKek,
+  generateEcdhKeyPair,
+  unwrapSessionKey,
+  type EcdhKeyPair,
+} from './cryptoService';
 import { orderIceServersPreferDirect } from '../utils/iceServers';
 import { TransferManifest } from '../types/types';
 import { getErrorMessage } from '../utils/errors';
@@ -119,10 +127,19 @@ export class ReceiverService {
   private encryptionEnabled: boolean = false;
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
+  // Ephemeral ECDH state for the key-wrap handshake (CRYPTO_HELLO).
+  private ecdhKeyPair: EcdhKeyPair | null = null;
+  private kekSaltBase64: string | null = null;
 
   // Bound Handlers
   private handleRoomFull = () => {
     this.emit('room-full', 'Room is currently occupied. Please wait.');
+  };
+  private handleRoomNotFound = () => {
+    this.emit(
+      'error',
+      'Room not found or expired. Check the code and try again.'
+    );
   };
   private readonly handleVisibilityChange = () => {
     if (
@@ -292,6 +309,7 @@ export class ReceiverService {
     this.ensureSignalingService().on('offer', this.handleOffer);
     this.ensureSignalingService().on('ice-candidate', this.handleIceCandidate);
     this.ensureSignalingService().on('room-full', this.handleRoomFull);
+    this.ensureSignalingService().on('room-not-found', this.handleRoomNotFound);
     // Receiver는 'answer'를 받을 일이 없음 (Answerer 역할이므로)
   }
 
@@ -299,6 +317,7 @@ export class ReceiverService {
     this.signalingService?.off('offer', this.handleOffer);
     this.signalingService?.off('ice-candidate', this.handleIceCandidate);
     this.signalingService?.off('room-full', this.handleRoomFull);
+    this.signalingService?.off('room-not-found', this.handleRoomNotFound);
   }
 
   // ======================= PUBLIC API =======================
@@ -569,6 +588,8 @@ export class ReceiverService {
     this.encryptionEnabled = false;
     this.cryptoService?.cleanup();
     this.cryptoService = null;
+    this.ecdhKeyPair = null;
+    this.kekSaltBase64 = null;
     this.clearLifecycleTimers();
   }
 
@@ -647,12 +668,30 @@ export class ReceiverService {
   private handleOffer = async (d: ReceiverSignalMessage) => {
     debugLog('[Receiver] Offer received from:', d.from);
 
-    if (this.connectedPeerId && d.from !== this.connectedPeerId) {
-      logWarn('[Receiver]', `Ignoring offer from unknown peer: ${d.from}`);
-      return;
+    // Sender가 시그널링 재연결로 새 peer_id를 받아 re-offer할 수 있다.
+    // 건강한 RTCPeerConnection이 다른 peer에 살아있을 때만 offer를 무시한다.
+    const peerIdChanged =
+      this.connectedPeerId !== null && this.connectedPeerId !== d.from;
+    if (peerIdChanged) {
+      const pcState = this.peer?.pc?.connectionState;
+      const peerAlive =
+        !!this.peer &&
+        !this.peer.isDestroyed() &&
+        !!pcState &&
+        pcState !== 'failed' &&
+        pcState !== 'disconnected' &&
+        pcState !== 'closed';
+      if (peerAlive) {
+        logWarn('[Receiver]', `Ignoring offer from unknown peer: ${d.from}`);
+        return;
+      }
+      logInfo(
+        '[Receiver]',
+        `Sender reconnected with new peer id: ${d.from} (was ${this.connectedPeerId}, pc=${pcState ?? 'none'})`
+      );
     }
 
-    if (!this.connectedPeerId) {
+    if (!this.connectedPeerId || peerIdChanged) {
       this.connectedPeerId = d.from;
     }
 
@@ -693,6 +732,7 @@ export class ReceiverService {
     if (
       this.peer &&
       !this.peer.isDestroyed() &&
+      !peerIdChanged &&
       this.connectedPeerId === d.from &&
       this.peer.connected
     ) {
@@ -881,13 +921,15 @@ export class ReceiverService {
     peer.on('connected', () => {
       logInfo('[Receiver]', 'P2P Channel Connected!');
       this.emit('connected', true);
+      // Kick off the ECDH key-wrap handshake so the session key never
+      // crosses the wire in plaintext.
+      void this.sendCryptoHello(peer);
       try {
         const caps = localHybridCaps();
         peer.send(JSON.stringify({ type: 'PEER_CAPS', ...caps }));
       } catch (error) {
         logWarn('[Receiver]', 'Failed to send PEER_CAPS', error);
       }
-
       if (this.isReconnecting) {
         this.isReconnecting = false;
         this.reconnectAttempts = 0;
@@ -945,6 +987,64 @@ export class ReceiverService {
         this.emit('error', 'Connection closed');
       }, 1000);
     });
+  }
+
+  /**
+   * Send CRYPTO_HELLO with an ephemeral ECDH public key + salt so the sender
+   * can wrap the session key instead of sending it in plaintext.
+   */
+  private async sendCryptoHello(peer: SinglePeerConnection): Promise<void> {
+    try {
+      this.ecdhKeyPair = await generateEcdhKeyPair();
+      this.kekSaltBase64 = bytesToBase64(
+        crypto.getRandomValues(new Uint8Array(32))
+      );
+      peer.send(
+        JSON.stringify({
+          type: 'CRYPTO_HELLO',
+          version: 2,
+          publicKey: this.ecdhKeyPair.publicKeyBase64,
+          salt: this.kekSaltBase64,
+        })
+      );
+    } catch (error) {
+      logWarn(
+        '[Receiver]',
+        'CRYPTO_HELLO failed; plaintext session fallback',
+        error
+      );
+    }
+  }
+
+  /**
+   * Unwrap a v2 CRYPTO_SESSION (ECDH-wrapped session key).
+   */
+  private async handleWrappedCryptoSession(msg: {
+    publicKey?: string;
+    wrappedKey?: string;
+    iv?: string;
+    randomPrefix?: string;
+  }): Promise<void> {
+    if (
+      !this.ecdhKeyPair ||
+      !this.kekSaltBase64 ||
+      !msg.publicKey ||
+      !msg.wrappedKey ||
+      !msg.iv ||
+      !msg.randomPrefix
+    ) {
+      logWarn('[Receiver]', 'Incomplete wrapped CRYPTO_SESSION; ignoring');
+      return;
+    }
+    const kek = await deriveKek(
+      this.ecdhKeyPair.privateKey,
+      msg.publicKey,
+      this.kekSaltBase64
+    );
+    const sessionKey = await unwrapSessionKey(kek, msg.iv, msg.wrappedKey);
+    this.setSessionKey(sessionKey, base64ToBytes(msg.randomPrefix));
+    this.encryptionEnabled = true;
+    logInfo('[Receiver]', '🔐 Wrapped crypto session received (ECDH)');
   }
 
   private shouldAttemptReconnect(): boolean {
@@ -1204,13 +1304,22 @@ export class ReceiverService {
 
       switch (msg.type) {
         case 'CRYPTO_SESSION': {
-          const sessionKey = base64ToBytes(msg.key);
-          const randomPrefix = base64ToBytes(msg.randomPrefix);
-          this.setSessionKey(sessionKey, randomPrefix);
-          this.encryptionEnabled = true;
-          logInfo('[Receiver]', '🔐 Crypto session received');
+          if (msg.wrappedKey) {
+            // v2: ECDH-wrapped session key — unwrap, never plaintext.
+            void this.handleWrappedCryptoSession(msg);
+          } else {
+            const sessionKey = base64ToBytes(msg.key);
+            const randomPrefix = base64ToBytes(msg.randomPrefix);
+            this.setSessionKey(sessionKey, randomPrefix);
+            this.encryptionEnabled = true;
+            logInfo('[Receiver]', '🔐 Crypto session received');
+          }
           break;
         }
+        case 'TRANSFER_ABORTED':
+          logWarn('[Receiver]', 'Sender aborted the transfer');
+          this.emit('error', msg.message || 'Sender aborted the transfer');
+          break;
         case 'MANIFEST':
           logInfo('[Receiver]', 'Manifest received');
           this.emit('metadata', msg.manifest);

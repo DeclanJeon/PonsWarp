@@ -32,6 +32,7 @@ import {
   getTransferFeedbackLabel,
 } from '../utils/transferEstimate';
 import { formatSlowPathBanner } from '../services/hybridBulkTransport';
+import { toast } from '../store/toastStore';
 
 interface SenderViewProps {
   onComplete?: () => void;
@@ -65,12 +66,14 @@ const SenderView: React.FC<SenderViewProps> = () => {
     | 'TRANSFERRING'
     | 'REMOTE_PROCESSING'
     | 'READY_FOR_NEXT'
-    | 'DONE';
+    | 'DONE'
+    | 'ERROR';
   const [manifest, setManifest] = useState<TransferManifest | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<SenderStatus>('IDLE');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOpeningRoom, setIsOpeningRoom] = useState(false);
   const [scanProgress, setScanProgress] = useState<FileScanProgress | null>(
     null
@@ -227,7 +230,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
     swarmManager.on('error', (errorMsg: string) => {
       console.error('[SenderView] SwarmManager error:', errorMsg);
-      alert(`Transfer error: ${errorMsg}\n\nPlease try again.`);
+      toast.error(`Transfer error: ${errorMsg}. Please try again.`);
       setTransferStatus('IDLE');
     });
 
@@ -236,14 +239,26 @@ const SenderView: React.FC<SenderViewProps> = () => {
       setConnectedPeers((prev: string[]) => [...prev, peerId]);
     });
 
-    swarmManager.on('peer-disconnected', ({ peerId }: { peerId: string }) => {
-      setConnectedPeers((prev: string[]) =>
-        prev.filter((id: string) => id !== peerId)
-      );
-      setReadyPeers((prev: string[]) =>
-        prev.filter((id: string) => id !== peerId)
-      );
-    });
+    swarmManager.on(
+      'peer-disconnected',
+      ({ peerId }: { peerId: string; reason?: string }) => {
+        setConnectedPeers((prev: string[]) =>
+          prev.filter((id: string) => id !== peerId)
+        );
+        setReadyPeers((prev: string[]) =>
+          prev.filter((id: string) => id !== peerId)
+        );
+
+        // 전송 중 수신자 이탈 → WARPING DATA에 갇히지 않고 ERROR로 전환.
+        // 수신자가 재연결해 resume되면 'TRANSFERRING' 상태 이벤트가 복구한다.
+        const current = useTransferStore.getState().status;
+        if (current === 'TRANSFERRING' || current === 'REMOTE_PROCESSING') {
+          setErrorMessage('Transfer failed: peer disconnected');
+          setTransferStatus('ERROR');
+          toast.error('Transfer failed: peer disconnected');
+        }
+      }
+    );
 
     swarmManager.on('peer-ready', (peerId: string) => {
       setReadyPeers((prev: string[]) => [...prev, peerId]);
@@ -292,6 +307,16 @@ const SenderView: React.FC<SenderViewProps> = () => {
 
     swarmManager.on('remote-processing', () => {
       setTransferStatus('REMOTE_PROCESSING');
+    });
+
+    // 전송 실패 (모든 피어 이탈, resume offset 오류, reader stall 등)
+    swarmManager.on('transfer-failed', (msg: unknown) => {
+      const message = `Transfer failed: ${
+        typeof msg === 'string' && msg ? msg : 'peer disconnected'
+      }`;
+      setErrorMessage(message);
+      setTransferStatus('ERROR');
+      toast.error(message);
     });
 
     // 진행률 리셋 (새 전송 시작 시)
@@ -412,7 +437,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
       console.error('[SenderView] file scan failed:', error);
       setScanProgress(null);
       setTransferStatus('IDLE');
-      alert(`Failed to load files: ${getErrorMessage(error, 'Unknown error')}`);
+      toast.error(
+        `Failed to load files: ${getErrorMessage(error, 'Unknown error')}`
+      );
     }
   };
 
@@ -466,7 +493,9 @@ const SenderView: React.FC<SenderViewProps> = () => {
       console.error('[SenderView] drop scan failed:', error);
       setScanProgress(null);
       setTransferStatus('IDLE');
-      alert(`Failed to load files: ${getErrorMessage(error, 'Unknown error')}`);
+      toast.error(
+        `Failed to load files: ${getErrorMessage(error, 'Unknown error')}`
+      );
     }
   };
 
@@ -474,7 +503,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
     if (scannedFiles.length === 0) {
       setScanProgress(null);
       setTransferStatus('IDLE');
-      alert('No transferable files found (empty or filtered selection).');
+      toast.error('No transferable files found (empty or filtered selection).');
       return;
     }
 
@@ -534,8 +563,8 @@ const SenderView: React.FC<SenderViewProps> = () => {
     } catch (error) {
       console.error('[SenderView] ❌ [DEBUG] Init failed:', error);
 
-      alert(
-        `Failed to initialize transfer: ${getErrorMessage(error, 'Unknown error')}\n\nPlease try again with different files.`
+      toast.error(
+        `Failed to initialize transfer: ${getErrorMessage(error, 'Unknown error')}. Please try again with different files.`
       );
       setIsOpeningRoom(false);
       setRoomId(null);
@@ -953,6 +982,34 @@ const SenderView: React.FC<SenderViewProps> = () => {
               className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-cyan-50 transition-colors"
             >
               Send New Files
+            </button>
+          </motion.div>
+        )}
+
+        {/* --- STATE: ERROR --- */}
+        {status === 'ERROR' && (
+          <motion.div
+            key="error"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-center p-8 bg-red-900/20 rounded-3xl border border-red-500/30 max-w-lg w-full"
+          >
+            <div className="w-24 h-24 mx-auto mb-6 bg-red-500/20 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(239,68,68,0.4)]">
+              <AlertTriangle className="w-12 h-12 text-red-400" />
+            </div>
+            <h2 className="text-4xl font-bold text-white mb-4 brand-font tracking-wide">
+              TRANSFER FAILED
+            </h2>
+            <p className="text-gray-400 text-lg mb-10 max-w-md mx-auto">
+              {errorMessage ?? 'Transfer failed: peer disconnected'}
+            </p>
+
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-white/10 border border-white/20 text-white px-10 py-4 rounded-full font-bold hover:bg-white/20 transition-all flex items-center gap-3 mx-auto"
+            >
+              <FilePlus size={20} />
+              Try Again
             </button>
           </motion.div>
         )}

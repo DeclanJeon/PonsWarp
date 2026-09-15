@@ -446,19 +446,25 @@ impl CryptoSession {
     /// 청크 암호화 (패킷 생성 포함)
     pub fn encrypt_chunk(&mut self, plaintext: &[u8]) -> Vec<u8> {
         let nonce = self.generate_nonce();
-        let ciphertext = self.aes_gcm_encrypt(&nonce, plaintext, &[]);
+
+        // Build the 20-byte authenticated header first so it can be bound
+        // into the GCM tag as AAD (matches the JS encrypt paths).
+        let mut header = [0u8; 20];
+        header[0] = CRYPTO_VERSION;
+        header[1] = flags::ENCRYPTED;
+        header[2..4].copy_from_slice(&0u16.to_le_bytes()); // file_index
+        header[4..8].copy_from_slice(&self.sequence.to_le_bytes());
+        header[8..16].copy_from_slice(&self.total_bytes_encrypted.to_le_bytes());
+        header[16..20].copy_from_slice(&(plaintext.len() as u32).to_le_bytes());
+
+        let ciphertext = self.aes_gcm_encrypt(&nonce, plaintext, &header);
 
         // 암호화된 패킷 생성
         let total_size = ENCRYPTED_HEADER_SIZE + ciphertext.len();
         let mut packet = vec![0u8; total_size];
 
         // Header
-        packet[0] = CRYPTO_VERSION;
-        packet[1] = flags::ENCRYPTED;
-        packet[2..4].copy_from_slice(&0u16.to_le_bytes()); // file_index
-        packet[4..8].copy_from_slice(&self.sequence.to_le_bytes());
-        packet[8..16].copy_from_slice(&self.total_bytes_encrypted.to_le_bytes());
-        packet[16..20].copy_from_slice(&(plaintext.len() as u32).to_le_bytes());
+        packet[..20].copy_from_slice(&header);
         packet[20..32].copy_from_slice(&nonce);
         // [32..36] reserved
 
@@ -489,7 +495,8 @@ impl CryptoSession {
 
         let ciphertext_with_tag = &packet[ENCRYPTED_HEADER_SIZE..];
 
-        self.aes_gcm_decrypt(&nonce, ciphertext_with_tag, &[])
+        // Header (bytes 0..20) is bound into the GCM tag as AAD.
+        self.aes_gcm_decrypt(&nonce, ciphertext_with_tag, &packet[..20])
     }
 
     /// 총 암호화된 바이트 수

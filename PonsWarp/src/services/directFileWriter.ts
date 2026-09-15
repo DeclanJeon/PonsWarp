@@ -1126,15 +1126,23 @@ export class DirectFileWriter {
         throw writeError;
       } finally {
         if (queuedPayloadBytes > 0) {
-          // Leave pendingBytesInBuffer until flushBuffer/disk write.
           // Only clear the pre-decode admission tracker.
           this.queuedAcceptedBytesInBuffer = Math.max(
             0,
             this.queuedAcceptedBytesInBuffer - queuedPayloadBytes
           );
-          if (!this.writeFailure) {
-            this.checkBackpressure();
-          }
+        }
+        // 🚀 [FIX] Chunks dropped after admission (finalized/oversize early
+        // return, reorder-buffer duplicates/evictions, finalize() clear) never
+        // reach flushBuffer, so pendingBytesInBuffer would leak and the sender
+        // could stay PAUSED forever. Recompute from bytes actually held:
+        // admitted-but-unprocessed + writeBuffer + reordering buffer.
+        this.pendingBytesInBuffer =
+          this.queuedAcceptedBytesInBuffer +
+          this.currentBatchSize +
+          (this.reorderingBuffer?.getStatus().bufferedBytes ?? 0);
+        if (!this.writeFailure) {
+          this.checkBackpressure();
         }
       }
     });
@@ -1436,6 +1444,8 @@ export class DirectFileWriter {
             name: 'AES-GCM',
             iv,
             tagLength: 128,
+            // Header (bytes 0..20) is bound into the GCM tag as AAD.
+            additionalData: bytes.slice(0, 20),
           },
           key,
           ciphertextWithTag
@@ -1993,6 +2003,9 @@ export class DirectFileWriter {
     this.bulkDecryptWorker = null;
     this.isFinalized = true;
     this.writeBuffer = []; // 메모리 해제
+    this.currentBatchSize = 0;
+    this.pendingBytesInBuffer = 0;
+    this.queuedAcceptedBytesInBuffer = 0;
     this.blobChunks = []; // Blob 청크 메모리 해제
     this.isPaused = false;
     this.awaitingResume = false;

@@ -27,6 +27,9 @@ interface CloudDownloadViewProps {
 type LoadStatus = 'LOADING' | 'READY' | 'ERROR' | 'PASSWORD_REQUIRED';
 type DownloadAllStatus = 'IDLE' | 'DOWNLOADING' | 'ERROR';
 const DOWNLOAD_SESSION_PREFIX = 'ponswarpCloudDownloadSession:';
+// ZIP은 전체를 메모리에 올리므로 대용량 드롭은 파일별 다운로드로 우회한다
+const ZIP_DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024;
+const INDIVIDUAL_DOWNLOAD_DELAY_MS = 400;
 
 const formatDropWindow = (secondsUntilExpiry: number) => {
   const days = Math.ceil(secondsUntilExpiry / 86400);
@@ -46,6 +49,9 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     useState<DownloadAllStatus>('IDLE');
   const [downloadAllError, setDownloadAllError] = useState<string | null>(null);
   const [downloadAllBytes, setDownloadAllBytes] = useState(0);
+  const [downloadAllFilesDone, setDownloadAllFilesDone] = useState<
+    number | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +123,36 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     }
   };
 
+  const downloadAllIndividually = async () => {
+    if (!share) return;
+    const token = downloadSessionToken || share.downloadSessionToken;
+    setDownloadAllFilesDone(0);
+    try {
+      for (const [index, file] of share.files.entries()) {
+        const anchor = document.createElement('a');
+        anchor.href = getCloudDownloadUrl(share.shareId, file.id, token);
+        anchor.download = file.name;
+        anchor.style.display = 'none';
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        setDownloadAllFilesDone(index + 1);
+        if (index < share.files.length - 1) {
+          await new Promise<void>(resolve =>
+            setTimeout(resolve, INDIVIDUAL_DOWNLOAD_DELAY_MS)
+          );
+        }
+      }
+      setDownloadAllStatus('IDLE');
+    } catch (downloadError) {
+      const message = getErrorMessage(downloadError, 'Bulk download failed');
+      setDownloadAllError(message);
+      setDownloadAllStatus('ERROR');
+    } finally {
+      setDownloadAllFilesDone(null);
+    }
+  };
+
   const downloadAll = async () => {
     if (!share || !share.completed) return;
     if (share.files.length === 0) return;
@@ -124,6 +160,11 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     setDownloadAllStatus('DOWNLOADING');
     setDownloadAllError(null);
     setDownloadAllBytes(0);
+
+    if (isLargeDrop) {
+      await downloadAllIndividually();
+      return;
+    }
 
     try {
       const zipEntries: Record<string, Uint8Array> = {};
@@ -186,6 +227,10 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     'bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
   const disableDownloadAll =
     downloadAllStatus === 'DOWNLOADING' || !share?.completed;
+  const totalDropBytes = share
+    ? share.totalSize || share.files.reduce((sum, file) => sum + file.size, 0)
+    : 0;
+  const isLargeDrop = totalDropBytes > ZIP_DOWNLOAD_MAX_BYTES;
 
   return (
     <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-1 py-2 sm:px-3 sm:py-4 md:px-0">
@@ -310,12 +355,26 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
               >
                 <Download className="w-4 h-4" />
                 {downloadAllStatus === 'DOWNLOADING'
-                  ? 'Preparing ZIP…'
+                  ? downloadAllFilesDone !== null
+                    ? 'Downloading files…'
+                    : 'Preparing ZIP…'
                   : 'DOWNLOAD ALL'}
               </button>
-              {downloadAllStatus === 'DOWNLOADING' && (
-                <span className="text-xs font-mono text-gray-400">
-                  {formatBytes(downloadAllBytes)} buffered
+              {downloadAllStatus === 'DOWNLOADING' &&
+                downloadAllFilesDone !== null && (
+                  <span className="text-xs font-mono text-gray-400">
+                    {downloadAllFilesDone}/{share.files.length} files
+                  </span>
+                )}
+              {downloadAllStatus === 'DOWNLOADING' &&
+                downloadAllFilesDone === null && (
+                  <span className="text-xs font-mono text-gray-400">
+                    {formatBytes(downloadAllBytes)} buffered
+                  </span>
+                )}
+              {downloadAllStatus !== 'DOWNLOADING' && isLargeDrop && (
+                <span className="text-xs text-gray-500">
+                  Large drop — files download individually
                 </span>
               )}
               {downloadAllStatus === 'ERROR' && (

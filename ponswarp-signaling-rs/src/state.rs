@@ -16,7 +16,7 @@ use dashmap::DashMap;
 use sqlx::postgres::PgPoolOptions;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
 /// 전역 애플리케이션 상태
@@ -226,7 +226,10 @@ pub struct Room {
     #[allow(dead_code)]
     pub id: String,
     pub users: RwLock<HashSet<String>>,
-    pub created_at: Instant,
+    /// 마지막 활동 시각 (방 메시지 수신/참여/퇴장 시 갱신)
+    /// 생성 시각이 아닌 활동 기준으로 TTL을 측정해 1시간 이상 진행되는 전송이
+    /// 시그널링 방을 잃지 않도록 한다.
+    last_activity: std::sync::Mutex<Instant>,
 }
 
 impl Room {
@@ -234,8 +237,21 @@ impl Room {
         Self {
             id,
             users: RwLock::new(HashSet::new()),
-            created_at: Instant::now(),
+            last_activity: std::sync::Mutex::new(Instant::now()),
         }
+    }
+
+    /// 방 활동 시각을 현재로 갱신한다.
+    pub fn touch(&self) {
+        *self.last_activity.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    }
+
+    /// 마지막 활동 이후 경과 시간
+    pub fn idle_duration(&self) -> Duration {
+        self.last_activity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .elapsed()
     }
 }
 

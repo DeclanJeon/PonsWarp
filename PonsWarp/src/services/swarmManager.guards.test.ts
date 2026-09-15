@@ -71,7 +71,9 @@ describe('SwarmManager guard paths', () => {
     await managerInternals.signalingRecoveryPromise;
 
     expect(signalingService.requestTurnConfig).toHaveBeenCalledWith('ABC123');
-    expect(signalingService.joinRoom).toHaveBeenCalledWith('ABC123');
+    expect(signalingService.joinRoom).toHaveBeenCalledWith('ABC123', {
+      create: true,
+    });
     manager.cleanup();
   });
 
@@ -826,6 +828,10 @@ describe('SwarmManager guard paths', () => {
       files: unknown[];
       transferRunId: number;
       handleResumeRequest(peerId: string, msg: { offset: number }): void;
+      handleCryptoHello(
+        peerId: string,
+        msg: { publicKey?: string; salt?: string }
+      ): Promise<void>;
       requestTransferStart: (intent: unknown) => void;
       canResumeSingleFileTransfer(): boolean;
     };
@@ -840,7 +846,27 @@ describe('SwarmManager guard paths', () => {
       startIntent = intent;
     };
 
+    // Establish the ECDH KEK via a simulated CRYPTO_HELLO so the resume path
+    // sends a wrapped CRYPTO_SESSION (raw key never crosses the wire).
+    const receiverPair = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits']
+    );
+    const receiverPub = await crypto.subtle.exportKey(
+      'raw',
+      receiverPair.publicKey
+    );
+    const b64 = (buf: ArrayBuffer) =>
+      btoa(String.fromCharCode(...new Uint8Array(buf)));
+    await internals.handleCryptoHello('peer-resume', {
+      publicKey: b64(receiverPub),
+      salt: b64(crypto.getRandomValues(new Uint8Array(32)).buffer),
+    });
     internals.handleResumeRequest('peer-resume', { offset: 128 * 1024 });
+    // Wrapped send is async — flush microtasks so it settles.
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(startIntent).toMatchObject({ offset: 128 * 1024, reason: 'resume' });
     expect(sent.some(m => m.includes('CRYPTO_SESSION'))).toBe(true);

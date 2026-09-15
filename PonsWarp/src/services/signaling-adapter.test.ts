@@ -122,6 +122,13 @@ describe('RustSignalingAdapter', () => {
     await connected;
 
     await rustSignalingAdapter.joinRoom('ABC123');
+    // joinedRoomId is only set on the JoinedRoom ack — simulate it.
+    MockWebSocket.instances[0].onmessage?.({
+      data: JSON.stringify({
+        type: 'JoinedRoom',
+        payload: { room_id: 'ABC123' },
+      }),
+    });
     await rustSignalingAdapter.joinRoom('ABC123');
     await rustSignalingAdapter.joinRoom('ABC123');
 

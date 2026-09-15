@@ -86,6 +86,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
   // 🚨 [추가] 연결 타임아웃 관리용 Ref
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // 🚨 [핵심 수정] 중복 참여 방지 Ref — ERROR 또는 코드 변경 시 리셋되어 재시도 가능
+  const isInitializedRef = useRef(false);
+  const prevRoomIdRef = useRef(roomId);
+
   // 🚨 [핵심 수정 1] status의 최신 값을 추적하기 위한 Ref 생성
   // setTimeout과 같은 비동기 클로저 안에서도 항상 최신 상태를 읽을 수 있게 함
   const statusRef = useRef(status);
@@ -253,6 +257,9 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       const normalizedRoomId = normalizeRoomCodeInput(id);
       if (!normalizedRoomId || normalizedRoomId.length < 6) return;
 
+      // 직접 호출(재시도 버튼 등)도 중복 참여 가드를 통과한 것으로 표시
+      isInitializedRef.current = true;
+
       if (normalizedRoomId !== id) {
         setRoomId(normalizedRoomId);
       }
@@ -317,13 +324,18 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
     const normalizedRoomId = normalizeRoomCodeInput(receiveInput);
     if (!isCompleteRoomCode(normalizedRoomId)) return;
+
+    // 같은 코드 재제출 시 roomId가 변하지 않아 effect가 재실행되지 않으므로
+    // (ERROR 후 재시도 등) 가드가 열려 있으면 직접 재참여한다.
+    if (normalizedRoomId === roomId && !isInitializedRef.current) {
+      handleJoin(normalizedRoomId);
+      return;
+    }
+
     // Only set roomId here. The roomId effect owns the single join call so
     // submit + effect cannot fire JoinRoom twice for the same receiver.
     setRoomId(normalizedRoomId);
-  }, [onOpenCloudShare, receiveInput, setRoomId]);
-
-  // 🚨 [핵심 수정] 중복 초기화 방지를 위한 Ref
-  const isInitializedRef = useRef(false);
+  }, [onOpenCloudShare, receiveInput, roomId, setRoomId, handleJoin]);
 
   // 전송 놓침 핸들러
   const handleTransferMissed = useCallback(
@@ -447,8 +459,22 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     handleReconnected,
   ]);
 
+  // 🚨 [핵심 수정] ERROR 상태가 되면 참여 가드를 리셋해 재시도 가능하게 함
+  // (join effect보다 먼저 선언해 같은 렌더에서 리셋이 먼저 적용되도록 함)
+  useEffect(() => {
+    if (status === 'ERROR') {
+      isInitializedRef.current = false;
+    }
+  }, [status]);
+
   // 🚀 [핵심 수정] 방 참여 Effect (roomId가 있을 때 한 번만 실행)
   useEffect(() => {
+    // 코드가 바뀌면 가드를 리셋해 새 코드로 재참여 가능하게 함
+    // (StrictMode 재실행은 roomId가 같으므로 리셋되지 않아 중복 참여 방지 유지)
+    if (roomId !== prevRoomIdRef.current) {
+      prevRoomIdRef.current = roomId;
+      isInitializedRef.current = false;
+    }
     if (isCompleteRoomCode(roomId || '') && !isInitializedRef.current) {
       isInitializedRef.current = true;
       handleJoin(roomId!);
@@ -923,7 +949,11 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
               </h2>
               <p className="text-gray-300 mb-6">{errorMsg}</p>
               <button
-                onClick={() => window.location.reload()}
+                onClick={() => {
+                  // roomId가 있으면 재참여, 없으면 기존처럼 새로고침
+                  if (roomId) handleJoin(roomId);
+                  else window.location.reload();
+                }}
                 className="bg-white/10 border border-white/20 text-white px-6 py-3 rounded-full hover:bg-white/20 flex items-center gap-2 mx-auto transition-all"
               >
                 <RefreshCw size={18} /> Retry Transfer

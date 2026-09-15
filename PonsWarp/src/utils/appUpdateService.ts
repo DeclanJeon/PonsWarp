@@ -53,7 +53,16 @@ function reloadWhenSafe(options?: AppUpdateOptions): void {
 
 function listenForControllerChange(options?: AppUpdateOptions): void {
   if (!canUseServiceWorker()) return;
+  // Capture whether a worker already controls this page. On first install
+  // there is no prior controller, so the first controllerchange is not an
+  // upgrade and must not reload (it would eat the visitor's first click).
+  let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) {
+      // First install just claimed this page; later changes are upgrades.
+      hadController = true;
+      return;
+    }
     reloadWhenSafe(options);
   });
 }

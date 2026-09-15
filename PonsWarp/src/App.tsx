@@ -35,7 +35,7 @@ const SpaceField = lazy(() => import('./components/SpaceField'));
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
-  const { mode, setMode, setRoomId, status } = useTransferStore();
+  const { mode, setMode, setRoomId, status, setStatus } = useTransferStore();
   const [cloudShareId, setCloudShareId] = useState<string | null>(null);
   usePreventNavigation();
 
@@ -148,7 +148,7 @@ const App: React.FC = () => {
         {/* 1. 배경 계층 (3D Space) */}
         <Suspense
           fallback={
-            <div className="fixed inset-0 w-full h-full bg-black -z-50 pointer-events-none" />
+            <div className="fixed inset-0 w-full h-full -z-50 pointer-events-none bg-gradient-to-b from-slate-950 via-[#0b1026] to-black" />
           }
         >
           <SpaceField />
@@ -169,12 +169,21 @@ const App: React.FC = () => {
         {/* 3. Header (Responsive) */}
         <header
           className="app-header absolute top-0 left-0 z-50 flex w-full items-center justify-between px-4 py-3 sm:px-6 sm:py-4 md:px-10 md:py-6 cursor-pointer"
+          role="button"
+          tabIndex={0}
+          aria-label="PonsWarp home"
           onClick={() => {
             leaveTransferSessionIfConfirmed(() => {
               setCloudShareId(null);
               setMode(AppMode.INTRO);
               window.history.pushState({}, '', '/');
             });
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              event.currentTarget.click();
+            }
           }}
         >
           <div className="flex items-center gap-2 md:gap-4 hover:opacity-80 transition-opacity">
@@ -228,7 +237,8 @@ const App: React.FC = () => {
                       Transfer files directly from browser to browser.
                     </span>
                     <span className="mt-1 block">
-                      No size caps, no detours—just a secure, high-speed link.
+                      No size caps on direct P2P transfers—just a secure,
+                      high-speed link.
                     </span>
                   </p>
                 </div>
@@ -293,6 +303,8 @@ const App: React.FC = () => {
 
                     <div className="relative z-10 mt-5 grid flex-1 gap-3">
                       <button
+                        type="button"
+                        aria-label="Send now — live P2P transfer"
                         onClick={() => setMode(AppMode.SENDER)}
                         className="group/p2p flex min-h-[88px] flex-col justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-4 py-3.5 text-left transition-all hover:border-cyan-300 hover:bg-cyan-500/20 sm:min-h-[98px] sm:px-5 sm:py-4"
                       >
@@ -306,6 +318,8 @@ const App: React.FC = () => {
                       </button>
 
                       <button
+                        type="button"
+                        aria-label="Send by link — upload and share a link, up to 10GB"
                         onClick={() => setMode(AppMode.CLOUD_SENDER)}
                         className="group/cloud flex min-h-[88px] flex-col justify-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3.5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-500/20 sm:min-h-[98px] sm:px-5 sm:py-4"
                       >
@@ -322,6 +336,7 @@ const App: React.FC = () => {
                   </div>
 
                   <MagneticButton
+                    ariaLabel="Receive — enter a room code or open a shared link"
                     onClick={() => setMode(AppMode.RECEIVER)}
                     className="group relative flex min-h-[150px] w-full flex-col items-center justify-center overflow-hidden rounded-[1.5rem] border border-white/10 bg-black/45 p-5 shadow-2xl backdrop-blur-xl transition-colors duration-300 hover:border-purple-400/50 sm:min-h-[180px] sm:rounded-[1.75rem] sm:p-6 md:min-h-[350px]"
                   >
@@ -365,6 +380,10 @@ const App: React.FC = () => {
                 <button
                   onClick={() => {
                     leaveTransferSessionIfConfirmed(() => {
+                      // Reset store status so SenderView unmounts → its
+                      // cleanup runs swarmManager.cleanup() which broadcasts
+                      // TRANSFER_ABORTED to the receiver.
+                      setStatus('IDLE');
                       setMode(AppMode.SELECTION);
                     });
                   }}

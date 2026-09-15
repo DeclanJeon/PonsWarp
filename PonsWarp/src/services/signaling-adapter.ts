@@ -129,6 +129,7 @@ class RustSignalingAdapter {
       PeerJoined: 'peer-joined',
       UserLeft: 'user-left',
       RoomFull: 'room-full',
+      RoomNotFound: 'room-not-found',
       Offer: 'offer',
       Answer: 'answer',
       IceCandidate: 'ice-candidate',
@@ -150,6 +151,19 @@ class RustSignalingAdapter {
       }
       if (message.type === 'Answer') {
         payloadObj.answer = payloadObj.sdp;
+      }
+    }
+    // Join 확정은 서버의 JoinedRoom ack에서만 이루어진다.
+    // RoomFull이면 해당 방의 확정 상태를 해제해 재시도가 JoinRoom을 다시 보낼 수 있게 한다.
+    if (message.type === 'JoinedRoom') {
+      const roomId = (payload as Record<string, unknown> | null)?.roomId;
+      if (typeof roomId === 'string') {
+        this.joinedRoomId = roomId;
+      }
+    } else if (message.type === 'RoomFull' || message.type === 'RoomNotFound') {
+      const roomId = (payload as Record<string, unknown> | null)?.roomId;
+      if (typeof roomId !== 'string' || roomId === this.joinedRoomId) {
+        this.joinedRoomId = null;
       }
     }
 
@@ -203,7 +217,7 @@ class RustSignalingAdapter {
   }
 
   // API Methods
-  async joinRoom(roomId: string): Promise<void> {
+  async joinRoom(roomId: string, opts?: { create?: boolean }): Promise<void> {
     const normalized = roomId.trim();
     if (!normalized) return;
 
@@ -218,10 +232,12 @@ class RustSignalingAdapter {
     }
 
     debugLog('[RustSignaling] Joining room:', normalized);
-    this.send('JoinRoom', { roomId: normalized });
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.joinedRoomId = normalized;
+    const payload: Record<string, unknown> = { roomId: normalized };
+    if (opts?.create) {
+      payload.create = true;
     }
+    this.send('JoinRoom', payload);
+    // joinedRoomId는 서버의 JoinedRoom ack을 받을 때 handleMessage에서 설정된다.
   }
 
   sendOffer(roomId: string, offer: RTCSessionDescriptionInit, target?: string) {

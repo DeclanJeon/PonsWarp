@@ -59,7 +59,13 @@ async function decryptToPlain(packet: ArrayBuffer): Promise<ArrayBuffer> {
   const iv = bytes.slice(20, 32);
   const ciphertextWithTag = bytes.slice(ENCRYPTED_HEADER_SIZE);
   const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv, tagLength: 128 },
+    {
+      name: 'AES-GCM',
+      iv,
+      tagLength: 128,
+      // Header (bytes 0..20) is bound into the GCM tag as AAD by the sender.
+      additionalData: bytes.slice(0, 20),
+    },
     cryptoKey,
     ciphertextWithTag
   );

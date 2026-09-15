@@ -2,11 +2,14 @@
 
 use crate::protocol::ServerMessage;
 use crate::state::{AppState, Room};
+use dashmap::mapref::entry::Entry;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// 방 참여 처리
-pub async fn handle_join_room(state: Arc<AppState>, peer_id: &str, room_id: &str) {
+/// `create`가 true이면 방이 없을 때 새로 만든다(sender).
+/// false(참여 전용, receiver)인데 방이 없으면 빈 방을 만들지 않고
+/// RoomNotFound를 즉시 반환해 45초 타임아웃 대기를 방지한다.
+pub async fn handle_join_room(state: Arc<AppState>, peer_id: &str, room_id: &str, create: bool) {
     let room_id = room_id.trim().to_string();
     let max_size = state.config.room.max_size;
 
@@ -15,11 +18,37 @@ pub async fn handle_join_room(state: Arc<AppState>, peer_id: &str, room_id: &str
     // 방 가져오기 또는 생성 및 로직 처리 (스코프 제한으로 Deadlock 방지)
     let updated_users = {
         tracing::info!(room_id = %room_id, "Acquiring room lock...");
-        let room = state.rooms.entry(room_id.clone()).or_insert_with(|| {
-            tracing::info!(room_id = %room_id, "Room created");
-            Room::new(room_id.clone())
-        });
+        let room = match state.rooms.entry(room_id.clone()) {
+            Entry::Occupied(entry) => entry.into_ref(),
+            Entry::Vacant(entry) => {
+                if !create {
+                    // 참여 전용 JoinRoom인데 방이 없음 → 잘못된 방 코드.
+                    // 빈 방을 생성하지 않고 즉시 실패를 알린다.
+                    if let Some(session) = state.peers.get(peer_id) {
+                        let _ = session.sender.send(ServerMessage::RoomNotFound {
+                            room_id: room_id.clone(),
+                        });
+                    }
+                    tracing::info!(peer_id = %peer_id, room_id = %room_id, "Join rejected: room not found");
+                    return;
+                }
+                tracing::info!(room_id = %room_id, "Room created");
+                entry.insert(Room::new(room_id.clone()))
+            }
+        };
+        room.touch();
         tracing::info!(room_id = %room_id, "Room lock acquired");
+
+        // 방은 존재하지만 비어있음(마지막 멤버 퇴장 직후 등) → 참여 전용이면 not found
+        if !create && room.users.read().await.is_empty() {
+            if let Some(session) = state.peers.get(peer_id) {
+                let _ = session.sender.send(ServerMessage::RoomNotFound {
+                    room_id: room_id.clone(),
+                });
+            }
+            tracing::info!(peer_id = %peer_id, room_id = %room_id, "Join rejected: room empty");
+            return;
+        }
 
         // 방 인원 제한 확인 (이미 방에 있는 유저가 재접속하는 경우는 허용)
         {
@@ -147,6 +176,7 @@ pub async fn leave_room_internal(state: &AppState, peer_id: &str, room_id: &str)
     // 네트워크/채널 작업을 수행한다.
     let Some((remaining, updated_users, should_delete)) =
         (if let Some(room) = state.rooms.get(room_id) {
+            room.touch();
             room.users.write().await.remove(peer_id);
             let updated_users: Vec<String> = room.users.read().await.iter().cloned().collect();
             let remaining = updated_users.len();
@@ -211,6 +241,7 @@ pub async fn handle_leave_room(state: Arc<AppState>, peer_id: &str) {
 /// 방에 메시지 브로드캐스트
 async fn broadcast_to_room(state: &AppState, room_id: &str, message: ServerMessage) {
     if let Some(room) = state.rooms.get(room_id) {
+        room.touch();
         let users = room.users.read().await;
         for peer_id in users.iter() {
             if let Some(session) = state.peers.get(peer_id) {
@@ -220,16 +251,33 @@ async fn broadcast_to_room(state: &AppState, room_id: &str, message: ServerMessa
     }
 }
 
+/// 방 활동 시각 갱신 (시그널링 메시지 릴레이 시 호출)
+pub fn touch_room(state: &AppState, room_id: &str) {
+    if let Some(room) = state.rooms.get(room_id) {
+        room.touch();
+    }
+}
+
 /// 오래된 방 정리
+/// TTL은 생성 시각이 아니라 마지막 활동(last_activity) 기준으로 측정한다.
+/// 단, 세션이 살아있는 멤버가 있는 방은 유휴 시간과 무관하게 유지한다 —
+/// 전송 중에는 시그널링 메시지가 오가지 않을 수 있으므로, 연결된 멤버가 있는
+/// 방을 정리하면 1시간 이상 걸리는 전송이 시그널링 방을 잃는다.
 pub async fn cleanup_old_rooms(state: Arc<AppState>) {
     let timeout_ms = state.config.room.timeout_ms;
-    let now = Instant::now();
     let mut deleted = 0;
 
     state.rooms.retain(|room_id, room| {
-        let age = now.duration_since(room.created_at).as_millis() as u64;
-        if age > timeout_ms {
-            tracing::info!(room_id = %room_id, age_ms = age, "Cleaned up old room");
+        let idle_ms = room.idle_duration().as_millis() as u64;
+        // 살아있는 피어 세션이 하나라도 있으면 방은 활성 상태로 간주한다.
+        // users 락을 잡을 수 없으면(쓰기 진행 중) 보수적으로 유지한다.
+        let has_live_member = room
+            .users
+            .try_read()
+            .map(|users| users.iter().any(|id| state.peers.contains_key(id)))
+            .unwrap_or(true);
+        if !has_live_member && idle_ms > timeout_ms {
+            tracing::info!(room_id = %room_id, idle_ms = idle_ms, "Cleaned up idle room");
             deleted += 1;
             false
         } else {

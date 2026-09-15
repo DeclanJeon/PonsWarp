@@ -25,10 +25,10 @@ const SESSION_MODES = new Set<AppMode>([
 ]);
 
 export const TRANSFER_LEAVE_MESSAGE =
-  '파일 전송이 진행 중입니다. 지금 나가면 전송이 중단됩니다. 계속하시겠습니까?';
+  'A file transfer is in progress. Leaving now will abort the transfer. Continue?';
 
 export const TRANSFER_RELOAD_MESSAGE =
-  '파일 전송이 진행 중입니다. 새로고침하면 전송이 중단됩니다. 계속하시겠습니까?';
+  'A file transfer is in progress. Reloading will abort the transfer. Continue?';
 
 export function isTransferSessionActive(
   mode: AppMode,
@@ -67,7 +67,7 @@ export function leaveTransferSessionIfConfirmed(
   message: string = TRANSFER_LEAVE_MESSAGE
 ): boolean {
   if (!confirmLeaveTransferSession(message)) {
-    toast.warning('전송 중입니다. 화면을 유지합니다.');
+    toast.warning('Transfer in progress. Staying on this page.');
     return false;
   }
   onLeave();
@@ -135,7 +135,7 @@ export const usePreventNavigation = () => {
       } catch {
         // ignore
       }
-      toast.warning('전송 중에는 뒤로가기를 사용할 수 없습니다.');
+      toast.warning('Back navigation is disabled during a transfer.');
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -152,7 +152,7 @@ export const usePreventNavigation = () => {
       if (confirmLeaveTransferSession(TRANSFER_RELOAD_MESSAGE)) {
         window.location.reload();
       } else {
-        toast.warning('전송 중입니다. 새로고침을 취소했습니다.');
+        toast.warning('Transfer in progress. Reload cancelled.');
       }
     };
 

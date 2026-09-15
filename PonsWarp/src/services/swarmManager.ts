@@ -31,7 +31,14 @@ import {
 import { createEosPacket, createPlainDataPacket } from '../utils/plainPacket';
 import { BulkEncryptProducer } from './bulkEncryptProducer';
 import { orderIceServersPreferDirect } from '../utils/iceServers';
-import { bytesToBase64, CryptoService } from './cryptoService';
+import {
+  bytesToBase64,
+  CryptoService,
+  deriveKek,
+  generateEcdhKeyPair,
+  wrapSessionKey,
+  type EcdhKeyPair,
+} from './cryptoService';
 import { networkController, AdaptiveParams } from './networkAdaptiveController';
 import { calculateProgressPercent } from '../utils/transferProgress';
 import { TransferSpeedMeter } from '../utils/transferEstimate';
@@ -133,6 +140,8 @@ type ControlMessage = {
   offset?: unknown;
   actualSize?: unknown;
   runId?: unknown;
+  publicKey?: unknown;
+  salt?: unknown;
 };
 type PartitionAckWaiter = {
   runId: number;
@@ -257,6 +266,11 @@ export class SwarmManager {
   private sessionKey: Uint8Array | null = null;
   private randomPrefix: Uint8Array | null = null;
   private cryptoSessionAnnouncedPeers: Set<string> = new Set();
+  // Per-peer ECDH state for wrapping the session key (raw key never sent).
+  private peerEcdhKeys: Map<string, EcdhKeyPair> = new Map();
+  private peerKeks: Map<string, CryptoKey> = new Map();
+  private peerCryptoFallbackTimers: Map<string, ReturnType<typeof setTimeout>> =
+    new Map();
   private lastAdaptiveConfig: AdaptiveParams | null = null;
   private currentTransferDiagnostics: TransferDiagnostics = {
     candidatePathKind: 'unknown',
@@ -313,7 +327,9 @@ export class SwarmManager {
         // awaitingReceiverReconnect 상태라면 receiver의 RESUME_REQUEST를 기다리되,
         // 피어가 아직 살아있다면 chunk 파이프라인을 즉시 재개한다.
         if (this.roomId) {
-          return this.getSignalingService().joinRoom(this.roomId);
+          return this.getSignalingService().joinRoom(this.roomId, {
+            create: true,
+          });
         }
       })
       .then(() => {
@@ -406,7 +422,8 @@ export class SwarmManager {
     void signaling
       .connect()
       .then(() => {
-        if (this.roomId) return signaling.joinRoom(this.roomId);
+        if (this.roomId)
+          return signaling.joinRoom(this.roomId, { create: true });
       })
       .catch(error => {
         logError('[SwarmManager]', 'Reconnect failed:', error);
@@ -482,6 +499,32 @@ export class SwarmManager {
       return;
     }
 
+    // Prefer the ECDH-wrapped session: the raw key never crosses the wire.
+    // If the peer already completed CRYPTO_HELLO, wrap + send immediately.
+    if (this.peerKeks.has(peer.id)) {
+      void this.sendWrappedCryptoSession(peer);
+      return;
+    }
+
+    // No handshake yet — arm a short fallback so a peer that never sends
+    // CRYPTO_HELLO (older client) still gets a working session. The receiver
+    // sends CRYPTO_HELLO on connect, so this only fires for legacy peers.
+    if (!this.peerCryptoFallbackTimers.has(peer.id)) {
+      const timer = setTimeout(() => {
+        this.peerCryptoFallbackTimers.delete(peer.id);
+        if (this.peerKeks.has(peer.id)) return; // handshake beat the timer
+        logWarn(
+          '[SwarmManager]',
+          `No CRYPTO_HELLO from ${peer.id}; sending plaintext session (legacy)`
+        );
+        this.sendPlainCryptoSession(peer);
+      }, 3000);
+      this.peerCryptoFallbackTimers.set(peer.id, timer);
+    }
+  }
+
+  private sendPlainCryptoSession(peer: SinglePeerConnection): void {
+    if (!this.sessionKey || !this.randomPrefix) return;
     const sent = peer.send(
       JSON.stringify({
         type: 'CRYPTO_SESSION',
@@ -496,6 +539,66 @@ export class SwarmManager {
     } else {
       this.cryptoSessionAnnouncedPeers.delete(peer.id);
       logWarn('[SwarmManager]', `Failed to send CRYPTO_SESSION to ${peer.id}`);
+    }
+  }
+
+  private async sendWrappedCryptoSession(
+    peer: SinglePeerConnection
+  ): Promise<void> {
+    const kek = this.peerKeks.get(peer.id);
+    const ecdh = this.peerEcdhKeys.get(peer.id);
+    if (!kek || !ecdh || !this.sessionKey || !this.randomPrefix) return;
+    try {
+      const { iv, wrappedKey } = await wrapSessionKey(kek, this.sessionKey);
+      const sent = peer.send(
+        JSON.stringify({
+          type: 'CRYPTO_SESSION',
+          version: 2,
+          algorithm: 'AES-256-GCM',
+          publicKey: ecdh.publicKeyBase64,
+          wrappedKey,
+          iv,
+          randomPrefix: bytesToBase64(this.randomPrefix),
+        })
+      );
+      if (sent) {
+        this.cryptoSessionAnnouncedPeers.add(peer.id);
+      } else {
+        this.cryptoSessionAnnouncedPeers.delete(peer.id);
+        logWarn(
+          '[SwarmManager]',
+          `Failed to send wrapped CRYPTO_SESSION to ${peer.id}`
+        );
+      }
+    } catch (error) {
+      logWarn('[SwarmManager]', 'Key wrap failed; falling back', error);
+      this.sendPlainCryptoSession(peer);
+    }
+  }
+
+  private async handleCryptoHello(
+    peerId: string,
+    msg: ControlMessage
+  ): Promise<void> {
+    const peer = this.peers.get(peerId);
+    const publicKey = typeof msg.publicKey === 'string' ? msg.publicKey : null;
+    const salt = typeof msg.salt === 'string' ? msg.salt : null;
+    if (!peer || !publicKey || !salt) return;
+    try {
+      // Fresh ephemeral keypair per peer handshake.
+      const ecdh = await generateEcdhKeyPair();
+      this.peerEcdhKeys.set(peerId, ecdh);
+      const kek = await deriveKek(ecdh.privateKey, publicKey, salt);
+      this.peerKeks.set(peerId, kek);
+      // Cancel the plaintext fallback — handshake won.
+      const timer = this.peerCryptoFallbackTimers.get(peerId);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        this.peerCryptoFallbackTimers.delete(peerId);
+      }
+      await this.sendWrappedCryptoSession(peer);
+    } catch (error) {
+      logWarn('[SwarmManager]', 'CRYPTO_HELLO handling failed', error);
     }
   }
 
@@ -769,8 +872,17 @@ export class SwarmManager {
       peer.destroy();
       this.peers.delete(key);
       this.cryptoSessionAnnouncedPeers.delete(key);
+      this.peerEcdhKeys.delete(key);
+      this.peerKeks.delete(key);
+      const cryptoTimer = this.peerCryptoFallbackTimers.get(key);
+      if (cryptoTimer !== undefined) {
+        clearTimeout(cryptoTimer);
+        this.peerCryptoFallbackTimers.delete(key);
+      }
     }
     this.cryptoSessionAnnouncedPeers.delete(baseId);
+    this.peerEcdhKeys.delete(baseId);
+    this.peerKeks.delete(baseId);
     this.sendFailureCounts.delete(baseId);
     this.sendFailureCounts.delete(peerId);
     // Normalize to base id for state sets below
@@ -1008,7 +1120,7 @@ export class SwarmManager {
       await this.fetchTurnConfig(roomId);
       if (this.roomId !== roomId) return;
 
-      await this.getSignalingService().joinRoom(roomId);
+      await this.getSignalingService().joinRoom(roomId, { create: true });
       this.emit(
         'status',
         this.awaitingReceiverReconnect
@@ -1663,11 +1775,15 @@ export class SwarmManager {
    */
   private handleControlMessage(peerId: string, msg: ControlMessage): void {
     const peer = this.peers.get(peerId);
-
     switch (msg.type) {
       case 'KEEP_ALIVE':
         // Keep-alive 메시지는 무시 (연결 유지 목적)
         return;
+
+      case 'CRYPTO_HELLO': {
+        void this.handleCryptoHello(peerId, msg);
+        return;
+      }
 
       case 'PEER_CAPS': {
         this.remoteHybridCaps = {
@@ -2446,7 +2562,7 @@ export class SwarmManager {
     // 시그널링 연결
     await this.getSignalingService().connect();
     this.setupSignalingHandlers();
-    await this.getSignalingService().joinRoom(roomId);
+    await this.getSignalingService().joinRoom(roomId, { create: true });
 
     this.emit('status', 'WAITING_FOR_PEER');
   }
@@ -3270,11 +3386,24 @@ export class SwarmManager {
     new DataView(nonce.buffer).setUint32(0, nonceCounter, true);
     nonce.set(this.randomPrefix.subarray(0, 8), 4);
 
+    // Build the 20-byte authenticated header BEFORE encrypting so it can be
+    // bound into the GCM tag as AAD (matches bulk-encrypt.worker).
+    const header = new ArrayBuffer(20);
+    const headerBytes = new Uint8Array(header);
+    const headerView = new DataView(header);
+    headerBytes[0] = 0x02;
+    headerBytes[1] = 0x01;
+    headerView.setUint16(2, 0, true);
+    headerView.setUint32(4, params.sequence, true);
+    headerView.setBigUint64(8, BigInt(params.offset), true);
+    headerView.setUint32(16, params.payload.byteLength, true);
+
     const ciphertextWithTag = await crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
         iv: nonce, // BufferSource; avoid extra copy
         tagLength: 128,
+        additionalData: header,
       },
       this.partitionCryptoKey,
       params.payload
@@ -3282,13 +3411,7 @@ export class SwarmManager {
 
     const packet = new ArrayBuffer(38 + ciphertextWithTag.byteLength);
     const packetBytes = new Uint8Array(packet);
-    const packetView = new DataView(packet);
-    packetBytes[0] = 0x02;
-    packetBytes[1] = 0x01;
-    packetView.setUint16(2, 0, true);
-    packetView.setUint32(4, params.sequence, true);
-    packetView.setBigUint64(8, BigInt(params.offset), true);
-    packetView.setUint32(16, params.payload.byteLength, true);
+    packetBytes.set(headerBytes, 0);
     packetBytes.set(nonce, 20);
     packetBytes.set(new Uint8Array(ciphertextWithTag), 38);
     return packet;
@@ -4304,6 +4427,48 @@ export class SwarmManager {
     });
   }
 
+  /**
+   * 전체 정리 (컴포넌트 언마운트 / 세션 종료 시 호출)
+   */
+  public cleanup(): void {
+    logInfo('[SwarmManager]', 'Cleaning up (Full)...');
+    // Notify receivers before tearing down peers so they surface an error
+    // instead of waiting on INCOMING STREAM forever. Skip when the session
+    // already completed — receivers are done and this would be noise.
+    const shouldNotifyAbort =
+      this.pendingManifest && !this.allTransfersCompleteEmitted;
+    if (shouldNotifyAbort) {
+      const abortMsg = JSON.stringify({
+        type: 'TRANSFER_ABORTED',
+        message: 'Sender aborted the transfer',
+      });
+      for (const peer of this.peers.values()) {
+        try {
+          peer.send(abortMsg);
+        } catch {
+          // best-effort; peer may already be gone
+        }
+      }
+    }
+    this.releaseWakeLock();
+    if (shouldNotifyAbort) {
+      // Give the abort frame a beat to flush before destroying channels —
+      // peer.destroy() in resetState() would otherwise close the control
+      // channel before the message leaves the SCTP buffer.
+      setTimeout(() => this.resetState(), 150);
+    } else {
+      this.resetState();
+    }
+    this.removeSignalingHandlers();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this.boundHandleOnline);
+      document.removeEventListener(
+        'visibilitychange',
+        this.boundHandleVisibilityChange
+      );
+    }
+  }
+
   // ======================= 상태 조회 =======================
 
   /**
@@ -4381,23 +4546,6 @@ export class SwarmManager {
   }
 
   /**
-   * 리소스 정리 (컴포넌트 언마운트 시 호출)
-   */
-  public cleanup(): void {
-    logInfo('[SwarmManager]', 'Cleaning up (Full)...');
-    this.releaseWakeLock();
-    this.resetState();
-    this.removeSignalingHandlers();
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('online', this.boundHandleOnline);
-      document.removeEventListener(
-        'visibilitychange',
-        this.boundHandleVisibilityChange
-      );
-    }
-  }
-
-  /**
    * 상태 초기화 (재사용 시 호출)
    */
   private resetState(): void {
@@ -4433,7 +4581,11 @@ export class SwarmManager {
     }
     this.peers.clear();
 
-    // Worker 정리
+    this.cryptoSessionAnnouncedPeers.clear();
+    this.peerEcdhKeys.clear();
+    this.peerKeks.clear();
+    for (const t of this.peerCryptoFallbackTimers.values()) clearTimeout(t);
+    this.peerCryptoFallbackTimers.clear();
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;

@@ -42,6 +42,104 @@ export function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
+// ============ Per-peer ECDH key-wrap helpers ============
+// The transfer session key is wrapped (AES-GCM) with a KEK derived from an
+// ephemeral ECDH exchange per peer, so the raw key never crosses the wire.
+
+export interface EcdhKeyPair {
+  publicKeyBase64: string;
+  privateKey: CryptoKey;
+}
+
+export async function generateEcdhKeyPair(): Promise<EcdhKeyPair> {
+  const pair = (await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits']
+  )) as CryptoKeyPair;
+  const publicKeyRaw = await crypto.subtle.exportKey('raw', pair.publicKey);
+  return {
+    publicKeyBase64: bytesToBase64(new Uint8Array(publicKeyRaw)),
+    privateKey: pair.privateKey,
+  };
+}
+
+export async function deriveKek(
+  privateKey: CryptoKey,
+  peerPublicKeyBase64: string,
+  saltBase64: string
+): Promise<CryptoKey> {
+  const peerPublicKey = await crypto.subtle.importKey(
+    'raw',
+    base64ToBytes(peerPublicKeyBase64).buffer as ArrayBuffer,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    []
+  );
+  const sharedSecret = await crypto.subtle.deriveBits(
+    { name: 'ECDH', public: peerPublicKey },
+    privateKey,
+    256
+  );
+  const hkdfKey = await crypto.subtle.importKey(
+    'raw',
+    sharedSecret,
+    'HKDF',
+    false,
+    ['deriveBits']
+  );
+  const kekBits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: base64ToBytes(saltBase64).buffer as ArrayBuffer,
+      info: new TextEncoder().encode('PonsWarp-KEK-v1').buffer as ArrayBuffer,
+    },
+    hkdfKey,
+    256
+  );
+  return crypto.subtle.importKey('raw', kekBits, { name: 'AES-GCM' }, false, [
+    'encrypt',
+    'decrypt',
+  ]);
+}
+
+export async function wrapSessionKey(
+  kek: CryptoKey,
+  sessionKey: Uint8Array
+): Promise<{ iv: string; wrappedKey: string }> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const wrapped = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, tagLength: 128 },
+    kek,
+    sessionKey.buffer.slice(
+      sessionKey.byteOffset,
+      sessionKey.byteOffset + sessionKey.byteLength
+    ) as ArrayBuffer
+  );
+  return {
+    iv: bytesToBase64(iv),
+    wrappedKey: bytesToBase64(new Uint8Array(wrapped)),
+  };
+}
+
+export async function unwrapSessionKey(
+  kek: CryptoKey,
+  ivBase64: string,
+  wrappedKeyBase64: string
+): Promise<Uint8Array> {
+  const plain = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: base64ToBytes(ivBase64).buffer as ArrayBuffer,
+      tagLength: 128,
+    },
+    kek,
+    base64ToBytes(wrappedKeyBase64).buffer as ArrayBuffer
+  );
+  return new Uint8Array(plain);
+}
+
 export class CryptoService {
   private keyPair: KeyPair | null = null;
   private sessionKey: Uint8Array | null = null;

@@ -12,6 +12,10 @@ pub enum ClientMessage {
     // Room Management
     JoinRoom {
         room_id: String,
+        /// true = 방 생성 허용 (sender), false/누락 = 참여만 허용 (receiver)
+        /// 누락된 경우 join-only로 처리하여 존재하지 않는 방에 대한 잘못된 참여를 빠르게 실패시킨다.
+        #[serde(default)]
+        create: bool,
     },
     LeaveRoom,
 
@@ -96,6 +100,9 @@ pub enum ServerMessage {
         socket_id: String,
     },
     RoomFull {
+        room_id: String,
+    },
+    RoomNotFound {
         room_id: String,
     },
 
@@ -192,6 +199,41 @@ mod tests {
             }
             other => panic!("unexpected message: {other:?}"),
         }
+    }
+
+    #[test]
+    fn join_room_create_defaults_to_join_only() {
+        // create 필드 누락 = join-only (하위 호환)
+        let decoded: ClientMessage = serde_json::from_str(
+            r#"{"type":"JoinRoom","payload":{"room_id":"ABC123"}}"#,
+        )
+        .expect("deserialize join without create");
+        match decoded {
+            ClientMessage::JoinRoom { room_id, create } => {
+                assert_eq!(room_id, "ABC123");
+                assert!(!create);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        let decoded: ClientMessage = serde_json::from_str(
+            r#"{"type":"JoinRoom","payload":{"room_id":"ABC123","create":true}}"#,
+        )
+        .expect("deserialize join with create");
+        match decoded {
+            ClientMessage::JoinRoom { create, .. } => assert!(create),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn room_not_found_serializes_wire_type() {
+        let value = serde_json::to_value(&ServerMessage::RoomNotFound {
+            room_id: "ABC123".to_string(),
+        })
+        .expect("serialize room not found");
+        assert_eq!(value["type"], "RoomNotFound");
+        assert_eq!(value["payload"]["room_id"], "ABC123");
     }
 
     #[test]

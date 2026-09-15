@@ -288,8 +288,8 @@ async fn handle_client_message(
         ClientMessage::Heartbeat => {
             handlers::handle_heartbeat(sender);
         }
-        ClientMessage::JoinRoom { room_id } => {
-            handlers::handle_join_room(state.clone(), peer_id, &room_id).await;
+        ClientMessage::JoinRoom { room_id, create } => {
+            handlers::handle_join_room(state.clone(), peer_id, &room_id, create).await;
         }
         ClientMessage::LeaveRoom => {
             handlers::handle_leave_room(state.clone(), peer_id).await;
