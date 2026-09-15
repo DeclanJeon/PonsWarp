@@ -430,9 +430,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       return;
     }
     if (s === 'CONNECTING' || s === 'WAITING' || s === 'QUEUED') {
-      toast.warning(
-        'Sender left the room. Waiting briefly for reconnect…'
-      );
+      toast.warning('Sender left the room. Waiting briefly for reconnect…');
     }
   }, []);
 
@@ -472,8 +470,8 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       transferService.off('transfer-starting', handleTransferStarting);
       transferService.off('ready-for-download', handleReadyForDownload);
       transferService.off('reconnecting', handleReconnecting);
-    transferService.off('reconnected', handleReconnected);
-    transferService.off('peer-disconnected', handlePeerDisconnected);
+      transferService.off('reconnected', handleReconnected);
+      transferService.off('peer-disconnected', handlePeerDisconnected);
     };
   }, [
     handleMetadata,
