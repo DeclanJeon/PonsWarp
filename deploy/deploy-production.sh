@@ -194,6 +194,13 @@ if [[ "$MODE" == deploy ]]; then
 
   pnpm run wasm:build
   pnpm run verify:wasm-provenance
+  if [[ ! -f "$FRONTEND_DIR/.env.production" ]]; then
+    [[ -f "$FRONTEND_DIR/.env.production.example" ]] || {
+      echo "missing frontend production env template: $FRONTEND_DIR/.env.production.example" >&2
+      exit 1
+    }
+    cp "$FRONTEND_DIR/.env.production.example" "$FRONTEND_DIR/.env.production"
+  fi
   ( cd "$FRONTEND_DIR"; npm run build; tar -C dist -czf "$FRONTEND_ARCHIVE" . )
   CARGO_TARGET_DIR="$ROOT_DIR/target" cargo build --release --manifest-path "$BACKEND_DIR/Cargo.toml"
 

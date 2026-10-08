@@ -216,6 +216,8 @@ These are compiled into browser JavaScript and must not contain secrets.
 | `VITE_RUST_SIGNALING_URL` | Yes | WebSocket endpoint, for example `ws://localhost:5502/ws` or `wss://example.com/ws`. |
 | `VITE_CLOUD_API_BASE_URL` | Yes | Backend HTTP origin for Cloud Drop and plan APIs, for example `http://localhost:5502` or `https://example.com`. |
 
+`../deploy/deploy-production.sh` copies `.env.production.example` to `.env.production` when no local production file exists, then builds the frontend. The example selects `wss://warp.ponslink.com/ws` and `https://warp.ponslink.com`; local overrides are public browser configuration, not secrets.
+
 ### Backend minimum direct-P2P env
 
 Set these in `../ponswarp-signaling-rs/.env.local`, `../ponswarp-signaling-rs/.env.production`, or an external env file used by the server.

@@ -11,6 +11,7 @@
 * 방 점유·응답 지연·완료 후 다음 수신 흐름 보완. 단계 안내, 진행률 접근성, 화면 전환 초점, 긴 파일명, 읽기 쉬운 글자 크기 및 토스트 수명 개선.
 * 모션 감소 설정 변경을 새로고침 없이 반영하여 배경 canvas와 장식 모션 중단. P2P E2EE와 Cloud HTTPS 보안 안내 분리.
 * 활성 전송의 history guard를 세션당 하나로 유지하고, 딥링크 이탈 중 수신 화면이 다시 열리는 경로 복원 오류 수정.
+* 운영 배포 시 공개 Vite endpoint를 production env 예제로 채우고, 실제 UI의 현재 송수신 단계에 맞춰 운영 전송 smoke selector를 갱신.
 
 # [0.7.3](https://github.com/DeclanJeon/PonsWarp/compare/v0.7.2...v0.7.3) (2026-05-17)
 

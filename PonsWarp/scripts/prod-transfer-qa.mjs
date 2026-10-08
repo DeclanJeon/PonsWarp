@@ -57,9 +57,8 @@ function parseReceiverStatus(text) {
     progress,
     transferredMB,
     hasError: /\bFAILED\b|\bERROR\b/.test(text),
-    hasMaterialized: /\bMATERIALIZED\b/i.test(text),
     hasDoneCopy:
-      /\btransfer complete\b|\breconstruction complete\b|\bdownload ready\b/i.test(
+      /\bfiles received\b|\btransfer complete\b|\breconstruction complete\b|\bdownload ready\b/i.test(
         text
       ),
   };
@@ -155,7 +154,7 @@ async function main() {
       ]);
 
       // --- SENDER ---
-      await sender.locator('button:has-text("INITIALIZE LINK")').first().click();
+      await sender.getByRole('button', { name: /start sharing/i }).click();
       await sender.waitForTimeout(500);
       if (RELAY) {
         const force = sender.locator(
@@ -196,32 +195,18 @@ async function main() {
       if (!roomCode) throw new Error('sender: room code not found');
 
       // --- RECEIVER ---
-      await receiver
-        .locator('button:has-text("INITIALIZE LINK")')
-        .first()
-        .click();
-      await receiver.waitForTimeout(500);
-      await receiver.locator('button:has-text("RECEIVE")').first().click();
-      await receiver.waitForTimeout(500);
+      await receiver.getByRole('button', { name: /start sharing/i }).click();
+      await receiver.getByRole('button', { name: /receive/i }).click();
+      const codeInput = receiver.getByLabel('Room code, drop code, or shared link');
+      await codeInput.fill(roomCode);
+      await codeInput.press('Enter');
 
-      await receiver
-        .locator('input[placeholder*="CODE" i]')
-        .first()
-        .fill(roomCode);
-      await receiver
-        .locator('button:has-text("ESTABLISH LINK")')
-        .first()
-        .click();
-      await receiver.waitForTimeout(3000);
-
-      // Wait for MATERIALIZE (manifest arrives after peer connect)
-      let matReady = false;
-      const matDeadline = Date.now() + 90_000;
-      while (Date.now() < matDeadline) {
-        if (
-          (await receiver.locator('button:has-text("MATERIALIZE")').count()) > 0
-        ) {
-          matReady = true;
+      const downloadButton = receiver.getByRole('button', { name: /start download/i });
+      let downloadReady = false;
+      const downloadDeadline = Date.now() + 90_000;
+      while (Date.now() < downloadDeadline) {
+        if ((await downloadButton.count()) > 0) {
+          downloadReady = true;
           break;
         }
         const body = await receiver.evaluate(() => document.body.innerText);
@@ -233,9 +218,9 @@ async function main() {
         }
         await receiver.waitForTimeout(500);
       }
-      if (!matReady) throw new Error('receiver: MATERIALIZE not available');
+      if (!downloadReady) throw new Error('receiver: incoming file manifest not available');
+      await downloadButton.click();
 
-      await receiver.locator('button:has-text("MATERIALIZE")').first().click();
 
       // Monitor — poll fast; 1MB can finish between slow samples.
       const startTime = Date.now();
@@ -283,31 +268,15 @@ async function main() {
         ) {
           sawProgress = true;
         }
-        if (rStatus.hasMaterialized || rStatus.hasDoneCopy) {
-          sawMaterialized = true;
-        }
+        if (rStatus.hasDoneCopy) sawMaterialized = true;
 
         if (rStatus.hasError) {
           errorText = rText.substring(0, 200);
           throw new Error(`transfer error: ${errorText}`);
         }
 
-        // Pass conditions (any one):
-        // 1) receiver >= 90% or sender 100%
-        // 2) MATERIALIZED/done UI after any progress/speed signal
-        // 3) peak throughput observed AND final UI landed
-        // 4) MATERIALIZED with transferred size >= 90% of the requested test
-        //    size (fast transfers can finish between 150ms polls, so a bare
-        //    "MATERIALIZED" without a captured % would otherwise false-fail)
-        if (
-          lastRP >= 90 ||
-          lastSP >= 100 ||
-          (sawMaterialized && (sawProgress || peakMBps > 0.05)) ||
-          (sawMaterialized && lastRP >= 30) ||
-          (sawMaterialized &&
-            TEST_SIZE > 0 &&
-            rStatus.transferredMB * 1024 * 1024 >= TEST_SIZE * 0.9)
-        ) {
+        // Require receiver-side progress or the final received-files state.
+        if (lastRP >= 90 || sawMaterialized) {
           transferComplete = true;
           break;
         }
