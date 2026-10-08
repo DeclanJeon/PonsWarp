@@ -1,5 +1,5 @@
 import { ScannedFile } from '../utils/fileScanner';
-import { formatCloudShareError } from './cloudShareErrors';
+import { CloudShareApiError } from './cloudShareErrors';
 
 const API_BASE = (import.meta.env.VITE_CLOUD_API_BASE_URL || '').replace(
   /\/$/,
@@ -482,10 +482,13 @@ const readJsonResponse = async <T>(response: Response): Promise<T> => {
   }
 
   if (!response.ok) {
-    const userMsg = formatCloudShareError(
-      new Error(payload?.error || `Request failed with HTTP ${response.status}`)
+    throw new CloudShareApiError(
+      response.status,
+      payload?.error || `HTTP ${response.status}`
     );
-    throw new Error(userMsg);
+  }
+  if (payload === null) {
+    throw new Error('Invalid JSON response from server');
   }
 
   return payload as T;

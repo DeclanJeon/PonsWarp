@@ -37,7 +37,7 @@ export const TransferProgressBar: React.FC = () => {
   }, []);
 
   return (
-    <div className="mx-auto w-full max-w-md px-1 sm:px-0">
+    <div aria-hidden="true" className="mx-auto w-full max-w-md px-1 sm:px-0">
       <div className="mb-2 flex justify-between font-mono text-xs text-cyan-400 sm:text-sm">
         <span className="tracking-wider">TRANSFERRING</span>
         <div className="flex gap-4">

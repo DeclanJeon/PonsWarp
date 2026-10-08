@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { focusStageHeading } from '../utils/accessibility';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -17,6 +18,7 @@ import {
   PublicCloudShareResponse,
 } from '../services/cloudShareService';
 import { getErrorMessage } from '../utils/errors';
+import { classifyCloudShareError } from '../services/cloudShareErrors';
 import { formatBytes } from '../utils/fileUtils';
 import { formatRemainingTime } from '../utils/transferEstimate';
 import { zipSync } from 'fflate';
@@ -42,17 +44,33 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
   const [status, setStatus] = useState<LoadStatus>('LOADING');
   const [share, setShare] = useState<PublicCloudShareResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [storageWarning, setStorageWarning] = useState(false);
   const [password, setPassword] = useState('');
   const [downloadSessionToken, setDownloadSessionToken] = useState<
     string | null
   >(null);
+  const tokenRef = useRef<{ shareId: string; token: string | null }>({ shareId, token: null });
   const [downloadAllStatus, setDownloadAllStatus] =
     useState<DownloadAllStatus>('IDLE');
   const [downloadAllError, setDownloadAllError] = useState<string | null>(null);
+  const [failedFiles, setFailedFiles] = useState<string[]>([]);
   const [downloadAllBytes, setDownloadAllBytes] = useState(0);
   const [downloadAllFilesDone, setDownloadAllFilesDone] = useState<
     number | null
   >(null);
+
+  const rememberDownloadToken = useCallback((token: string | null) => {
+    tokenRef.current = { shareId, token };
+    setDownloadSessionToken(token);
+    if (!token) return;
+    try {
+      window.localStorage.setItem(`${DOWNLOAD_SESSION_PREFIX}${shareId}`, token);
+    } catch {
+      setStorageWarning(true);
+    }
+  }, [shareId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,26 +79,27 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     const loadShare = async () => {
       setStatus('LOADING');
       setError(null);
+      setErrorCode(null);
       try {
-        const storedToken = window.localStorage.getItem(storageKey);
+        let storedToken = tokenRef.current.shareId === shareId ? tokenRef.current.token : null;
+        try {
+          if (!storedToken) storedToken = window.localStorage.getItem(storageKey);
+        } catch {
+          setStorageWarning(true);
+        }
         const nextShare = await getCloudShare(shareId, {
           downloadSessionToken: storedToken || undefined,
         });
         if (cancelled) return;
-        const nextToken = nextShare.downloadSessionToken || storedToken;
-        if (nextToken) {
-          setDownloadSessionToken(nextToken);
-          window.localStorage.setItem(storageKey, nextToken);
-        }
+        rememberDownloadToken(nextShare.downloadSessionToken || storedToken);
         setShare(nextShare);
         setStatus('READY');
       } catch (loadError) {
         if (cancelled) return;
-        const message = getErrorMessage(loadError, 'Cloud share not found');
-        setError(message);
-        setStatus(
-          message === 'Password required' ? 'PASSWORD_REQUIRED' : 'ERROR'
-        );
+        const info = classifyCloudShareError(loadError);
+        setErrorCode(info.code);
+        setError(info.code === 'password' ? null : info.message);
+        setStatus(info.code === 'password' ? 'PASSWORD_REQUIRED' : 'ERROR');
       }
     };
 
@@ -88,7 +107,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     return () => {
       cancelled = true;
     };
-  }, [shareId]);
+  }, [shareId, refreshVersion, rememberDownloadToken]);
 
   const expiryLabel = share
     ? new Date(share.expiresAt * 1000).toLocaleString()
@@ -98,29 +117,23 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
     const trimmedPassword = password.trim();
     if (!trimmedPassword) return;
 
-    const storageKey = `${DOWNLOAD_SESSION_PREFIX}${shareId}`;
     setStatus('LOADING');
     setError(null);
     try {
       const nextShare = await getCloudShare(shareId, {
         password: trimmedPassword,
       });
-      const nextToken = nextShare.downloadSessionToken;
-      if (nextToken) {
-        setDownloadSessionToken(nextToken);
-        window.localStorage.setItem(storageKey, nextToken);
-      }
+      rememberDownloadToken(nextShare.downloadSessionToken || null);
       setShare(nextShare);
       setPassword('');
       setStatus('READY');
     } catch (unlockError) {
-      const message = getErrorMessage(unlockError, 'Cloud share unlock failed');
-      setError(message);
-      setStatus(
-        message === 'Password required' || message === 'Invalid password'
-          ? 'PASSWORD_REQUIRED'
-          : 'ERROR'
-      );
+      const info = classifyCloudShareError(unlockError);
+      setErrorCode(info.code);
+      setError(info.code === 'password'
+        ? 'The password was not accepted. Check it with the sender and try again.'
+        : info.message);
+      setStatus(info.code === 'password' ? 'PASSWORD_REQUIRED' : 'ERROR');
     }
   };
 
@@ -160,6 +173,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
 
     setDownloadAllStatus('DOWNLOADING');
     setDownloadAllError(null);
+    setFailedFiles([]);
     setDownloadAllBytes(0);
 
     // Single file: plain anchor download — no fetch, no ZIP, no CORS risk.
@@ -221,14 +235,13 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
         })
       );
 
-      if (Object.keys(zipEntries).length === 0) {
-        // Every fetch failed (e.g. R2 CORS still blocking) — fall back to
-        // per-file anchor downloads, which navigate and bypass CORS entirely.
-        console.warn(
-          '[CloudDownload] ZIP fetch path failed, falling back to individual downloads:',
-          failures
+      if (failures.length > 0) {
+        setFailedFiles(failures.map(file => file.name));
+        setDownloadAllError(
+          `${failures.length} file(s) could not be downloaded. No ZIP was saved. Retry or download individual files below.`
         );
-        await downloadAllIndividually();
+        setDownloadAllBytes(0);
+        setDownloadAllStatus('ERROR');
         return;
       }
 
@@ -263,7 +276,10 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
   const isLargeDrop = totalDropBytes > ZIP_DOWNLOAD_MAX_BYTES;
 
   return (
-    <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-1 py-2 sm:px-3 sm:py-4 md:px-0">
+    <div className="relative z-10 flex min-h-full w-full flex-col items-center justify-start px-1 py-2 sm:px-3 sm:py-4 md:justify-center md:px-0">
+      <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {status === 'LOADING' ? 'Loading download details.' : status === 'PASSWORD_REQUIRED' ? 'Enter the share password.' : status === 'ERROR' ? 'Download link unavailable. Review recovery options.' : downloadAllStatus === 'DOWNLOADING' ? 'Preparing downloads. Keep this page open.' : 'Download details ready.'}
+      </p>
       <AnimatePresence mode="wait">
         {status === 'LOADING' && (
           <motion.div
@@ -290,10 +306,17 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
             className="w-full max-w-md bg-red-950/30 border border-red-500/30 rounded-[2rem] p-8 text-center"
           >
             <AlertTriangle className="w-12 h-12 text-red-300 mx-auto mb-5" />
-            <h2 className="text-2xl font-bold text-red-300 mb-3">
+            <h2 ref={focusStageHeading} tabIndex={-1} className="text-2xl font-bold text-red-300 mb-3">
               Drop Unavailable
             </h2>
             <p className="text-sm text-gray-300">{error}</p>
+            {errorCode === 'not-found' ? (
+              <p className="mt-4 text-sm text-gray-300">Ask the sender for a new download link.</p>
+            ) : (
+              <button type="button" onClick={() => setRefreshVersion(value => value + 1)} className="mt-4 min-h-11 rounded-xl border border-white/20 px-4 py-3 text-white">
+                Retry loading
+              </button>
+            )}
           </motion.div>
         )}
 
@@ -309,29 +332,33 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
             <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mb-5">
               <Lock className="w-6 h-6 text-emerald-300" />
             </div>
-            <h2 className="text-2xl font-bold text-white mb-3">
+            <h2 ref={focusStageHeading} tabIndex={-1} className="text-2xl font-bold text-white mb-3">
               Password Required
             </h2>
             <p className="text-sm text-gray-400 mb-5">
               Enter the password from the sender to open this Cloud Drop.
             </p>
+            <label htmlFor="cloud-password" className="mb-2 block text-sm font-bold text-gray-200">Share password</label>
             <input
+              id="cloud-password"
+              name="password"
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? 'cloud-password-error' : undefined}
               type="password"
               value={password}
               onChange={event => setPassword(event.target.value)}
-              className="w-full bg-gray-950/70 border border-gray-700 focus:border-emerald-400 outline-none rounded-xl px-4 py-3 text-white mb-3"
+              className="mb-3 w-full rounded-xl border border-gray-700 bg-gray-950/70 px-4 py-3 text-base text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/40"
               autoComplete="current-password"
-              autoFocus
             />
-            {error === 'Invalid password' && (
-              <p className="text-sm text-red-300 mb-3">Invalid password.</p>
+            {error && (
+              <p id="cloud-password-error" role="alert" className="mb-3 text-sm text-red-300">{error}</p>
             )}
             <button
               type="submit"
               disabled={!password.trim()}
               className="w-full py-3 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-100 font-bold tracking-wider disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              UNLOCK DROP
+              Unlock download
             </button>
           </motion.form>
         )}
@@ -342,7 +369,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className={`w-full max-w-2xl p-6 md:p-8 ${glassPanelClass}`}
+            className={`w-full max-w-2xl shrink-0 p-4 sm:p-6 md:p-8 ${glassPanelClass}`}
           >
             <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-6 mb-6">
               <div className="flex items-start gap-4 min-w-0">
@@ -356,7 +383,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
                       {formatDropWindow(share.secondsUntilExpiry)}
                     </span>
                   </div>
-                  <h2 className="text-2xl md:text-4xl font-bold brand-font text-white truncate">
+                  <h2 ref={focusStageHeading} tabIndex={-1} title={share.rootName} className="text-2xl md:text-4xl font-bold brand-font text-white break-words">
                     {share.rootName}
                   </h2>
                   <p className="text-sm text-gray-400 font-mono mt-2">
@@ -370,13 +397,24 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
                 <p>{formatRemainingTime(share.secondsUntilExpiry)}</p>
               </div>
             </div>
+            {storageWarning && (
+              <p className="mb-4 text-sm text-amber-200">This browser cannot remember access. Downloads still work, but you may need the password again next time.</p>
+            )}
 
             {!share.completed && (
               <div className="bg-yellow-900/30 border border-yellow-500/30 rounded-2xl p-4 text-yellow-100 text-sm mb-5">
-                Sender upload is still finishing. Refresh this page shortly.
+                <p>Sender upload is still finishing. Check again when the sender is ready.</p>
+                <button type="button" onClick={() => setRefreshVersion(value => value + 1)} className="mt-3 min-h-11 rounded-lg border border-yellow-300/40 px-4 py-2">
+                  Refresh status
+                </button>
               </div>
             )}
 
+            {downloadAllStatus === 'DOWNLOADING' && (
+              <div role="progressbar" aria-label="Preparing downloads" aria-valuemin={0} aria-valuemax={100}
+                aria-valuenow={isLargeDrop ? Math.round(((downloadAllFilesDone || 0) / share.files.length) * 100) : totalDropBytes > 0 ? Math.min(100, Math.round((downloadAllBytes / totalDropBytes) * 100)) : undefined}
+                className="sr-only" />
+            )}
             <div className="flex items-center gap-3 mb-4">
               <button
                 onClick={downloadAll}
@@ -388,7 +426,7 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
                   ? downloadAllFilesDone !== null
                     ? 'Downloading files…'
                     : 'Preparing ZIP…'
-                  : 'DOWNLOAD ALL'}
+                  : downloadAllStatus === 'ERROR' ? 'Retry download all' : 'Download all'}
               </button>
               {downloadAllStatus === 'DOWNLOADING' &&
                 downloadAllFilesDone !== null && (
@@ -407,12 +445,18 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
                   Large drop — files download individually
                 </span>
               )}
-              {downloadAllStatus === 'ERROR' && (
-                <span className="text-xs text-red-300">
-                  {downloadAllError || 'Bulk download failed'}
-                </span>
-              )}
             </div>
+            {downloadAllStatus === 'ERROR' && (
+              <div role="alert" className="mb-4 rounded-xl border border-red-400/30 bg-red-950/30 p-4 text-sm text-red-200">
+                <p>{downloadAllError || 'Download failed. Please try again.'}</p>
+                {failedFiles.length > 0 && (
+                  <ul className="mt-2 max-h-32 list-inside list-disc overflow-y-auto break-words">
+                    {failedFiles.map((name, index) => <li key={`${index}:${name}`}>{name}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+
 
             <div className="space-y-3 max-h-[45vh] overflow-y-auto pr-1">
               {share.files.map(file => (
@@ -428,28 +472,27 @@ const CloudDownloadView: React.FC<CloudDownloadViewProps> = ({ shareId }) => {
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-white truncate">
+                    <p title={file.name} className="break-words text-sm font-bold text-white">
                       {file.name}
                     </p>
-                    <p className="text-xs text-gray-500 font-mono truncate">
+                    <p title={file.path} className="break-words text-xs text-gray-400 font-mono">
                       {file.path} • {formatBytes(file.size)}
                     </p>
                   </div>
-                  <a
-                    href={getCloudDownloadUrl(
-                      share.shareId,
-                      file.id,
-                      downloadSessionToken || share.downloadSessionToken
-                    )}
-                    className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-all ${
-                      share.completed
-                        ? 'bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300'
-                        : 'bg-gray-800/40 border-gray-700/50 text-gray-600 pointer-events-none'
-                    }`}
-                    aria-label={`Download ${file.name}`}
-                  >
-                    <Download className="w-5 h-5" />
-                  </a>
+                  {share.completed ? (
+                    <a
+                      href={getCloudDownloadUrl(share.shareId, file.id, downloadSessionToken || share.downloadSessionToken)}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 transition-colors hover:bg-emerald-500/20"
+                      aria-label={`Download ${file.name}`}
+                    >
+                      <Download className="h-5 w-5" />
+                    </a>
+                  ) : (
+                    <button type="button" disabled aria-label={`Download ${file.name} — waiting for sender`}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-gray-700/50 bg-gray-800/40 text-gray-400">
+                      <Download className="h-5 w-5" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

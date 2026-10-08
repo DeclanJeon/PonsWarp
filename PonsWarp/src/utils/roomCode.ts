@@ -1,17 +1,16 @@
-const RECEIVE_ROUTE_PATTERN = /\/receive\/([a-z0-9]{6})(?:[^a-z0-9]|$)/i;
+const RECEIVE_ROUTE_PATTERN = /^\/receive\/([a-z0-9]{6})$/i;
 
 export const normalizeRoomCodeInput = (input: string): string => {
   const trimmed = input.trim();
-  const receiveRouteMatch = trimmed.match(RECEIVE_ROUTE_PATTERN);
-
-  if (receiveRouteMatch) {
-    return receiveRouteMatch[1].toUpperCase();
+  if (/^[a-z0-9]{6}$/i.test(trimmed)) return trimmed.toUpperCase();
+  if (!/^(https?:\/\/|\/receive\/)/i.test(trimmed)) return '';
+  try {
+    const url = new URL(trimmed, 'https://warp.ponslink.com');
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+    return url.pathname.match(RECEIVE_ROUTE_PATTERN)?.[1].toUpperCase() || '';
+  } catch {
+    return '';
   }
-
-  return trimmed
-    .replace(/[^a-z0-9]/gi, '')
-    .toUpperCase()
-    .slice(0, 6);
 };
 
 export const isCompleteRoomCode = (input: string): boolean =>

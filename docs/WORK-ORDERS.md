@@ -236,3 +236,86 @@ WO-01 → WO-02 → WO-03 → WO-04 → WO-05 → WO-06 → WO-07 → WO-08 → 
 ---
 
 *구현은 본 지시서 순서대로 진행하며, 각 WO는 독립 커밋으로 기록한다.*
+
+---
+
+## UI/UX QA 보완 작업지시서 — 2026-10-08
+
+**목표:** 클라이언트 UI/UX QA의 18개 항목을 P1 → P2 → P3 순서로 보완한다.
+**실행:** 현재 작업 디렉터리에서 순차 실행한다. 기존 사용자 변경은 유지하며, 별도 배포나 자동 커밋은 하지 않는다.
+**구조:** React/Vite + Zustand + Tailwind의 기존 컴포넌트와 API 서비스를 수정한다. Cloud Drop은 원본 파일 업로드이므로 종단간 암호화를 새로 구현하지 않고 보안 안내를 실제 동작에 맞춘다.
+**명세:** 이 세션의 전체 UI/UX QA 표 QA-01~QA-18. 아래 표가 구현 범위와 수락 기준이다.
+
+### 공통 제약
+
+- 전송 프로토콜·파일 바이트·시그널링 서버·WASM 코어를 변경하지 않는다.
+- 잘못된 입력을 임의 코드로 잘라서 받거나 API 오류를 문구로 판별하지 않는다.
+- 실패 파일을 숨긴 부분 ZIP을 전체 다운로드 완료로 취급하지 않는다.
+- 재시도는 사용자의 명시적 액션으로 실행하며 불필요한 자동 polling은 추가하지 않는다.
+- 신규 라이브러리 없이 기존 패턴을 사용한다. 유효한 회귀 테스트는 유지하고 구현 문자열만 고정한 테스트는 제거한다.
+- 각 단계는 순차 구현·관찰한다. 전체 type-check/test/build는 통합 완료 시 실행한다.
+
+### 순차 작업 및 수락 기준
+
+| 순서 | 우선순위 | 작업 / 대상 | 수락 기준 | 구현 및 관찰 결과 |
+|---|---|---|---|---|
+| QA-01 | P1 | ReceiverView ROOM_FULL | 점유 이유, 재시도, 코드 수정이 보이며 빈 화면이 없다. | 완료. 점유 상태 화면과 복구 버튼, 코드 수정 화면 전환 확인. |
+| QA-02 | P1 | cloudShareService / cloudShareErrors / CloudDownloadView | HTTP 401/403과 password-required/invalid-password 오류를 구조화한다. 보호된 링크는 비밀번호 폼, 틀린 비밀번호는 폼 내 오류로 표시한다. | 완료. 실제 HTTP status를 보존하는 오류 타입 적용. 403 보호 링크·틀린 비밀번호·정상 해제 브라우저 검증. |
+| QA-03 | P1 | App / CloudDownloadView 레이아웃 | 320×568, 390×844, 844×390, 768×1024, 1366×768에서 파일 목록·버튼에 스크롤로 접근할 수 있고 가로 넘침이 없다. | 완료. 다섯 viewport 모두 가로 넘침 없음. 마지막 파일의 44×44 다운로드 버튼까지 스크롤 및 클릭 가능 영역 확인. |
+| QA-04 | P1 | CloudDownloadView ZIP 실패 처리 | 일부 파일 실패 시 불완전 ZIP을 저장하지 않고 실패 파일 안내·재시도 제공. 전체 성공 시에만 ZIP 다운로드. | 완료. 2개 중 1개 실패 시 ZIP 저장 0회와 실패 이름·재시도 확인. 전체 성공 시 ZIP 저장 1회, a.txt/b.txt 아카이브 멤버 확인. |
+| QA-05 | P1 | App 보안 배지 | P2P에만 E2EE 표시. Cloud는 HTTPS 보장으로 표시하며 같은 안내를 작은 화면에서도 제공한다. | 완료. 모드별 보안 안내 분리. Cloud가 종단간 암호화가 아님을 명시. |
+| QA-06 | P1 | ReceiverView 새 세션 | 완료 후 다음 수신·코드 수정·새 참여 시 진행률/속도/용량/대기 플래그 초기화. | 완료. 완료 후 다음 수신의 진행률·속도·용량 0, 빈 입력과 유효성 상태 초기화 확인. |
+| QA-07 | P1 | ReceiverView 응답 지연 | soft timeout을 수신 화면에서 표시. 늦은 데이터는 계속 받되 명확한 세션 재연결과 코드 수정 제공. | 완료. 지연 안내 중 RECEIVING과 복구 버튼 유지. 늦은 remote-started 이벤트로 안내가 해제됨을 확인. |
+| QA-08 | P2 | ReceiverView 입력 폼 | 연결된 label, 설명, Enter 제출, 오류와 aria-invalid 연결 제공. | 완료. 잘못된 링크의 Enter 제출 시 입력 초점·aria-invalid 유지, 경로 이동 없음. |
+| QA-09 | P2 | roomCode / cloudShareCode | Room Code는 정확한 6자리만 허용하며 긴 입력을 잘라 받지 않는다. Drop ID는 기존 8~80자리와 지원하는 표시 형식을 유지한다. 지원하는 URL만 허용하며 임의 문자열·잘못된 경로를 거부한다. 모든 호출부와 계약 테스트 갱신. | 완료. 잘못된 프로토콜·경로·임의 문자열·긴 Room Code 거부와 Drop 표시 코드 roundtrip 회귀 검사. |
+| QA-10 | P2 | SenderView 공유 / 공유 복사 UI | 링크와 코드를 별도 버튼으로 복사, Tab/Enter 접근, 성공 안내, 권한 실패 시 수동 선택 지원. CloudSender와 같은 동작 사용. | 완료. 공통 ShareLinkPanel 적용. 브라우저 clipboard의 링크·룸코드 값과 권한 거부 시 전체 링크 선택·안내 확인. |
+| QA-11 | P2 | ReceiverView / CloudDownloadView 오류 복구 | 일시 오류에 재조회, 미완료 공유에 상태 새로고침, 방 오류에 코드 수정 제공. optional storage 실패는 공개 다운로드를 차단하지 않는다. | 완료. 503 재조회 성공, 410 새 링크 요청 안내, 잘못된 JSON 응답의 재조회 성공 확인. 저장소 거부 시 메모리 토큰으로 보호 링크 해제·상태 갱신 가능. |
+| QA-12 | P2 | CloudDownloadView 미완료 파일 링크 | 미완료 파일은 실행 가능한 href와 Tab 진입이 없고 disabled 상태가 전달된다. | 완료. 미완료 파일은 disabled 버튼이며 다운로드 링크 없음. 명시적 새로고침 후 완료 링크 활성화 확인. |
+| QA-13 | P2 | ToastContainer / toastStore | 안정적 live region, 닫기 label, 오류의 수동 닫기, hover/focus 중 자동 제거 정지. | 완료. live log·닫기 label 확인. hover/focus 동안 유지, 해제 후 만료, 오류의 지속 표시 확인. |
+| QA-14 | P2 | 진행률 / 단계 안내 | progressbar 이름·수치·최댓값, 단계별 live 안내, 완료/오류/점유 화면 초점 처리. 차단 CONNECTING overlay 대신 비차단 상태 안내. | 완료. 유한한 0~100 진행률과 단계 안내 적용. 보호 링크 해제 후 heading 초점, 상태 화면 및 비차단 연결 안내 확인. |
+| QA-15 | P2 | App / SpaceField / CSS | reduced-motion 설정에서 장식 animation·canvas 루프 중단, 설정 변경에도 적용. | 완료. 동일 페이지에서 설정 변경 시 canvas가 즉시 정지하고 해제 시 다시 움직임을 픽셀 비교로 확인. 새로고침 불필요. |
+| QA-16 | P2 | usePreventNavigation | 활성 세션당 guard entry 하나. 보호 상태 전환 시 history 증가 없음. Back은 확인 후 승인된 이탈, 거부 시 원래 URL 복원. 완료 후 guard 제거. | 완료. 보호 단계 전환 중 history 길이 일정. Back 거부/승인과 guard 정리 확인. 딥링크 이탈 시 원래 수신 화면이 다시 열리던 popstate 순서 오류 수정·회귀 검증. |
+| QA-17 | P3 | 사용자 액션 문구 | Start transfer / Receive files / Receive another / Cancel transfer / Back to options 등 행동 중심으로 통일. | 완료. 실제 액션을 Start sharing, Receive files, Receive more files, Cancel transfer/upload, Back to options로 정리. |
+| QA-18 | P3 | 보조 정보 타이포그래피 | 의미 있는 보조 정보는 최소 12px, 본문/입력 14~16px, 어두운 패널에서 읽을 수 있는 대비. 긴 이름은 전체 확인 방법 제공. | 완료. 시스템 본문 폰트·읽기 쉬운 보조 색상·긴 이름 줄바꿈/title 적용. 다섯 viewport의 의미 있는 최소 글자 크기 12px 확인. |
+
+### 검증 초점
+
+1. 보호 링크·잘못된 비밀번호: 서비스 오류 코드 회귀 검사 및 실제 브라우저 API fixture.
+2. ZIP 두 파일 중 하나 실패: ZIP이 내려오지 않고 실패 이름과 재시도가 표시됨.
+3. ROOM_FULL·완료 후 다음 세션·45초 지연: 상태 전환과 복구 액션 관찰.
+4. invalid URL/긴 코드·복사 권한 거부·저장소 접근 거부: 예외가 전체 UI를 종료하지 않음.
+5. 가로 폰·큰 폰트·키보드·reduced-motion·Back 거부/승인: 화면 접근성과 세션 보존 확인.
+
+### 실행 상태
+
+- [x] QA-01~QA-07 P1 구현 및 브라우저 관찰
+- [x] QA-08~QA-16 P2 구현 및 브라우저 관찰
+- [x] QA-17~QA-18 P3 구현 및 브라우저 관찰
+- [x] `pnpm --dir PonsWarp type-check`
+- [x] `pnpm --dir PonsWarp test`
+- [x] `pnpm --dir PonsWarp build`
+- [x] 최종 실제 브라우저 smoke 및 환경 제한 기록
+
+
+### 최종 검증 결과
+
+| 검사 | 관찰 결과 |
+|---|---|
+| TypeScript | `type-check` 통과 |
+| Vitest | 32개 파일, 183개 테스트 통과 |
+| Production build | 성공. 기존 WASM의 static/dynamic import 혼용에 따른 chunk 분리 경고는 남아 있음 |
+| Playwright | desktop/mobile Chrome 프로젝트에서 8개 시나리오, 총 16개 통과 |
+| 키보드 복사 추가 확인 | 링크 입력 → Tab → Copy link → Enter → Tab → Copy room code → Enter로 실제 clipboard 값 확인. 수정된 두 프로젝트 시나리오 재실행 모두 통과 |
+| 반응형 실제 화면 | 명세의 다섯 viewport에서 가로 넘침 없음, 마지막 다운로드 버튼까지 스크롤·hit-test 확인. 폰 세로/가로 및 데스크톱 screenshot 시각 확인 |
+| 큰 글자 | 320×568, 844×390, 1366×768에서 루트 글꼴 200%(32px) 적용. 가로 넘침 없음, 마지막 다운로드 버튼 88×88 및 클릭 가능 영역 확인 |
+| 오류·상태 smoke | ROOM_FULL, 다음 수신 초기화, 지연 안내와 늦은 응답, 503/410/잘못된 JSON 복구, 저장소 거부, 부분 ZIP 차단 및 정상 ZIP 멤버 확인 |
+| 모션·history·toast | 같은 페이지의 모션 감소 켜기/끄기 픽셀 비교, 세션 단계별 history 길이 유지와 이탈 확인, toast hover/focus 정지·오류 지속 표시 확인 |
+
+### 검증 범위와 제한
+
+- 실제 클라이언트를 로컬 개발 서버 및 빌드 preview에서 실행했다. API 응답·시그널링은 fixture/mock으로 제어한 시나리오이며 실제 운영 서버의 가용성이나 TLS를 검증한 결과는 아니다.
+- 수신 지연의 45초 soft timeout은 브라우저 smoke에서 500ms로 가속하고 수신 서비스/이벤트를 제어했다. 실제 네트워크에서 45초 지연이나 다중 디바이스 전송을 수행한 것은 아니다.
+- 모바일 검증은 Chromium viewport 에뮬레이션이다. 물리적 iOS/Android 브라우저의 주소 표시줄·키보드·OS 파일 저장과 스크린리더 실제 낭독은 검증하지 않았다.
+- 시그널링 서버와 WASM 코어 소스·전송 프로토콜 변경 없음. 신규 라이브러리 추가, 자동 커밋, 배포 없음.
+- 변경 기록은 루트 `CHANGELOG.md`의 Unreleased에 반영했다. 클라이언트 하위 `CHANGELOG.md`의 기존 릴리스 이력은 변경하지 않았다.
+

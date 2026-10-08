@@ -16,7 +16,8 @@ import ReceiverView from './components/ReceiverView';
 import CloudSenderView from './components/CloudSenderView';
 import CloudDownloadView from './components/CloudDownloadView';
 import { AppMode } from './types/types';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
+import { useReducedMotionPreference } from './hooks/useReducedMotionPreference';
 import { signalingFactory } from './services/signaling-factory';
 import { MagneticButton } from './components/ui/MagneticButton';
 import { TransferProgressBar } from './components/ui/TransferProgressBar';
@@ -35,9 +36,15 @@ const SpaceField = lazy(() => import('./components/SpaceField'));
 
 const App: React.FC = () => {
   // 전역 스토어 사용 (SpaceField와 동기화)
-  const { mode, setMode, setRoomId, status, setStatus } = useTransferStore();
+  const { mode, setMode, setRoomId, status } = useTransferStore();
   const [cloudShareId, setCloudShareId] = useState<string | null>(null);
-  usePreventNavigation();
+  const reduceMotion = useReducedMotionPreference();
+  const isCloudMode = mode === AppMode.CLOUD_SENDER || mode === AppMode.CLOUD_RECEIVER;
+  const isLiveMode = mode === AppMode.SENDER || mode === AppMode.RECEIVER;
+  const securityLabel = isCloudMode
+    ? 'HTTPS transport'
+    : isLiveMode ? 'End-to-end encrypted' : 'Secure file transfer';
+  const isRestoringHistoryRef = usePreventNavigation();
 
   // URL 파라미터 체크 (앱 로드 시)
   useEffect(() => {
@@ -61,6 +68,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const syncRoute = () => {
+      if (isRestoringHistoryRef.current) return;
       const path = window.location.pathname;
       const receiveMatch = path.match(/^\/receive\/([A-Z0-9]{6})$/i);
       const cloudMatch = path.match(/^\/cloud\/([A-Za-z0-9-]{8,80})$/);
@@ -112,9 +120,16 @@ const App: React.FC = () => {
       window.removeEventListener('popstate', syncRoute);
       window.removeEventListener('unhandledrejection', handleRejection);
     };
-  }, [setRoomId, setMode]);
+  }, [setRoomId, setMode, isRestoringHistoryRef]);
 
   const startApp = () => setMode(AppMode.SELECTION);
+  const goBackToOptions = () => {
+    leaveTransferSessionIfConfirmed(() => {
+      setCloudShareId(null);
+      setMode(AppMode.SELECTION);
+      window.history.replaceState(window.history.state, '', '/');
+    });
+  };
 
   // Signaling 연결 관리
   useEffect(() => {
@@ -140,6 +155,7 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
+      <MotionConfig reducedMotion={reduceMotion ? 'always' : 'never'}>
       {/* [반응형 레이아웃 전략]
         - 모바일: p-4, h-screen overflow-hidden
         - 데스크탑: p-8, 레이아웃 중앙 정렬
@@ -157,7 +173,7 @@ const App: React.FC = () => {
         {/* 2. 오버레이 계층 (Toast, Status, Flash) */}
         <StatusOverlay />
         <ToastContainer />
-        {status === 'DONE' && (
+        {status === 'DONE' && reduceMotion === false && (
           <motion.div
             className="fixed inset-0 bg-cyan-400 pointer-events-none z-40 mix-blend-overlay"
             initial={{ opacity: 0 }}
@@ -176,7 +192,7 @@ const App: React.FC = () => {
             leaveTransferSessionIfConfirmed(() => {
               setCloudShareId(null);
               setMode(AppMode.INTRO);
-              window.history.pushState({}, '', '/');
+              window.history.replaceState(window.history.state, '', '/');
             });
           }}
           onKeyDown={event => {
@@ -199,15 +215,35 @@ const App: React.FC = () => {
             className="flex min-w-0 items-center gap-2 md:gap-3"
             onClick={event => event.stopPropagation()}
           >
-            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-mono text-gray-300 backdrop-blur-md sm:flex">
-              <ShieldCheck size={15} className="text-emerald-400" />
-              <span>End-to-End Encrypted</span>
+            <div
+              title={isCloudMode ? 'Cloud files are uploaded over HTTPS. Cloud Drop is not end-to-end encrypted.' : securityLabel}
+              className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2 py-2 text-xs text-gray-300 backdrop-blur-md sm:gap-2 sm:px-4 sm:text-sm"
+            >
+              <ShieldCheck size={15} className="shrink-0 text-emerald-400" />
+              <span className="sm:hidden">{isCloudMode ? 'HTTPS' : isLiveMode ? 'E2EE' : 'Secure'}</span>
+              <span className="hidden sm:inline">{securityLabel}</span>
             </div>
           </div>
         </header>
 
         {/* 4. Main Content Area */}
         <main className="app-main relative z-10 flex h-full w-full flex-col items-center overflow-y-auto">
+          <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+            {mode !== AppMode.CLOUD_RECEIVER && ({
+              SCANNING: 'Reading selected files.',
+              PREPARING: 'Preparing the transfer.',
+              WAITING: 'Waiting for the other device.',
+              CONNECTING: 'Connecting to the other device.',
+              RECEIVING: 'Receiving files.',
+              TRANSFERRING: 'Sending files.',
+              UPLOADING: 'Uploading files.',
+              QUEUED: 'Waiting in the transfer queue.',
+              REMOTE_PROCESSING: 'Files sent. Receiver is saving them.',
+              ROOM_FULL: 'This room is occupied.',
+              DONE: 'Transfer complete.',
+              ERROR: 'Transfer failed. Review recovery options.',
+            } as Record<string, string>)[status]}
+          </p>
           <AnimatePresence mode="wait">
             {/* --- INTRO SCREEN --- */}
             {mode === AppMode.INTRO && (
@@ -249,7 +285,7 @@ const App: React.FC = () => {
                     className="relative group bg-white text-black border border-white/50 px-9 py-4 md:px-12 md:py-5 rounded-full font-bold text-base md:text-lg tracking-[0.16em] hover:bg-cyan-500 hover:text-white hover:border-cyan-400 transition-all shadow-[0_0_30px_rgba(255,255,255,0.3)] overflow-hidden"
                   >
                     <span className="relative z-10 flex items-center gap-3">
-                      INITIALIZE LINK
+                      Start sharing
                       <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                     </span>
                   </MagneticButton>
@@ -378,18 +414,10 @@ const App: React.FC = () => {
                 )}
 
                 <button
-                  onClick={() => {
-                    leaveTransferSessionIfConfirmed(() => {
-                      // Reset store status so SenderView unmounts → its
-                      // cleanup runs swarmManager.cleanup() which broadcasts
-                      // TRANSFER_ABORTED to the receiver.
-                      setStatus('IDLE');
-                      setMode(AppMode.SELECTION);
-                    });
-                  }}
+                  onClick={goBackToOptions}
                   className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
-                  Abort Mission
+                  {isTransferSessionActive(mode, status) ? 'Cancel transfer' : 'Back to options'}
                 </button>
               </motion.div>
             )}
@@ -405,14 +433,10 @@ const App: React.FC = () => {
                 <CloudSenderView />
 
                 <button
-                  onClick={() => {
-                    leaveTransferSessionIfConfirmed(() => {
-                      setMode(AppMode.SELECTION);
-                    });
-                  }}
+                  onClick={goBackToOptions}
                   className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
-                  Close Drop
+                  {isTransferSessionActive(mode, status) ? 'Cancel upload' : 'Back to options'}
                 </button>
               </motion.div>
             )}
@@ -423,21 +447,15 @@ const App: React.FC = () => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex h-full w-full flex-col items-center justify-center pb-4 pt-2 md:pb-6 md:pt-6"
+                className="flex min-h-full w-full flex-col items-center justify-start pb-4 pt-2 sm:pt-4 md:justify-center md:pb-6 md:pt-6"
               >
                 <CloudDownloadView shareId={cloudShareId} />
 
                 <button
-                  onClick={() => {
-                    leaveTransferSessionIfConfirmed(() => {
-                      setCloudShareId(null);
-                      setMode(AppMode.SELECTION);
-                      window.history.pushState({}, '', '/');
-                    });
-                  }}
+                  onClick={goBackToOptions}
                   className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
-                  Close Drop
+                  Back to options
                 </button>
               </motion.div>
             )}
@@ -459,21 +477,17 @@ const App: React.FC = () => {
                 />
 
                 <button
-                  onClick={() => {
-                    leaveTransferSessionIfConfirmed(() => {
-                      setMode(AppMode.SELECTION);
-                      setRoomId(null);
-                    });
-                  }}
+                  onClick={goBackToOptions}
                   className="app-bottom-action rounded-full border border-white/10 bg-black/55 px-5 py-2.5 text-[11px] uppercase tracking-[0.16em] text-gray-200 shadow-lg backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 hover:text-white sm:text-xs sm:tracking-[0.18em]"
                 >
-                  Close Gate
+                  {isTransferSessionActive(mode, status) ? 'Cancel transfer' : 'Back to options'}
                 </button>
               </motion.div>
             )}
           </AnimatePresence>
         </main>
       </div>
+      </MotionConfig>
     </ErrorBoundary>
   );
 };

@@ -23,6 +23,7 @@ import { TransferManifest } from '../types/types';
 import { getErrorMessage, getErrorName } from '../utils/errors';
 import { isCompleteRoomCode, normalizeRoomCodeInput } from '../utils/roomCode';
 import { normalizeCloudShareCodeInput } from '../utils/cloudShareCode';
+import { focusStageHeading } from '../utils/accessibility';
 import {
   estimateRemainingSeconds,
   formatRemainingTime,
@@ -33,6 +34,16 @@ import { formatSlowPathBanner } from '../services/hybridBulkTransport';
 interface ReceiverViewProps {
   onOpenCloudShare?: (shareId: string) => void;
 }
+
+const initialReceiverProgress = {
+  progress: 0,
+  speed: 0,
+  bytesTransferred: 0,
+  totalBytes: 0,
+  pathKind: 'unknown',
+  protocol: null as string | null,
+  rttMs: null as number | null,
+};
 
 type ReceiverProgressPayload = {
   progress?: number;
@@ -63,17 +74,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
   const [receiveInput, setReceiveInput] = useState(roomId || '');
   const [errorMsg, setErrorMsg] = useState('');
+  const [inputTouched, setInputTouched] = useState(false);
   const [senderGone, setSenderGone] = useState(false);
   const [actualSize, setActualSize] = useState<number>(0);
-  const [progressData, setProgressData] = useState({
-    progress: 0,
-    speed: 0,
-    bytesTransferred: 0,
-    totalBytes: 0,
-    pathKind: 'unknown' as string,
-    protocol: null as string | null,
-    rttMs: null as number | null,
-  });
+  const [progressData, setProgressData] = useState(initialReceiverProgress);
 
   // 🚨 [추가] 송신자 응답 대기 상태 변수
   const [isWaitingForSender, setIsWaitingForSender] = useState(false);
@@ -102,6 +106,17 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
   // 🚀 [성능 최적화] UI 렌더링 스로틀링 (초당 10회 제한)
   const lastProgressUpdateRef = useRef<number>(0);
   const UI_UPDATE_INTERVAL = 100; // 100ms마다 한 번만 UI 업데이트
+
+  const resetReceiverProgress = useCallback((totalBytes = 0) => {
+    updateProgress({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes });
+    setProgressData({ ...initialReceiverProgress, totalBytes });
+    lastProgressUpdateRef.current = 0;
+    setActualSize(0);
+    setSenderGone(false);
+    setQueueMessage('');
+    setIsWaitingForSender(false);
+    isWaitingForSenderRef.current = false;
+  }, [updateProgress]);
 
   // 🚀 [핵심] 이벤트 핸들러들을 useCallback으로 메모이제이션하여 안정성 확보
   const handleMetadata = useCallback(
@@ -152,6 +167,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       connectionTimeoutRef.current = null;
     }
     setIsWaitingForSender(false);
+    setErrorMsg('');
   }, []);
 
   const handleProgress = useCallback(
@@ -268,6 +284,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
 
       setReceiveInput(normalizedRoomId);
 
+      resetReceiverProgress();
       setStatus('CONNECTING');
       setErrorMsg('');
 
@@ -314,8 +331,33 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
         setStatus('ERROR');
       }
     },
-    [setRoomId, setStatus]
+    [setRoomId, setStatus, resetReceiverProgress]
   );
+
+  const returnToCodeEntry = () => {
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+    transferService.cleanup();
+    isInitializedRef.current = false;
+    setRoomId(null);
+    setManifest(null);
+    setErrorMsg('');
+    setInputTouched(false);
+    resetReceiverProgress();
+    setStatus('IDLE');
+  };
+
+  const reconnectReceiver = () => {
+    if (!roomId) {
+      returnToCodeEntry();
+      return;
+    }
+    transferService.cleanup();
+    setManifest(null);
+    void handleJoin(roomId);
+  };
 
   const handleSubmitReceiveInput = useCallback(() => {
     const cloudShareCode = normalizeCloudShareCodeInput(receiveInput);
@@ -325,7 +367,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     }
 
     const normalizedRoomId = normalizeRoomCodeInput(receiveInput);
-    if (!isCompleteRoomCode(normalizedRoomId)) return;
+    if (!isCompleteRoomCode(normalizedRoomId)) {
+      setInputTouched(true);
+      return;
+    }
 
     // 같은 코드 재제출 시 roomId가 변하지 않아 effect가 재실행되지 않으므로
     // (ERROR 후 재시도 등) 가드가 열려 있으면 직접 재참여한다.
@@ -425,7 +470,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
   const handlePeerDisconnected = useCallback(() => {
     const s = statusRef.current;
     if (s === 'DONE') {
-      // 전송은 끝났지만 방은 죽었다 — Process Next는 재사용 불가
+      // The completed room is no longer reusable; explain the new-code action.
       setSenderGone(true);
       return;
     }
@@ -544,6 +589,8 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
    */
   const startDirectDownload = useCallback(async () => {
     if (!manifest) return;
+    resetReceiverProgress(manifest.totalSize);
+    setErrorMsg('');
 
     try {
       // 다운로드 시작 시 기존 타임아웃 즉시 해제
@@ -583,7 +630,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       await transferService.startReceiving(manifest);
       debugLog('[ReceiverView] ✅ Receiver initialization complete');
 
-      // Wait for sender bulk/control after MATERIALIZE. Do NOT cleanup the
+      // Wait for sender bulk/control after Start download. Do NOT cleanup the
       // peer on a short timer — that tears down a healthy WebRTC session
       // while the sender is still pumping into a half-open channel.
       if (connectionTimeoutRef.current) {
@@ -598,7 +645,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
             '[ReceiverView] Download start timeout - no response from sender'
           );
           setErrorMsg(
-            'Sender did not respond yet. Keep this page open or retry MATERIALIZE.'
+            'The sender has not responded yet. Keep this page open to wait, or reconnect to restart the connection.'
           );
           setIsWaitingForSender(false);
           // Soft fail only: keep peer alive so late TRANSFER_STARTED/bulk can land.
@@ -623,11 +670,10 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
       setStatus('ERROR');
       setIsWaitingForSender(false);
     }
-  }, [manifest, setStatus]);
+  }, [manifest, setStatus, resetReceiverProgress]);
 
   // Progress Calculation
-  const safeProgress =
-    isNaN(progress.progress) || progress.progress < 0 ? 0 : progress.progress;
+  const safeProgress = Number.isFinite(progress.progress) ? Math.min(100, Math.max(0, progress.progress)) : 0;
   const strokeDashoffset = 283 - (283 * safeProgress) / 100; // 2 * PI * 45 ≈ 283
   const estimatedSecondsRemaining = estimateRemainingSeconds(
     progressData.bytesTransferred,
@@ -649,7 +695,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
     'relative w-full max-w-md overflow-hidden rounded-[1.5rem] border border-white/10 bg-black/40 p-2 shadow-2xl backdrop-blur-2xl sm:mx-0 sm:rounded-[2rem] sm:p-3';
 
   return (
-    <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-1 sm:px-3 md:px-0">
+    <div className="relative z-10 flex min-h-full w-full flex-col items-center justify-start px-1 py-2 sm:px-3 md:justify-center md:px-0">
       <AnimatePresence mode="wait">
         {/* --- STATE: IDLE (Enter Code) --- */}
         {status === 'IDLE' && (
@@ -660,36 +706,91 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
             exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
             className={glassPanelClass}
           >
-            <div className="relative z-10 p-4 text-center sm:p-6 md:p-8">
+            <form
+              className="relative z-10 p-4 text-center sm:p-6 md:p-8"
+              onSubmit={event => { event.preventDefault(); handleSubmitReceiveInput(); }}
+            >
               <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-3xl border border-white/10 bg-gradient-to-br from-cyan-500/20 to-purple-500/20 shadow-[0_0_30px_rgba(168,85,247,0.2)] sm:mb-6 sm:h-16 sm:w-16 md:h-20 md:w-20">
                 <Scan className="w-8 h-8 md:w-10 md:h-10 text-white drop-shadow-lg" />
               </div>
 
               <h2 className="text-2xl md:text-3xl font-bold mb-6 brand-font tracking-widest text-white">
-                ENTER <span className="text-cyan-400">WARP KEY</span>
+                Receive files
               </h2>
 
               <div className="relative group mb-6">
+                <label htmlFor="receive-code" className="mb-2 block text-left text-sm font-bold text-gray-200">
+                  Room code, drop code, or shared link
+                </label>
                 <input
+                  id="receive-code"
+                  name="receive-code"
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  aria-describedby="receive-code-help receive-code-error"
+                  aria-invalid={inputTouched && !canSubmitReceiveInput}
+                  onBlur={() => setInputTouched(true)}
                   value={receiveInput}
                   onChange={e => setReceiveInput(e.target.value)}
-                  placeholder="CODE OR LINK"
+                  placeholder="Code or shared link"
                   maxLength={160}
-                  className="w-full rounded-2xl border border-gray-600 bg-black/30 p-4 text-center font-mono text-lg uppercase tracking-[0.18em] text-white outline-none transition-all placeholder-gray-600 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 sm:p-5 sm:text-xl sm:tracking-[0.25em] md:p-6 md:text-3xl md:tracking-[0.5em]"
+                  className="w-full rounded-xl border border-gray-600 bg-black/30 p-4 font-mono text-base text-white outline-none transition-colors placeholder:text-gray-400 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30 sm:text-lg"
                 />
                 <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-cyan-500/50 rounded-tl-lg -translate-x-2 -translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
                 <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-purple-500/50 rounded-br-lg translate-x-2 translate-y-2 transition-all group-focus-within:translate-x-0 group-focus-within:translate-y-0 opacity-0 group-focus-within:opacity-100" />
               </div>
+              <p id="receive-code-help" className="mb-3 text-left text-sm leading-6 text-gray-300">
+                Enter the sender's 6-character room code, a drop code, or paste their receive/download link.
+              </p>
+              <p id="receive-code-error" role="status" className="mb-3 text-left text-sm text-red-200">
+                {inputTouched && !canSubmitReceiveInput ? 'Check the code or paste a complete shared link.' : ''}
+              </p>
 
               <button
-                onClick={handleSubmitReceiveInput}
-                disabled={!canSubmitReceiveInput}
+                type="submit"
                 className="w-full bg-white text-black py-4 rounded-xl font-bold text-base md:text-lg tracking-[0.2em] hover:bg-cyan-300 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
               >
-                ESTABLISH LINK
+                Open code or link
+              </button>
+            </form>
+          </motion.div>
+        )}
+
+        {status === 'ROOM_FULL' && (
+          <motion.section
+            key="room-full"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className={`${glassPanelClass} p-6 text-center`}
+            aria-labelledby="room-full-heading"
+          >
+            <h2 ref={focusStageHeading} tabIndex={-1} id="room-full-heading" className="text-2xl font-bold text-white">
+              Room is occupied
+            </h2>
+            <p className="my-4 text-sm leading-6 text-gray-300">
+              Another receiver is using this room. Wait for their transfer to
+              finish, then try again, or enter a different code.
+            </p>
+            <div className="flex flex-col gap-3">
+              {roomId && (
+                <button
+                  type="button"
+                  onClick={() => handleJoin(roomId)}
+                  className="min-h-11 rounded-xl bg-white px-4 py-3 font-bold text-black"
+                >
+                  Retry connection
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={returnToCodeEntry}
+                className="min-h-11 rounded-xl border border-white/20 px-4 py-3 text-white"
+              >
+                Edit code
               </button>
             </div>
-          </motion.div>
+          </motion.section>
         )}
 
         {/* --- STATE: CONNECTING --- */}
@@ -755,8 +856,8 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                 <Archive className="h-8 w-8 text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)] sm:h-10 sm:w-10" />
               </div>
 
-              <h2 className="mb-2 brand-font text-xl font-bold tracking-wider text-white sm:text-2xl md:text-3xl">
-                INCOMING TRANSMISSION
+              <h2 ref={focusStageHeading} tabIndex={-1} className="mb-2 brand-font text-xl font-bold tracking-wider text-white sm:text-2xl md:text-3xl">
+                Incoming files
               </h2>
 
               {/* File Info Box */}
@@ -770,7 +871,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                     )}
                   </div>
                   <div className="min-w-0">
-                    <p className="font-bold text-lg text-white truncate break-all">
+                    <p title={manifest?.rootName} className="break-words font-bold text-lg text-white">
                       {manifest?.rootName}
                     </p>
                     <p className="text-sm text-gray-400">
@@ -814,7 +915,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
                   size={20}
                   className="group-hover:scale-110 transition-transform"
                 />
-                MATERIALIZE
+                Start download
               </button>
             </div>
           </motion.div>
@@ -824,7 +925,7 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
         {status === 'RECEIVING' && (
           <div className="relative w-full max-w-2xl px-1 text-center sm:px-0">
             {/* 중앙 HUD 스타일 프로그레스 */}
-            <div className="relative mx-auto mb-5 h-48 w-48 sm:mb-8 sm:h-64 sm:w-64">
+            <div role="progressbar" aria-label="Receiving files" aria-valuemin={0} aria-valuemax={100} aria-valuenow={safeProgress} className="relative mx-auto mb-5 h-48 w-48 sm:mb-8 sm:h-64 sm:w-64">
               {/* 배경 링 */}
               <svg
                 className="w-full h-full rotate-[-90deg]"
@@ -885,6 +986,20 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
               </div>
             </div>
 
+            {errorMsg && (
+              <div role="alert" className="mb-5 rounded-xl border border-amber-400/30 bg-amber-950/30 p-4 text-left text-sm text-amber-100">
+                <p>{errorMsg}</p>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <button type="button" onClick={reconnectReceiver} className="min-h-11 rounded-lg border border-amber-300/40 px-4 py-2">
+                    Reconnect
+                  </button>
+                  <button type="button" onClick={returnToCodeEntry} className="min-h-11 rounded-lg border border-white/20 px-4 py-2 text-white">
+                    Edit code
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* 하단 정보 패널 (투명) */}
             <div className="grid grid-cols-1 gap-3 rounded-2xl border border-white/5 bg-black/20 p-4 backdrop-blur-md sm:grid-cols-3 sm:gap-4 sm:p-6">
               <div className="text-left">
@@ -927,8 +1042,8 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
               })}
             </p>
 
-            <p className="mt-5 animate-pulse px-2 font-mono text-[11px] tracking-[0.14em] text-cyan-500/50 sm:mt-8 sm:text-sm sm:tracking-[0.2em]">
-              &lt;&lt;&lt; RECEIVING MATTER STREAM &lt;&lt;&lt;
+            <p className="mt-5 px-2 font-mono text-xs text-cyan-200 sm:mt-8 sm:text-sm">
+              Keep this page open until the download finishes.
             </p>
           </div>
         )}
@@ -945,11 +1060,11 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
               <div className="relative w-24 h-24 mx-auto mb-6 bg-green-500/10 rounded-full flex items-center justify-center border border-green-500/20">
                 <CheckCircle className="w-12 h-12 text-green-400 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
               </div>
-              <h2 className="mb-2 brand-font text-2xl font-bold tracking-wider text-white sm:text-3xl">
-                MATERIALIZED
+              <h2 ref={focusStageHeading} tabIndex={-1} className="mb-2 brand-font text-2xl font-bold tracking-wider text-white sm:text-3xl">
+                Files received
               </h2>
               <p className="text-gray-400 mb-8">
-                File reconstruction complete.
+                {senderGone ? 'The sender has disconnected. Open a new code or link to receive more files.' : 'Your files are ready. Open another code or link to receive more.'}
               </p>
               {actualSize > 0 && (
                 <p className="text-gray-500 text-sm mb-6 font-mono">
@@ -958,21 +1073,13 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
               )}
               <button
                 onClick={() => {
-                  // 방은 송신자가 떠나면 이미 삭제됐다 — reload 대신
-                  // 수신 입력 화면으로 돌아가 새 코드를 받을 수 있게 한다.
-                  transferService.cleanup();
-                  setManifest(null);
-                  setRoomId(null);
+                  returnToCodeEntry();
                   setReceiveInput('');
-                  setActualSize(0);
-                  setSenderGone(false);
-                  setErrorMsg('');
-                  setStatus('IDLE');
                 }}
                 className="bg-white/10 border border-white/20 text-white px-8 py-3 rounded-full hover:bg-white/20 transition-all flex items-center gap-2 mx-auto"
               >
                 <RefreshCw size={18} />{' '}
-                {senderGone ? 'Receive Another' : 'Process Next'}
+                Receive more files
               </button>
             </div>
           </motion.div>
@@ -988,19 +1095,19 @@ const ReceiverView: React.FC<ReceiverViewProps> = ({ onOpenCloudShare }) => {
           >
             <div className="text-center relative z-10">
               <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4 drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]" />
-              <h2 className="text-2xl font-bold mb-2 text-white tracking-wider">
+              <h2 ref={focusStageHeading} tabIndex={-1} className="text-2xl font-bold mb-2 text-white tracking-wider">
                 CONNECTION FAILED
               </h2>
               <p className="text-gray-300 mb-6">{errorMsg}</p>
               <button
-                onClick={() => {
-                  // roomId가 있으면 재참여, 없으면 기존처럼 새로고침
-                  if (roomId) handleJoin(roomId);
-                  else window.location.reload();
-                }}
+                type="button"
+                onClick={reconnectReceiver}
                 className="bg-white/10 border border-white/20 text-white px-6 py-3 rounded-full hover:bg-white/20 flex items-center gap-2 mx-auto transition-all"
               >
                 <RefreshCw size={18} /> Retry Transfer
+              </button>
+              <button type="button" onClick={returnToCodeEntry} className="mx-auto mt-3 min-h-11 rounded-xl border border-white/20 px-4 py-3 text-white">
+                Edit code
               </button>
             </div>
           </motion.div>

@@ -3,7 +3,6 @@ import { QRCodeSVG } from 'qrcode.react';
 import {
   Check,
   CloudUpload,
-  Copy,
   FileIcon,
   FilePlus,
   Folder,
@@ -40,6 +39,8 @@ import {
 import { TransferManifest, AppMode } from '../types/types';
 import { formatCloudShareCode } from '../utils/cloudShareCode';
 import { useTransferStore } from '../store/transferStore';
+import { ShareLinkPanel } from './ui/ShareLinkPanel';
+import { focusStageHeading } from '../utils/accessibility';
 
 type CloudUploadStatus =
   | 'IDLE'
@@ -151,7 +152,6 @@ const CloudSenderView: React.FC = () => {
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [fileProgress, setFileProgress] = useState<Record<string, number>>({});
@@ -179,6 +179,7 @@ const CloudSenderView: React.FC = () => {
     uploadSpeed
   );
   const freePlan = cloudPlans.free;
+
 
   useEffect(() => {
     if (status !== 'UPLOADING') return;
@@ -321,7 +322,6 @@ const CloudSenderView: React.FC = () => {
       setShareLink(null);
       setShareCode(null);
       setExpiresAt(null);
-      setCopied(false);
       setFileProgress({});
       uploadSpeedMeterRef.current.reset(0);
       setUploadSpeed(0);
@@ -338,7 +338,6 @@ const CloudSenderView: React.FC = () => {
       setShareLink(null);
       setShareCode(null);
       setExpiresAt(null);
-      setCopied(false);
       setFileProgress({});
       uploadSpeedMeterRef.current.reset(0);
       setUploadSpeed(0);
@@ -354,7 +353,6 @@ const CloudSenderView: React.FC = () => {
     setShareLink(null);
     setShareCode(null);
     setExpiresAt(null);
-    setCopied(false);
     setError(null);
     setFileProgress({});
     uploadSpeedMeterRef.current.reset(0);
@@ -437,18 +435,6 @@ const CloudSenderView: React.FC = () => {
     }
   };
 
-  const copyToClipboard = async () => {
-    if (!shareLink) return;
-    await navigator.clipboard.writeText(shareLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  const copyCodeToClipboard = async () => {
-    if (!shareCode) return;
-    await navigator.clipboard.writeText(shareCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const expiryLabel = expiresAt
     ? new Date(expiresAt * 1000).toLocaleString()
@@ -458,7 +444,7 @@ const CloudSenderView: React.FC = () => {
     'bg-black/40 backdrop-blur-2xl border border-emerald-500/20 rounded-[2rem] shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden';
 
   return (
-    <div className="relative z-10 flex h-full w-full flex-col items-center justify-center px-1 py-2 sm:px-3 sm:py-4 md:px-0">
+    <div className="relative z-10 flex min-h-full w-full flex-col items-center justify-start px-1 py-2 sm:px-3 sm:py-4 md:justify-center md:px-0">
       <AnimatePresence mode="wait">
         {status === 'IDLE' && (
           <motion.div
@@ -471,7 +457,7 @@ const CloudSenderView: React.FC = () => {
             <div
               onDragOver={e => e.preventDefault()}
               onDrop={handleDrop}
-              className="border-2 border-dashed border-emerald-500/30 rounded-[1.8rem] py-8 px-4 md:py-16 md:px-10 flex flex-col items-center justify-center text-center transition-all hover:border-emerald-400/60 hover:bg-emerald-500/5"
+              className="flex flex-col items-center justify-center rounded-[1.8rem] border-2 border-dashed border-emerald-500/30 px-4 py-6 text-center transition-all hover:border-emerald-400/60 hover:bg-emerald-500/5 sm:px-6 sm:py-8 md:px-10 md:py-10"
             >
               <input
                 type="file"
@@ -573,23 +559,23 @@ const CloudSenderView: React.FC = () => {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            className="w-full max-w-xl space-y-8"
+            className="w-full max-w-xl space-y-5 sm:space-y-8"
           >
             <div className="text-center">
-              <Loader2 className="w-16 h-16 mx-auto text-emerald-400 animate-spin mb-6" />
-              <h2 className="text-3xl font-bold mb-2 brand-font text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">
-                UPLOADING DROP...
+              <Loader2 className="mx-auto mb-4 h-12 w-12 animate-spin text-emerald-400 sm:mb-6 sm:h-16 sm:w-16" />
+              <h2 className="mb-2 brand-font text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400 sm:text-3xl">
+                Uploading files…
               </h2>
-              <p className="text-6xl font-mono font-black text-white drop-shadow-[0_0_20px_rgba(16,185,129,0.5)]">
+              <p className="font-mono text-5xl font-black text-white drop-shadow-[0_0_20px_rgba(16,185,129,0.5)] sm:text-6xl">
                 {progress.toFixed(1)}
                 <span className="text-2xl text-gray-500">%</span>
               </p>
-              <p className="mt-3 text-sm text-emerald-100/70 font-mono">
+              <p className="mt-3 break-words font-mono text-xs text-emerald-100/70 sm:text-sm">
                 {uploadFeedbackLabel}
               </p>
             </div>
 
-            <div className="relative h-6 bg-gray-900/50 rounded-full overflow-hidden border border-gray-700 shadow-inner">
+            <div role="progressbar" aria-label="Uploading files" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="relative h-6 bg-gray-900/50 rounded-full overflow-hidden border border-gray-700 shadow-inner">
               <motion.div
                 className="absolute top-0 left-0 h-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-blue-600"
                 initial={{ width: 0 }}
@@ -634,7 +620,7 @@ const CloudSenderView: React.FC = () => {
             </div>
 
             {currentFile && (
-              <p className="text-center text-xs text-gray-500 font-mono truncate px-4">
+              <p title={currentFile} className="break-words px-4 text-center text-xs text-gray-400 font-mono">
                 {currentFile}
               </p>
             )}
@@ -647,81 +633,65 @@ const CloudSenderView: React.FC = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className={`w-full max-w-sm p-6 md:p-8 flex flex-col items-center ${glassPanelClass}`}
+            className={`w-full max-w-2xl p-4 sm:p-6 md:p-8 ${glassPanelClass}`}
           >
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 mb-6 md:mb-8">
-              <Check size={14} className="text-emerald-300" />
-              <span className="text-xs font-bold text-emerald-300 tracking-[0.2em]">
-                DROP READY
-              </span>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5">
+                <Check size={14} className="text-emerald-300" />
+                <span className="text-xs font-bold tracking-[0.2em] text-emerald-300">
+                  DROP READY
+                </span>
+              </div>
+              <p className="text-xs text-gray-400">Ready to share</p>
             </div>
 
-            <button
-              className="bg-white p-3 md:p-4 rounded-2xl mb-6 md:mb-8 shadow-[0_0_40px_rgba(16,185,129,0.25)]"
-              onClick={copyToClipboard}
-            >
-              <QRCodeSVG
-                value={shareLink}
-                size={140}
-                className="md:w-[180px] md:h-[180px]"
+            <h2 ref={focusStageHeading} tabIndex={-1} className="brand-font text-xl font-bold text-white sm:text-2xl">
+              Share your download link
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-gray-400">
+              Copy the link or let the receiver scan the QR code.
+              You can close this page after sharing.
+            </p>
+
+            <div className="mt-5 grid min-w-0 gap-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+              <ShareLinkPanel
+                link={shareLink}
+                code={shareCode || ''}
+                displayCode={shareCode ? formatCloudShareCode(shareCode) : ''}
+                codeLabel="Drop code"
               />
-            </button>
-            {shareCode && (
-              <button
-                onClick={copyCodeToClipboard}
-                className="w-full bg-emerald-500/10 border border-emerald-500/30 hover:border-emerald-300 rounded-xl p-4 text-center transition-all mb-3"
-              >
-                <p className="text-[10px] text-emerald-200/70 uppercase tracking-widest mb-2">
-                  Drop Code
-                </p>
-                <p className="text-lg text-white font-mono font-bold tracking-[0.18em] break-all">
-                  {formatCloudShareCode(shareCode)}
-                </p>
-              </button>
-            )}
 
-            <button
-              onClick={copyToClipboard}
-              className="w-full bg-gray-900/60 border border-gray-700 hover:border-emerald-400 rounded-xl p-4 text-left transition-all group"
-            >
-              <div className="flex items-center gap-3">
-                <Copy className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
-                    Download Link
-                  </p>
-                  <p className="text-sm text-white font-mono truncate">
-                    {shareLink}
-                  </p>
+              <div className="flex flex-col items-center gap-3">
+                <div className="rounded-2xl bg-white p-3 shadow-[0_0_40px_rgba(16,185,129,0.15)]">
+                  <QRCodeSVG
+                    value={shareLink}
+                    size={160}
+                    title="Scan to open the download link"
+                    className="h-36 w-36 sm:h-40 sm:w-40"
+                  />
                 </div>
+                <p className="text-xs text-gray-400">Scan to download</p>
               </div>
-            </button>
+            </div>
 
-            {copied && (
-              <p className="text-emerald-300 text-xs font-bold tracking-widest mt-3">
-                COPIED
-              </p>
-            )}
-
-            <div className="w-full bg-gray-800/30 p-4 rounded-xl border border-gray-700/50 flex items-center gap-4 text-left mt-6">
-              <div className="w-10 h-10 rounded-lg bg-gray-700/50 flex items-center justify-center flex-shrink-0">
+            <div className="mt-4 flex w-full items-center gap-3 rounded-xl border border-gray-700/50 bg-gray-800/30 p-3 text-left sm:p-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-700/50">
                 {manifest?.isFolder ? (
-                  <Folder className="text-yellow-400 w-5 h-5" />
+                  <Folder className="h-5 w-5 text-yellow-400" />
                 ) : (
-                  <FileIcon className="text-blue-400 w-5 h-5" />
+                  <FileIcon className="h-5 w-5 text-blue-400" />
                 )}
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-white text-sm truncate">
+              <div className="min-w-0 flex-1">
+                <p title={manifest?.rootName} className="break-words text-sm font-bold text-white">
                   {manifest?.rootName}
                 </p>
-                <p className="text-xs text-gray-400 font-mono mt-0.5">
+                <p className="mt-0.5 font-mono text-xs text-gray-400">
                   {manifest?.totalFiles} files • {formatBytes(totalBytes)}
                 </p>
               </div>
             </div>
-
-            <p className="text-xs text-gray-500 text-center font-mono mt-5">
+            <p className="mt-4 break-words text-center font-mono text-xs leading-5 text-gray-400">
               Expires {expiryLabel}
             </p>
           </motion.div>
@@ -743,7 +713,7 @@ const CloudSenderView: React.FC = () => {
                 </span>
               </div>
               <div>
-                <h2 className="text-2xl md:text-3xl font-bold brand-font text-white mb-3">
+                <h2 ref={focusStageHeading} tabIndex={-1} className="text-2xl md:text-3xl font-bold brand-font text-white mb-3">
                   FREE LIMIT REACHED
                 </h2>
                 <p className="text-sm text-gray-300 leading-relaxed">{error}</p>
@@ -764,7 +734,7 @@ const CloudSenderView: React.FC = () => {
                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">
                   Selected
                 </p>
-                <p className="text-sm text-white font-bold truncate">
+                <p title={manifest?.rootName} className="break-words text-sm text-white font-bold">
                   {manifest?.rootName}
                 </p>
                 <p className="text-xs text-gray-400 font-mono mt-1">
@@ -789,7 +759,7 @@ const CloudSenderView: React.FC = () => {
             exit={{ opacity: 0 }}
             className="w-full max-w-md bg-red-950/30 border border-red-500/30 rounded-[2rem] p-8 text-center"
           >
-            <h2 className="text-2xl font-bold text-red-300 mb-3">
+            <h2 ref={focusStageHeading} tabIndex={-1} className="text-2xl font-bold text-red-300 mb-3">
               Upload Failed
             </h2>
             <p className="text-sm text-gray-300 mb-6">{error}</p>
@@ -797,7 +767,7 @@ const CloudSenderView: React.FC = () => {
               onClick={() => setStatus('IDLE')}
               className="px-5 py-3 bg-white text-black rounded-full font-bold tracking-wider hover:bg-red-100 transition-colors"
             >
-              RETRY UPLOAD
+              Choose files to retry
             </button>
           </motion.div>
         )}

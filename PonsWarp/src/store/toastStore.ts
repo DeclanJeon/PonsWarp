@@ -18,17 +18,12 @@ interface ToastState {
 export const useToastStore = create<ToastState>(set => ({
   toasts: [],
 
-  addToast: (type, message, duration = 3000) => {
+  addToast: (type, message, duration = type === 'error' ? 0 : Math.max(8000, message.length * 65)) => {
     const id = Math.random().toString(36).substring(2, 9);
     set(state => ({
       toasts: [...state.toasts, { id, type, message, duration }],
     }));
 
-    if (duration > 0) {
-      setTimeout(() => {
-        set(state => ({ toasts: state.toasts.filter(t => t.id !== id) }));
-      }, duration);
-    }
   },
 
   removeToast: id =>
@@ -38,7 +33,7 @@ export const useToastStore = create<ToastState>(set => ({
 // 편의 함수
 export const toast = {
   success: (msg: string) => useToastStore.getState().addToast('success', msg),
-  error: (msg: string) => useToastStore.getState().addToast('error', msg, 5000),
+  error: (msg: string) => useToastStore.getState().addToast('error', msg),
   info: (msg: string) => useToastStore.getState().addToast('info', msg),
   warning: (msg: string) => useToastStore.getState().addToast('warning', msg),
 };

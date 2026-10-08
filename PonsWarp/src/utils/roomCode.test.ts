@@ -1,28 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { isCompleteRoomCode, normalizeRoomCodeInput } from './roomCode';
 
-describe('room code normalization', () => {
-  it('keeps manually typed room codes uppercase and six characters long', () => {
-    expect(normalizeRoomCodeInput('abc123')).toBe('ABC123');
-    expect(normalizeRoomCodeInput('abc123zzz')).toBe('ABC123');
-    expect(normalizeRoomCodeInput('ab-c 12')).toBe('ABC12');
+describe('receive room input', () => {
+  it.each([' abc123 ', 'https://warp.ponslink.com/receive/abc123?from=qr', '/receive/abc123'])('accepts an exact code or receive URL: %s', input => {
+    expect(normalizeRoomCodeInput(input)).toBe('ABC123');
+    expect(isCompleteRoomCode(input)).toBe(true);
   });
-
-  it('extracts the room code from full receive links instead of joining room HTTPS:', () => {
-    expect(
-      normalizeRoomCodeInput('https://warp.ponslink.com/receive/yiby9e')
-    ).toBe('YIBY9E');
-    expect(
-      normalizeRoomCodeInput(
-        'Open this: https://warp.ponslink.com/receive/S6X41K?x=1'
-      )
-    ).toBe('S6X41K');
-  });
-
-  it('checks whether normalized input contains a complete room code', () => {
-    expect(isCompleteRoomCode('https://warp.ponslink.com/receive/yiby9e')).toBe(
-      true
-    );
-    expect(isCompleteRoomCode('abc12')).toBe(false);
+  it.each(['abc123zzz', 'ab-c 12', 'NOT A VALID CODE', 'https://warp.ponslink.com/cloud/ABC123', 'Open this: https://warp.ponslink.com/receive/ABC123', 'https://warp.ponslink.com/receive/ABC123/extra', 'javascript:/receive/ABC123', 'abc12'])('rejects invalid input without truncating: %s', input => {
+    expect(normalizeRoomCodeInput(input)).toBe('');
+    expect(isCompleteRoomCode(input)).toBe(false);
   });
 });

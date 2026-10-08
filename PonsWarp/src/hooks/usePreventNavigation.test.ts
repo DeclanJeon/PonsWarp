@@ -31,6 +31,7 @@ describe('isTransferSessionActive', () => {
 
 describe('leaveTransferSessionIfConfirmed', () => {
   beforeEach(() => {
+    useTransferStore.getState().reset();
     useTransferStore.setState({
       mode: AppMode.SENDER,
       status: 'TRANSFERRING',
@@ -45,11 +46,15 @@ describe('leaveTransferSessionIfConfirmed', () => {
     expect(onLeave).not.toHaveBeenCalled();
   });
 
-  it('allows leave when user confirms', () => {
+  it('clears the completed session state only after leave is confirmed', () => {
+    useTransferStore.setState({ roomId: 'ABC123', progress: { progress: 75, speed: 123, bytesTransferred: 75, totalBytes: 100 } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const onLeave = vi.fn();
-    expect(leaveTransferSessionIfConfirmed(onLeave)).toBe(true);
-    expect(onLeave).toHaveBeenCalledTimes(1);
+    leaveTransferSessionIfConfirmed(() => useTransferStore.getState().setMode(AppMode.SELECTION));
+    const state = useTransferStore.getState();
+    expect(state.mode).toBe(AppMode.SELECTION);
+    expect(state.status).toBe('IDLE');
+    expect(state.roomId).toBeNull();
+    expect(state.progress).toEqual({ progress: 0, speed: 0, bytesTransferred: 0, totalBytes: 0 });
   });
 
   it('allows leave without confirm when session is idle', () => {

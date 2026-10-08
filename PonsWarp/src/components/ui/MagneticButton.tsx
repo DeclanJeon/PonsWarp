@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { useReducedMotionPreference } from '../../hooks/useReducedMotionPreference';
 
 interface MagneticButtonProps {
   children: React.ReactNode;
@@ -20,9 +21,10 @@ export const MagneticButton: React.FC<MagneticButtonProps> = ({
 }) => {
   const ref = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ x: 0, y: 0 });
+  const reduceMotion = useReducedMotionPreference();
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!ref.current) return;
+    if (!ref.current || reduceMotion) return;
 
     const { clientX, clientY } = e;
     const { left, top, width, height } = ref.current.getBoundingClientRect();
@@ -47,8 +49,8 @@ export const MagneticButton: React.FC<MagneticButtonProps> = ({
       onClick={onClick}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
-      animate={{ x: position.x, y: position.y }}
-      transition={{ type: 'spring', stiffness: 150, damping: 15, mass: 0.1 }}
+      animate={{ x: reduceMotion ? 0 : position.x, y: reduceMotion ? 0 : position.y }}
+      transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 150, damping: 15, mass: 0.1 }}
       className={`relative overflow-hidden group ${className}`}
     >
       {/* 배경 그라데이션 효과 */}

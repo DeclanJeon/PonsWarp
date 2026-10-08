@@ -12,7 +12,21 @@ export interface CloudShareErrorInfo {
   message: string;
 }
 
+export class CloudShareApiError extends Error {
+  readonly code: CloudShareErrorCode;
+
+  constructor(readonly status: number, readonly detail: string) {
+    const info = classifyCloudShareError(new Error(`HTTP ${status}`));
+    super(info.message);
+    this.name = 'CloudShareApiError';
+    this.code = info.code;
+  }
+}
+
 export function classifyCloudShareError(error: unknown): CloudShareErrorInfo {
+  if (error instanceof CloudShareApiError) {
+    return { code: error.code, message: error.message };
+  }
   if (error instanceof TypeError) {
     return {
       code: 'network',
@@ -27,7 +41,7 @@ export function classifyCloudShareError(error: unknown): CloudShareErrorInfo {
     if (status === 401 || status === 403) {
       return { code: 'password', message: 'Password required or incorrect.' };
     }
-    if (status === 404) {
+    if (status === 404 || status === 410) {
       return { code: 'not-found', message: 'Share not found or expired.' };
     }
     if (status === 413) {
@@ -39,27 +53,7 @@ export function classifyCloudShareError(error: unknown): CloudShareErrorInfo {
     if (status && status >= 500) {
       return { code: 'server', message: 'Server error. Try again later.' };
     }
-    if (msg.includes('upload failed with http')) {
-      // re-classify xhr status strings
-      const s = parseInt(msg.replace(/.*http\s*/, ''), 10);
-      if (s === 401 || s === 403)
-        return { code: 'password', message: 'Password required or incorrect.' };
-      if (s === 404)
-        return { code: 'not-found', message: 'Share not found or expired.' };
-      if (s === 413)
-        return { code: 'too-large', message: 'File too large for this plan.' };
-      if (s === 429)
-        return {
-          code: 'rate-limit',
-          message: 'Too many requests. Please wait.',
-        };
-      if (s >= 500)
-        return { code: 'server', message: 'Server error. Try again later.' };
-    }
   }
   return { code: 'unknown', message: 'Unexpected error. Please try again.' };
 }
 
-export function formatCloudShareError(error: unknown): string {
-  return classifyCloudShareError(error).message;
-}

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useTransferStore } from '../store/transferStore';
 import { AppMode } from '../types/types';
+import { useReducedMotionPreference } from '../hooks/useReducedMotionPreference';
 
 const STAR_COUNT = 520;
 const IDLE_SPEED = 0.08;
@@ -28,6 +29,7 @@ function createStar(): Star {
 }
 
 export default function SpaceField() {
+  const reduceMotion = useReducedMotionPreference();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const status = useTransferStore(state => state.status);
   const mode = useTransferStore(state => state.mode);
@@ -69,7 +71,7 @@ export default function SpaceField() {
     };
 
     const draw = (now: number) => {
-      const delta = Math.min((now - lastTime) / 1000, 0.05);
+      const delta = reduceMotion ? 0 : Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
 
       const activeStatus = statusRef.current;
@@ -92,7 +94,7 @@ export default function SpaceField() {
       const centerX = width / 2;
       const centerY = height / 2;
       const focalLength = Math.min(width, height) * 0.62;
-      const absSpeed = Math.abs(currentSpeed);
+      const absSpeed = reduceMotion ? 0 : Math.abs(currentSpeed);
 
       for (const star of stars) {
         star.z -= currentSpeed * delta * 0.12;
@@ -135,18 +137,22 @@ export default function SpaceField() {
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
 
-      animationFrame = requestAnimationFrame(draw);
+      if (!reduceMotion) animationFrame = requestAnimationFrame(draw);
     };
 
+    const handleResize = () => {
+      resize();
+      if (reduceMotion) draw(performance.now());
+    };
     resize();
-    window.addEventListener('resize', resize);
-    animationFrame = requestAnimationFrame(draw);
+    draw(performance.now());
+    window.addEventListener('resize', handleResize);
 
     return () => {
       cancelAnimationFrame(animationFrame);
-      window.removeEventListener('resize', resize);
+      window.removeEventListener('resize', handleResize);
     };
-  }, []);
+  }, [reduceMotion]);
 
   return (
     <canvas

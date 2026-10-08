@@ -15,6 +15,7 @@
   --glass-bg: rgba(0, 0, 0, 0.4);
   --glass-border: rgba(255, 255, 255, 0.1);
   --primary-glow: 0 0 20px rgba(6, 182, 212, 0.6);
+  --text-muted: #b4c0d1;
 }
 
 body {
@@ -200,13 +201,46 @@ body {
 }
 
 .app-main {
-  /* Leave room for fixed header + bottom action chips */
-  padding-top: calc(var(--app-header-h) + var(--safe-top));
-  padding-bottom: calc(var(--app-bottom-nav-h) + var(--safe-bottom));
+  /* The scroll viewport excludes fixed chrome; focused controls cannot hide behind it. */
+  margin-top: calc(var(--app-header-h) + var(--safe-top));
+  height: calc(100% - var(--app-header-h) - var(--app-bottom-nav-h) - var(--safe-top) - var(--safe-bottom));
+  padding-top: 0.5rem;
+  padding-bottom: 1rem;
+  scroll-padding-top: 0.5rem;
+  scroll-padding-bottom: 1rem;
   padding-left: max(0.75rem, var(--safe-left));
   padding-right: max(0.75rem, var(--safe-right));
+  min-width: 0;
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
+}
+
+/* Grow with content instead of shrinking tall cards into the header/footer. */
+.app-main > div,
+.app-main > section {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .app-main {
+    padding-left: max(2rem, var(--safe-left));
+    padding-right: max(2rem, var(--safe-right));
+  }
+}
+
+/* Landscape phones and short laptop windows need compact chrome, not clipping. */
+@media (max-height: 600px) {
+  :root {
+    --app-header-h: 4rem;
+    --app-bottom-nav-h: 4rem;
+  }
+
+  .app-header {
+    padding-top: max(0.5rem, var(--safe-top));
+    padding-bottom: 0.5rem;
+  }
 }
 
 .app-bottom-action {
@@ -248,4 +282,37 @@ body {
   .brand-font {
     letter-spacing: 0.02em;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Keep operational text readable; Orbitron headings retain the brand styling. */
+.app-main {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.app-main :is(.text-gray-500, .text-gray-400) {
+  color: var(--text-muted);
+}
+
+.app-main :is(.text-\[10px\], .text-\[11px\], .sm\:text-\[11px\]) {
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.app-main .break-words {
+  overflow-wrap: anywhere;
+}
+
+.app-shell :is(button, a, input, [role='button']):focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: 3px;
 }

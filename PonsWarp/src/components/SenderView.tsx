@@ -6,7 +6,6 @@ import {
   Folder,
   File as FileIcon,
   CheckCircle,
-  Check,
   Loader2,
   FilePlus,
   AlertTriangle,
@@ -33,6 +32,8 @@ import {
 } from '../utils/transferEstimate';
 import { formatSlowPathBanner } from '../services/hybridBulkTransport';
 import { toast } from '../store/toastStore';
+import { ShareLinkPanel } from './ui/ShareLinkPanel';
+import { focusStageHeading } from '../utils/accessibility';
 
 interface SenderViewProps {
   onComplete?: () => void;
@@ -71,7 +72,6 @@ const SenderView: React.FC<SenderViewProps> = () => {
   const [manifest, setManifest] = useState<TransferManifest | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<SenderStatus>('IDLE');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOpeningRoom, setIsOpeningRoom] = useState(false);
@@ -582,13 +582,6 @@ const SenderView: React.FC<SenderViewProps> = () => {
     }
   };
 
-  const copyToClipboard = async () => {
-    if (shareLink) {
-      await navigator.clipboard.writeText(shareLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
 
   // 공통 Glass Panel 스타일 (통일성 유지)
   const glassPanelClass =
@@ -708,6 +701,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             exit={{ opacity: 0, y: -20 }}
             className={`w-full max-w-sm p-3 sm:p-5 md:p-8 flex flex-col items-center ${glassPanelClass}`}
           >
+            <h2 ref={focusStageHeading} tabIndex={-1} className="sr-only">Ready to send — share this link</h2>
             {/* Status Badge */}
             <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 mb-3 md:mb-8">
               <span className="relative flex h-2.5 w-2.5">
@@ -715,45 +709,23 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
               </span>
               <span className="text-xs font-bold text-cyan-300 tracking-[0.2em]">
-                WARP GATE OPEN
+                Waiting for receiver
               </span>
             </div>
 
             {/* QR Code */}
             <div
-              className="bg-white p-3 md:p-4 rounded-2xl mb-3 md:mb-8 shadow-[0_0_40px_rgba(6,182,212,0.25)] cursor-pointer"
-              onClick={copyToClipboard}
+              className="bg-white p-3 md:p-4 rounded-2xl mb-3 shadow-[0_0_40px_rgba(6,182,212,0.25)]"
             >
               <QRCodeSVG
                 value={shareLink}
                 size={180}
+                title="Scan to join this transfer"
                 className="h-[104px] w-[104px] sm:h-[140px] sm:w-[140px] md:h-[180px] md:w-[180px]"
               />
             </div>
 
-            {/* Room ID Display */}
-            <div
-              className="text-center mb-3 md:mb-8 w-full group cursor-pointer"
-              onClick={copyToClipboard}
-            >
-              <p className="text-gray-500 text-[10px] tracking-[0.3em] uppercase mb-2">
-                Warp Key
-              </p>
-              <div className="relative">
-                <p className="text-3xl sm:text-4xl md:text-6xl font-mono font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-white to-cyan-400 bg-300% animate-shine group-hover:scale-105 transition-transform">
-                  {roomId}
-                </p>
-                {copied && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="absolute -right-8 top-1/2 -translate-y-1/2 text-green-400"
-                  >
-                    <Check size={24} />
-                  </motion.div>
-                )}
-              </div>
-            </div>
+            <ShareLinkPanel link={shareLink} code={roomId} />
 
             {/* 연결 상태 표시 (1:1) */}
             <div className="w-full bg-gray-900/40 p-3 md:p-4 rounded-xl mb-2 md:mb-4 border border-gray-700/50 backdrop-blur-sm">
@@ -796,7 +768,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-bold text-white text-sm truncate">
+                <p title={manifest?.rootName} className="break-words font-bold text-white text-sm">
                   {manifest?.rootName}
                 </p>
                 <p className="text-xs text-gray-400 font-mono mt-0.5">
@@ -836,7 +808,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             {/* Header */}
             <div className="text-center">
               <h2 className="mb-2 animate-pulse brand-font text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-400 sm:text-3xl">
-                WARPING DATA...
+                Sending files…
               </h2>
               <p className="font-mono text-5xl font-black text-white drop-shadow-[0_0_20px_rgba(6,182,212,0.5)] sm:text-6xl">
                 {progressData.progress.toFixed(1)}
@@ -858,7 +830,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             </div>
 
             {/* Progress Bar (Visual) */}
-            <div className="relative h-6 bg-gray-900/50 rounded-full overflow-hidden border border-gray-700 shadow-inner">
+            <div role="progressbar" aria-label="Sending files" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.max(0, progressData.progress))} className="relative h-6 bg-gray-900/50 rounded-full overflow-hidden border border-gray-700 shadow-inner">
               <motion.div
                 className="absolute top-0 left-0 h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-600"
                 initial={{ width: 0 }}
@@ -936,7 +908,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
               </div>
             </div>
 
-            <h2 className="text-2xl font-bold text-white mb-2">
+            <h2 ref={focusStageHeading} tabIndex={-1} className="text-2xl font-bold text-white mb-2">
               Sending Completed...
             </h2>
             <h3 className="text-xl text-yellow-400 font-bold mb-6 animate-pulse">
@@ -969,7 +941,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
               <CheckCircle className="w-full h-full text-green-500" />
             </div>
 
-            <h2 className="text-2xl font-bold text-white mb-2">
+            <h2 ref={focusStageHeading} tabIndex={-1} className="text-2xl font-bold text-white mb-2">
               Transfer Complete
             </h2>
             <p className="text-gray-400 mb-4">
@@ -990,7 +962,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
               onClick={() => window.location.reload()}
               className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-cyan-50 transition-colors"
             >
-              Send New Files
+              Send more files
             </button>
           </motion.div>
         )}
@@ -1006,7 +978,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             <div className="w-24 h-24 mx-auto mb-6 bg-red-500/20 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(239,68,68,0.4)]">
               <AlertTriangle className="w-12 h-12 text-red-400" />
             </div>
-            <h2 className="text-4xl font-bold text-white mb-4 brand-font tracking-wide">
+            <h2 ref={focusStageHeading} tabIndex={-1} className="text-4xl font-bold text-white mb-4 brand-font tracking-wide">
               TRANSFER FAILED
             </h2>
             <p className="text-gray-400 text-lg mb-10 max-w-md mx-auto">
@@ -1018,7 +990,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
               className="bg-white/10 border border-white/20 text-white px-10 py-4 rounded-full font-bold hover:bg-white/20 transition-all flex items-center gap-3 mx-auto"
             >
               <FilePlus size={20} />
-              Try Again
+              Reload and retry
             </button>
           </motion.div>
         )}
@@ -1034,7 +1006,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
             <div className="w-24 h-24 mx-auto mb-6 bg-green-500/20 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(34,197,94,0.4)]">
               <CheckCircle className="w-12 h-12 text-green-400" />
             </div>
-            <h2 className="text-4xl font-bold text-white mb-4 brand-font tracking-wide">
+            <h2 ref={focusStageHeading} tabIndex={-1} className="text-4xl font-bold text-white mb-4 brand-font tracking-wide">
               SUCCESS
             </h2>
             <p className="text-gray-400 text-lg mb-10 max-w-md mx-auto">
@@ -1046,7 +1018,7 @@ const SenderView: React.FC<SenderViewProps> = () => {
               className="bg-white/10 border border-white/20 text-white px-10 py-4 rounded-full font-bold hover:bg-white/20 transition-all flex items-center gap-3 mx-auto"
             >
               <FilePlus size={20} />
-              Send More Files
+              Send more files
             </button>
           </motion.div>
         )}

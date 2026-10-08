@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AppMode } from '../types/types';
 import { useTransferStore, TransferStatus } from '../store/transferStore';
 import { toast } from '../store/toastStore';
@@ -70,13 +70,13 @@ export function leaveTransferSessionIfConfirmed(
     toast.warning('Transfer in progress. Staying on this page.');
     return false;
   }
+  if (SESSION_MODES.has(useTransferStore.getState().mode)) {
+    useTransferStore.getState().reset();
+  }
   onLeave();
   return true;
 }
 
-function currentUrl(): string {
-  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
-}
 
 /**
  * Prevent accidental navigation/reload while a transfer session is live.
@@ -85,11 +85,10 @@ function currentUrl(): string {
  * leaveTransferSessionIfConfirmed().
  */
 export const usePreventNavigation = () => {
-  const mode = useTransferStore(s => s.mode);
-  const status = useTransferStore(s => s.status);
+  const shouldPrevent = useTransferStore(state => isTransferSessionActive(state.mode, state.status));
+  const isRestoringHistoryRef = useRef(false);
 
   useEffect(() => {
-    const shouldPrevent = isTransferSessionActive(mode, status);
     const root = document.documentElement;
 
     if (shouldPrevent) {
@@ -107,12 +106,14 @@ export const usePreventNavigation = () => {
       };
     }
 
+    const sessionUrl = window.location.href;
+    const originalState = window.history.state;
     // Seed a history entry so the first Back stays inside the transfer UI.
     try {
       window.history.pushState(
         { ponswarpTransferGuard: true },
         '',
-        currentUrl()
+        sessionUrl
       );
     } catch {
       // ignore
@@ -124,18 +125,17 @@ export const usePreventNavigation = () => {
       return TRANSFER_RELOAD_MESSAGE;
     };
 
-    const handlePopState = () => {
-      // History already moved; pin the user back onto the transfer surface.
-      try {
-        window.history.pushState(
-          { ponswarpTransferGuard: true },
-          '',
-          currentUrl()
-        );
-      } catch {
-        // ignore
+    const handlePopState = (event: PopStateEvent) => {
+      event.stopImmediatePropagation();
+      if (confirmLeaveTransferSession()) {
+        useTransferStore.getState().reset();
+        useTransferStore.getState().setMode(AppMode.SELECTION);
+        window.history.replaceState(originalState, '', '/');
+        return;
       }
-      toast.warning('Back navigation is disabled during a transfer.');
+      // Back consumed the guard entry. Restore it, not the popped route.
+      window.history.pushState({ ponswarpTransferGuard: true }, '', sessionUrl);
+      toast.warning('Transfer in progress. Staying on this page.');
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -150,6 +150,7 @@ export const usePreventNavigation = () => {
       e.preventDefault();
       e.stopPropagation();
       if (confirmLeaveTransferSession(TRANSFER_RELOAD_MESSAGE)) {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
         window.location.reload();
       } else {
         toast.warning('Transfer in progress. Reload cancelled.');
@@ -157,15 +158,27 @@ export const usePreventNavigation = () => {
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('popstate', handlePopState, true);
     window.addEventListener('keydown', handleKeyDown, true);
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('popstate', handlePopState, true);
       window.removeEventListener('keydown', handleKeyDown, true);
       root.classList.remove('transfer-active');
       delete root.dataset.transferLock;
+      if (window.history.state?.ponswarpTransferGuard) {
+        isRestoringHistoryRef.current = true;
+        const restoreUrl = window.location.href;
+        const restoreHistory = (event: PopStateEvent) => {
+          event.stopImmediatePropagation();
+          window.history.replaceState(originalState, '', restoreUrl);
+          isRestoringHistoryRef.current = false;
+        };
+        window.addEventListener('popstate', restoreHistory, { capture: true, once: true });
+        window.history.back();
+      }
     };
-  }, [mode, status]);
+  }, [shouldPrevent]);
+  return isRestoringHistoryRef;
 };
