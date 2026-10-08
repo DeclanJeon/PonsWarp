@@ -27,6 +27,31 @@ Notes:
 - Deploy opens one SSH ControlMaster session for all scp/ssh hops.
 - nginx conf placeholders (`__PONSWARP_REMOTE_DIR__`) are substituted by the deploy script.
 
+## Cloudflare cache purge credentials
+
+Every production deploy or rollback purges only `https://warp.ponslink.com/` and
+`https://warp.ponslink.com/index.html`, then verifies the public HTML references
+the active entry bundle before any optional transfer QA. Deploys and rollbacks
+fail before SSH if the credential pair is unavailable.
+
+Create a zone-scoped Cloudflare API token with **Cache Purge** permission and
+store it outside the repository on the deployment runner:
+
+```bash
+install -d -m 700 "$HOME/.config/ponswarp"
+umask 077
+cat > "$HOME/.config/ponswarp/cloudflare.env" <<'EOF'
+CLOUDFLARE_API_TOKEN=replace-with-cache-purge-token
+CLOUDFLARE_ZONE_ID=replace-with-zone-id
+EOF
+chmod 600 "$HOME/.config/ponswarp/cloudflare.env"
+```
+
+The deploy script reads this file by default. Override its location with
+`PONSWARP_CLOUDFLARE_ENV_FILE`. Do not commit or paste the API token into chat.
+The helper verifies the purge response, confirms the public document is not an
+edge `HIT`, and checks that the expected release bundle is served.
+
 ## Post-deploy smoke (required)
 
 ```bash

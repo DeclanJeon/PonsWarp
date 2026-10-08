@@ -13,6 +13,8 @@
 #   PONSWARP_HOST_ENV=/home/declan/ponswarp-deploy/secrets/env.production
 #   PONSWARP_DOCKER_NETWORK=host
 #   PONSWARP_PUBLIC_URL=https://warp.ponslink.com
+#   PONSWARP_CLOUDFLARE_ENV_FILE=$HOME/.config/ponswarp/cloudflare.env
+#   CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID (Cache Purge scoped)
 #   PONSWARP_SKIP_PREFLIGHT=1
 #   PONSWARP_RUN_PROD_TRANSFER_QA=1
 set -euo pipefail
@@ -28,6 +30,22 @@ PUBLIC_URL="${PONSWARP_PUBLIC_URL:-https://warp.ponslink.com}"
 HOST_ENV_PATH="${PONSWARP_HOST_ENV:-$REMOTE_DIR/secrets/env.production}"
 # Optional local overlay for TURN URL preflight only (not uploaded as runtime env).
 LOCAL_ENV_HINT="${PONSWARP_LOCAL_ENV_HINT:-$BACKEND_DIR/.env.production}"
+CLOUDFLARE_ENV_FILE="${PONSWARP_CLOUDFLARE_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/ponswarp/cloudflare.env}"
+if [[ -f "$CLOUDFLARE_ENV_FILE" ]]; then
+  [[ -O "$CLOUDFLARE_ENV_FILE" ]] || {
+    echo "Cloudflare env file must be owned by the deploying user: $CLOUDFLARE_ENV_FILE" >&2
+    exit 1
+  }
+  CLOUDFLARE_ENV_MODE="$(stat -c '%a' "$CLOUDFLARE_ENV_FILE")"
+  if (( 8#$CLOUDFLARE_ENV_MODE & 077 )); then
+    echo "Cloudflare env file must have mode 600: $CLOUDFLARE_ENV_FILE" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  source "$CLOUDFLARE_ENV_FILE"
+  set +a
+fi
 
 if [[ "${1:-}" == rollback ]]; then
   [[ $# == 2 ]] || { echo "usage: $0 rollback <release-id>" >&2; exit 2; }
@@ -42,6 +60,11 @@ else
   RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-$GIT_SHA"
 fi
 [[ "$RELEASE_ID" =~ ^[0-9]{14}-[0-9a-fA-F]{7,40}$ ]] || { echo "invalid release id: $RELEASE_ID" >&2; exit 1; }
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ZONE_ID:-}" ]]; then
+  echo "Production deploy/rollback requires CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID for cache invalidation." >&2
+  echo "Set them in $CLOUDFLARE_ENV_FILE (mode 600) or the deployment environment." >&2
+  exit 1
+fi
 FRONTEND_ARCHIVE="/tmp/ponswarp-frontend-${RELEASE_ID}.tar.gz"
 STAGING_PATH=''
 
@@ -422,6 +445,17 @@ committed_success=1
 if [[ "$MODE" == rollback ]]; then printf 'rolled back to %s\n' "$RELEASE_ID"; else printf 'deployed release %s on port %s\n' "$RELEASE_ID" "$new_port"; fi
 REMOTE
 echo "Production deployment completed: $RELEASE_ID"
+if [[ "$MODE" == deploy || "$MODE" == rollback ]]; then
+  ACTIVE_HTML="$(ssh_remote "sudo -n cat '$REMOTE_DIR/current/static/index.html'")"
+  EXPECTED_ENTRY_ASSET="$(
+    node -e 'const m=process.argv[1].match(/src="(\/assets\/index-[^"]+\.js)"/); if (!m) process.exit(2); console.log(m[1])' "$ACTIVE_HTML"
+  )"
+  CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN" \
+  CLOUDFLARE_ZONE_ID="$CLOUDFLARE_ZONE_ID" \
+  PONSWARP_PUBLIC_URL="$PUBLIC_URL" \
+  PONSWARP_EXPECTED_ENTRY_ASSET="$EXPECTED_ENTRY_ASSET" \
+    node "$ROOT_DIR/PonsWarp/scripts/purge-production-html-cache.mjs"
+fi
 
 # Optional networked transfer smoke against the just-deployed public URL.
 # Opt-in only: keeps offline packaging deterministic.

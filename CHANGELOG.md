@@ -13,6 +13,10 @@
 * 활성 전송의 history guard를 세션당 하나로 유지하고, 딥링크 이탈 중 수신 화면이 다시 열리는 경로 복원 오류 수정.
 * 운영 배포 시 공개 Vite endpoint를 production env 예제로 채우고, 실제 UI의 현재 송수신 단계에 맞춰 운영 전송 smoke selector를 갱신.
 
+### Deployment
+
+* 운영 배포·롤백 후 Cloudflare HTML 캐시를 대상 purge하고 활성 entry bundle 및 cache 상태를 검증.
+
 # [0.7.3](https://github.com/DeclanJeon/PonsWarp/compare/v0.7.2...v0.7.3) (2026-05-17)
 
 
