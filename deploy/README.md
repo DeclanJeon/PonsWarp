@@ -36,6 +36,18 @@ $PONSWARP_DEPLOY_DIR/secrets/env.production
 - Mode `0600`; contains `DATABASE_URL`, TURN secrets, Cloud keys, etc.
 - Script refuses `DATABASE_URL` values that target hostname `postgres` (compose-only).
 
+### Cloudflare cache purge
+
+`deploy-production.sh` purges the production HTML after activation, then verifies
+the served entry asset. The Cloudflare API call runs on the **local deploy runner**
+after SSH deployment; the API token is not copied to `ponslink`.
+
+The runner reads `$PONSWARP_CLOUDFLARE_ENV_FILE` or, by default,
+`$HOME/.config/ponswarp/cloudflare.env`. Store `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ZONE_ID` there with mode `0600`; scope the token to Cache Purge for
+the production zone. Do not put this token in the remote runtime file
+`$PONSWARP_DEPLOY_DIR/secrets/env.production`.
+
 ### SSH ControlMaster
 
 All `ssh`/`scp` calls share one ControlMaster session (`ControlPersist=300`) under
